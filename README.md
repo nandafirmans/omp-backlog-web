@@ -30,6 +30,20 @@ See the [private HTTPS over Tailscale runbook](docs/private-tailnet-https.md) fo
 
 Remote access remains tailnet-only and requires application login. Bun and Caddy bind to loopback; Tailscale supplies the external TCP listener. **Bun still runs manually in its owning terminal**—the proxy and renewal timer are the automatic services.
 
+## Navigation
+
+Home (`/`) contains the project selector, **Add project**, **Settings**, and **Implementation plan**. There is no sidebar. The header's **Home** link returns to this hub from every page.
+
+- `/projects/new`: authenticated local-folder picker.
+- `/projects/:repoId`: project permissions and backlog.
+- `/projects/:repoId/tickets/new`: new ticket editor.
+- `/projects/:repoId/tickets/:ticketId`: ticket editor and run history.
+- `/runs/:runId`: run details.
+- `/settings`: workspace settings.
+- `/plan`: implementation plan.
+
+React Router supports direct links, reloads, and browser Back/Forward. Unknown projects, tickets, runs, and paths show an unavailable state instead of selecting another project. Unsaved ticket edits prompt before route changes and browser reloads.
+
 ## Ticket workflow
 
 1. Add a local directory using the authenticated folder picker. Initial allowed root: `~/Development`.

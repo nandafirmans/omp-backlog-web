@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Button, Input, InputNumber, Modal, Segmented, Select, Tag } from 'antd';
+import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
 import MarkdownPreview from './MarkdownPreview';
 import MarkdownEditor from './MarkdownEditor';
 
 export type RequestApi = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Execute = (name: string, work: () => Promise<void>) => Promise<boolean>;
-interface Props { snapshot: Snapshot; api: RequestApi; refresh: () => Promise<void>; settingsView: boolean; onError: (message: string) => void }
+interface Props { snapshot: Snapshot; api: RequestApi; refresh: () => Promise<void>; onError: (message: string) => void }
 const encode = encodeURIComponent;
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
 const message = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
@@ -16,16 +17,18 @@ const modes: Record<Mode, string> = { paused: 'Paused', approved: 'Approved tick
 
 function Status({ value }: { value: string }) { return <Tag className={`badge status-${value}`}>{value.replaceAll('_', ' ')}</Tag>; }
 
-export default function Workspace({ snapshot, api, refresh, settingsView, onError }: Props) {
-  const [repoId, setRepoId] = useState('');
-  const [ticketId, setTicketId] = useState('');
-  const [runId, setRunId] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [picking, setPicking] = useState(false);
+export default function Workspace({ snapshot, api, refresh, onError }: Props) {
+  const { repoId, ticketId, runId } = useParams();
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const home = pathname === '/';
+  const settingsView = pathname === '/settings';
+  const picking = pathname === '/projects/new';
+  const creating = !!repoId && pathname.endsWith('/tickets/new');
   const [pending, setPending] = useState('');
   const [notice, setNotice] = useState('');
   const [modal, modalContext] = Modal.useModal();
-  const repo = snapshot.repos.find(value => value.id === repoId) ?? snapshot.repos[0];
+  const repo = snapshot.repos.find(value => value.id === repoId);
   const tickets = snapshot.tickets.filter(value => value.repoId === repo?.id).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const ticket = tickets.find(value => value.id === ticketId);
   const selectedRun = snapshot.runs.find(value => value.id === runId);
@@ -39,7 +42,8 @@ export default function Workspace({ snapshot, api, refresh, settingsView, onErro
     finally { setPending(''); }
   };
 
-  function selectRepo(id: string) { setRepoId(id); setTicketId(''); setCreating(false); setRunId(''); }
+  function selectRepo(id: string) { void navigate(`/projects/${encode(id)}`); }
+  function setRunId(id: string) { void navigate(`/runs/${encode(id)}`); }
 
   async function changeMode(mode: Mode) {
     if (!repo || mode === repo.mode) return;
@@ -56,19 +60,23 @@ export default function Workspace({ snapshot, api, refresh, settingsView, onErro
     {activeRun && <section className="active-run" aria-label="Current run"><div><Status value={activeRun.status} /><strong>{snapshot.repos.find(value => value.id === activeRun.repoId)?.name} / {activeRun.ticketId}</strong>{activeRun.dialog && <Tag className="attention">Answer needed</Tag>}</div><div className="toolbar"><Button onClick={() => setRunId(activeRun.id)}>Open current run</Button>{activeRun.status === 'running' && <Button disabled={busy} onClick={() => void execute('Pause requested. Wait for the run to stop.', async () => { await api(`/api/runs/${encode(activeRun.id)}/control`, json('POST', { action: 'pause' })); })}>Pause current run</Button>}{activeRun.status === 'paused' && <Button disabled={busy} onClick={() => void execute('Run resume requested.', async () => { await api(`/api/runs/${encode(activeRun.id)}/control`, json('POST', { action: 'resume' })); })}>Resume current run</Button>}</div></section>}
     {activeRun?.dialog && runId !== activeRun.id && <DialogForm key={activeRun.dialog.id} dialog={activeRun.dialog} runId={activeRun.id} repoId={activeRun.repoId} api={api} execute={execute} busy={busy} />}
     <p className="operation-status" role="status" aria-live="polite">{pending ? 'Working...' : notice}</p>
-    {settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : <>
-      <div className="section-heading workspace-heading"><h1>Repositories</h1><Button type="primary" className="primary" onClick={() => setPicking(true)}>Add repository +</Button></div>
-      {snapshot.repos.length ? <>
-        <div className="repo-switcher"><label>Repository<Select aria-label="Repository" value={repo?.id ?? ''} onChange={selectRepo} options={snapshot.repos.map(value => ({ value: value.id, label: `${value.name} / ${modes[value.mode]}` }))} /></label><div className="repo-counts">{tickets.filter(value => !value.removed && value.status !== 'done').length} open · {tickets.filter(value => value.status === 'done').length} done</div></div>
+    {home || picking ? <section className="home-view" aria-labelledby="home-heading">
+      <div className="section-heading"><div><h1 id="home-heading">Home</h1><p className="muted">Choose a project to manage tickets and review runs.</p></div><Link className="home-action" to="/projects/new">Add project +</Link></div>
+      <div className="panel project-selector"><label>Project<Select aria-label="Project" placeholder="Select a project" value={undefined} onChange={selectRepo} options={snapshot.repos.map(value => ({ value: value.id, label: `${value.name} / ${modes[value.mode]}` }))} notFoundContent="No projects registered" /></label>
+        {!snapshot.repos.length && <p className="muted">No projects yet. Add a local folder to get started. New projects start paused.</p>}
+      </div>
+      <nav className="home-navigation" aria-label="Home navigation"><Link to="/settings">Settings</Link><Link to="/plan">Implementation plan</Link></nav>
+      <p className="muted">Permission before execution. Local folders are not sandboxes. Closing this tab or logging out does not stop work.</p>
+    </section> : settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : repo ? <>
+      <div className="section-heading workspace-heading"><h1>{repo.name}</h1><Link to="/">Choose project</Link></div>
         {repo && <section className="panel repo-summary" aria-label="Repository execution permission"><div><h2>{repo.name}</h2><code className="path">{repo.path}</code>{!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}</div><label>Execution permission<Select aria-label="Execution permission" disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={Object.entries(modes).map(([value, label]) => ({ value: value as Mode, label }))} /><small>{repo.mode === 'paused' ? 'No new starts. A current run continues.' : repo.mode === 'approved' ? 'Only explicitly approved revisions may start.' : 'Standing permission: eligible revisions may run automatically.'}</small></label></section>}
         <div className="backlog-layout">
-          <section className="ticket-queue" aria-labelledby="queue-heading"><div className="section-heading"><h2 id="queue-heading">Backlog</h2><Button onClick={() => { setCreating(true); setTicketId(''); }}>New ticket +</Button></div>{tickets.length === 0 && <div className="empty-state"><p>No tickets yet.</p><small>Create a Markdown ticket, or add one under .omp-backlog/tickets/ in this repository.</small></div>}<ol className="ticket-list">{tickets.map((value, index) => <li key={value.id}><Button className={`ticket-card ${ticket?.id === value.id && !creating ? 'selected' : ''}`} aria-pressed={ticket?.id === value.id && !creating} onClick={() => { setTicketId(value.id); setCreating(false); }}><span className="ticket-meta"><span>{String(index + 1).padStart(2, '0')} · {value.id}</span><Status value={value.status} /></span><strong>{value.title || value.id}</strong><small>{value.removed ? 'Ticket file removed' : value.dependencies.length ? `Depends on ${value.dependencies.join(', ')}` : 'No dependencies'}</small>{value.error && <span className="ticket-error">{value.error}</span>}{value.approvedRevision === value.revision && <span className="permission-note">This revision approved</span>}</Button></li>)}</ol></section>
-          <section className="ticket-detail" aria-label="Ticket details">{repo && creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { setTicketId(id); setCreating(false); }} onRun={setRunId} runs={[]} /> : repo && ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : <div className="empty-state detail-empty"><h2>No ticket selected</h2><p>Select a ticket to review requirements, attachments, permissions, and run evidence.</p></div>}</section>
+          <section className="ticket-queue" aria-labelledby="queue-heading"><div className="section-heading"><h2 id="queue-heading">Backlog</h2><Link to={`/projects/${encode(repo.id)}/tickets/new`}>New ticket +</Link></div>{tickets.length === 0 && <div className="empty-state"><p>No tickets yet.</p><small>Create a Markdown ticket, or add one under .omp-backlog/tickets/ in this repository.</small></div>}<ol className="ticket-list">{tickets.map((value, index) => <li key={value.id}><Link className={`ticket-card ${ticket?.id === value.id ? 'selected' : ''}`} aria-current={ticket?.id === value.id ? 'page' : undefined} to={`/projects/${encode(repo.id)}/tickets/${encode(value.id)}`}><span className="ticket-meta"><span>{String(index + 1).padStart(2, '0')} · {value.id}</span><Status value={value.status} /></span><strong>{value.title || value.id}</strong><small>{value.removed ? 'Ticket file removed' : value.dependencies.length ? `Depends on ${value.dependencies.join(', ')}` : 'No dependencies'}</small>{value.error && <span className="ticket-error">{value.error}</span>}{value.approvedRevision === value.revision && <span className="permission-note">This revision approved</span>}</Link></li>)}</ol></section>
+          <section className="ticket-detail" aria-label="Ticket details">{creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : <div className="empty-state detail-empty"><h2>{ticketId ? 'Ticket not found' : 'No ticket selected'}</h2><p>{ticketId ? 'This ticket is not available in this project.' : 'Select a ticket to review requirements, attachments, permissions, and run evidence.'}</p></div>}</section>
         </div>
-      </> : <section className="panel empty-state"><h2>No repositories registered</h2><p>Browse permitted backend folders and register a working directory. Every repository starts paused.</p><p className="muted">No Git initialization, branch changes, cleanup, or background work happens on registration.</p><Button type="primary" className="primary" onClick={() => setPicking(true)}>Choose a local folder</Button></section>}
-    </>}
-    {selectedRun && <RunPanel run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => setRunId('')} />}
-    {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => setPicking(false)} onRegistered={id => { selectRepo(id); setPicking(false); }} />}
+    </> : !selectedRun && <section className="panel empty-state"><h1>Page not found</h1><p>This project, run, or page is unavailable.</p><Link to="/">Return Home</Link></section>}
+    {selectedRun && <RunPanel run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => { void navigate(`/projects/${encode(selectedRun.repoId)}/tickets/${encode(selectedRun.ticketId)}`); }} />}
+    {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => { void navigate('/'); }} onRegistered={selectRepo} />}
   </>;
 }
 
@@ -83,6 +91,8 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   const [modal, modalContext] = Modal.useModal();
   const stale = !!ticket && ticket.revision !== base.revision;
   const dirty = draft !== base.markdown;
+  const savedNavigation = useRef(false);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && !savedNavigation.current && currentLocation.pathname !== nextLocation.pathname);
   const working = !!ticket && activeStatuses.includes(ticket.status);
   const path = ticket ? `/api/repos/${encode(ticket.repoId)}/tickets/${encode(ticket.id)}` : '';
   const source = draft.replace(/(\]\()(?:\.\/)?attachments\//g, `$1${path}/attachments/`);
@@ -101,7 +111,7 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
       try {
         const saved = await api<Ticket>(ticket ? path : `/api/repos/${encode(repo.id)}/tickets`, json(ticket ? 'PUT' : 'POST', ticket ? { markdown: draft, revision: base.revision } : { markdown: draft }));
         setBase({ markdown: saved.markdown, revision: saved.revision }); setDraft(saved.markdown); setConflict('');
-        if (!ticket) onCreated(saved.id);
+        if (!ticket) { savedNavigation.current = true; onCreated(saved.id); }
       } catch (cause) {
         if (typeof cause === 'object' && cause !== null && 'status' in cause && cause.status === 409) setConflict('This save conflicted with a newer revision. Your draft is preserved below. Copy it before loading the current file, then reconcile the changes.');
         throw cause;
@@ -131,6 +141,7 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
 
   return <div className="panel editor-panel">
     {modalContext}
+    <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Discard changes" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Your unsaved ticket changes will be discarded.</p></Modal>
     <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'New ticket'}</h2></div>{ticket && <Status value={ticket.status} />}</div>
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}

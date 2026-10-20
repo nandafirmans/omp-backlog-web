@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Alert, Button, ConfigProvider, Input, Menu, Select, Skeleton, Tag, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Input, Select, Skeleton, Tag, theme } from 'antd';
+import { Link, useLocation } from 'react-router';
 import type { Snapshot } from '../server/contracts';
 import plan from '../PLAN.md?raw';
 import MarkdownPreview from './MarkdownPreview';
@@ -11,7 +12,8 @@ interface Session { authenticated: boolean; configured: boolean; csrf: string }
 const downloadUrl = `data:text/markdown;charset=utf-8,${encodeURIComponent(plan)}`;
 
 export default function App() {
-  const [view, setView] = useState<'workspace' | 'settings' | 'plan'>('workspace');
+  const { pathname } = useLocation();
+  const view = pathname === '/plan' ? 'plan' : pathname === '/settings' ? 'settings' : 'workspace';
   const [session, setSession] = useState<Session>();
   const [snapshot, setSnapshot] = useState<Snapshot>();
   const [connection, setConnection] = useState('Connecting');
@@ -146,20 +148,10 @@ export default function App() {
     }}>
       <div className="workspace">
         <a className="skip-link" href="#content">Skip to content</a>
-        <aside className="sidebar">
-          <a className="brand" href="/"><span className="brand-mark" aria-hidden="true">ob</span><span>OMP Backlog<small>Local workspace</small></span></a>
-          <nav aria-label="Workspace navigation">
-            <Menu mode="inline" selectedKeys={[view]} onClick={({ key }) => setView(key as typeof view)} items={[
-              { key: 'workspace', label: 'Repositories' },
-              ...(session?.authenticated ? [{ key: 'settings', label: 'Settings' }] : []),
-              { key: 'plan', label: 'Implementation plan' },
-            ]} />
-          </nav>
-          <div className="sidebar-note"><span className="small-label">Execution policy</span><p>Permission before execution.</p><small>Local folders are not sandboxes. Closing this tab or logging out does not stop work.</small></div>
-        </aside>
         <div className="page">
           <header className="topbar">
-            <span className="breadcrumb">Workspace <span className="separator">/</span> {view === 'workspace' ? 'Repositories' : view === 'settings' ? 'Settings' : 'Implementation plan'}</span>
+            <Link className="brand" to="/"><span className="brand-mark" aria-hidden="true">ob</span><span>OMP Backlog<small>Local workspace</small></span></Link>
+            <span className="breadcrumb"><Link to="/">Home</Link>{pathname !== '/' && <><span className="separator">/</span>{view === 'settings' ? 'Settings' : view === 'plan' ? 'Implementation plan' : pathname === '/projects/new' ? 'Add project' : pathname.startsWith('/runs/') ? 'Run' : 'Project'}</>}</span>
             <div className="toolbar">
               <Select aria-label="Color theme" value={colorMode} onChange={setColorMode} options={[{ value: 'system', label: 'System theme' }, { value: 'dark', label: 'Dark theme' }, { value: 'light', label: 'Light theme' }]} popupMatchSelectWidth={false} />
               {session?.authenticated && <><Tag className={`connection ${connection === 'Live' ? 'connected' : 'unavailable'}`} role="status">{connection}</Tag><Button onClick={() => void logout()}>Log out</Button></>}
@@ -177,7 +169,8 @@ export default function App() {
                 {!session.configured ? <div className="panel setup-panel"><h2>Create owner account</h2><p>Registration is terminal-only. Run this command from the application directory, then return here.</p><pre><code>bun server/setup.ts</code></pre><Button onClick={() => { void readSession().catch(cause => setError(String(cause))); }}>Check setup again</Button></div>
                   : <form className="panel login-form" onSubmit={event => void login(event)}><h2>Sign in</h2><label htmlFor="username">Username<Input id="username" name="username" autoComplete="username" required autoFocus /></label><label htmlFor="password">Password<Input.Password id="password" name="password" autoComplete="current-password" required /></label><Button type="primary" htmlType="submit" disabled={loggingIn}>{loggingIn ? 'Signing in…' : 'Sign in'}</Button><p className="muted">One owner. Loopback access. No public registration.</p></form>}
               </section>
-              : snapshot ? <Workspace snapshot={snapshot} api={api} refresh={refresh} settingsView={view === 'settings'} onError={setError} /> : <div role="status" aria-label="Loading repositories"><Skeleton active={false} paragraph={{ rows: 6 }} /></div>}
+              : snapshot ? <Workspace snapshot={snapshot} api={api} refresh={refresh} onError={setError} /> : <div role="status" aria-label="Loading repositories"><Skeleton active={false} paragraph={{ rows: 6 }} /></div>}
+            {pathname === '/' && !session?.authenticated && <nav className="home-navigation" aria-label="Home navigation"><Link to="/plan">Implementation plan</Link></nav>}
             <footer><span>OMP Backlog Web</span><span>Local execution / Explicit permission</span></footer>
           </main>
         </div>
