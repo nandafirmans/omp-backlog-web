@@ -1,0 +1,50 @@
+.markdown-editor {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  background: var(--surface-inset, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-weight: 600;
+}
+
+.markdown-editor:focus-within { border-color: var(--accent); }
+.markdown-editor-toolbar,
+.markdown-editor-footer {
+  display: flex;
+  gap: 8px 16px;
+  padding: 8px 12px;
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.markdown-editor-toolbar {
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+.markdown-editor-keymap { display: flex; align-items: center; gap: 10px; }
+.markdown-editor-mode { color: var(--accent); font-size: 13px; letter-spacing: .04em; white-space: nowrap; }
+.markdown-editor .ant-switch { font-family: inherit; }
+.markdown-editor-host .cm-editor { min-height: 320px; font-size: 16px; font-weight: 600; }
+.markdown-editor-host .cm-scroller { max-height: 65vh; overflow: auto; font-family: inherit; line-height: 1.7; }
+.markdown-editor-host .cm-content { min-height: 320px; padding: 12px 0; }
+.markdown-editor-host .cm-line { padding: 0 12px; }
+.markdown-editor-host .cm-gutterElement { padding-right: 8px; padding-left: 8px; }
+.markdown-editor-host .cm-tooltip-autocomplete > ul { max-width: min(70vw, 650px); font-family: inherit; font-size: 14px; font-weight: 600; }
+.markdown-editor-host .cm-tooltip-autocomplete > ul > li { padding: 4px 8px; }
+.markdown-editor-host .cm-completionLabel { overflow-wrap: anywhere; }
+.markdown-editor-host .cm-vim-panel { padding: 6px 12px; border-top: 1px solid var(--line); }
+.markdown-editor-host .cm-vim-panel input { color: var(--text); font: inherit; }
+.markdown-editor-footer { flex-direction: column; gap: 2px; border-top: 1px solid var(--line); color: var(--muted); overflow-wrap: anywhere; }
+.markdown-editor-footer [role="status"]:empty { display: none; }
+.markdown-editor-error { color: var(--danger); }
+.markdown-editor-readonly .markdown-editor-mode { color: var(--muted); }
+
+@media (max-width: 600px) {
+  .markdown-editor-toolbar { padding: 8px; }
+  .markdown-editor-host .cm-completionDetail { display: none; }
+  .markdown-editor-host .cm-editor,
+  .markdown-editor-host .cm-content { min-height: 260px; }
+}
