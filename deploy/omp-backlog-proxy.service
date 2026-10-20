@@ -1,0 +1,11 @@
+[Unit]
+Description=Private HTTPS proxy for OMP Backlog
+
+[Service]
+Type=simple
+UMask=0077
+ExecStart=/usr/bin/caddy run --config %h/.config/omp-backlog-web/Caddyfile --adapter caddyfile
+ExecReload=/usr/bin/caddy reload --config %h/.config/omp-backlog-web/Caddyfile --adapter caddyfile --force
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+{
+	auto_https off
+	servers {
+		protocols h1 h2
+		strict_sni_host on
+	}
+}
+
+https://backlog.example.com:8443 {
+	bind 127.0.0.1
+	tls {$HOME}/.local/share/omp-backlog-web/tls/fullchain.pem {$HOME}/.local/share/omp-backlog-web/tls/key.pem
+	reverse_proxy 127.0.0.1:4310
+}

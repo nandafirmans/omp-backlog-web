@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew the private OMP Backlog HTTPS certificate
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/acme.sh --cron --home %h/.local/share/omp-backlog-acme
