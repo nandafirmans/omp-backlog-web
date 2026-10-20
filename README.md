@@ -47,7 +47,7 @@ React Router supports direct links, reloads, and browser Back/Forward. Unknown p
 ## Ticket workflow
 
 1. Add a local directory using the authenticated folder picker. Initial allowed root: `~/Development`.
-2. New repositories start **Paused**. Create a Markdown ticket with an ID, title, goal, requirements, acceptance criteria, scope, and verification instructions.
+2. New repositories start **Paused**. Create a Markdown ticket with an ID, title, a short request, optional constraints, and **Done when:** bullets describing observable results and verification.
 3. Upload references into the ticket's `attachments/` directory and link the files from the Markdown. Use synthetic JSON; explain what each screenshot or document demonstrates.
 4. Save and inspect validation errors. Dependencies use ticket IDs within the same repository.
 5. Approve the exact revision, then choose **Approved tickets only**. Changing Markdown or referenced attachments invalidates approval. **Automatic** is standing permission to execute eligible revisions; enable deliberately.
@@ -69,26 +69,19 @@ title: Add CSV export
 depends_on: []
 ---
 
-# Goal
 Export the currently filtered orders as CSV.
+Preserve authorization and current filters. No scheduled exports or email delivery.
 
-# Requirements
-- Preserve authorization and current filters.
-
-# Acceptance criteria
+Done when:
 - Export contains only matching rows.
 - Commas, quotes, and newlines are escaped correctly.
 - Unauthorized access is rejected.
+- Verify through the browser action and inspect representative CSV output.
 
-# Out of scope
-- Scheduled exports and email delivery.
-
-# Verification
-Exercise the browser action and inspect representative CSV output.
-
-# Attachments
-- [Synthetic records](attachments/records.json)
+Reference: [Synthetic records](attachments/records.json)
 ```
+
+`depends_on: []` means no prerequisites. Use `[T001, T002]` only when those tickets must be Done before this one starts. Existing tickets with an **Acceptance criteria** heading remain supported; separate Goal, Requirements, Scope, and Verification sections are optional.
 
 ### Editor controls
 

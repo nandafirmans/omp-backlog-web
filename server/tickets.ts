@@ -65,13 +65,11 @@ export function parseTicket(markdown: string, expected?: string): { id: string; 
   const dependencies = depText.replace(/^\[/, '').replace(/\]$/, '').split(',').map(unquote).filter(Boolean);
   if (dependencies.some(dep => !validTicketId(dep)) || new Set(dependencies).size !== dependencies.length) throw new HttpError(400, 'depends_on must contain unique T001-style IDs');
   const body = markdown.slice(match[0].length);
-  for (const section of ['Goal', 'Requirements', 'Acceptance criteria', 'Verification']) {
-    const heading = new RegExp(`^#{1,6}\\s+${section}\\s*\\r?$`, 'im').exec(body);
-    if (!heading || !body.slice(heading.index + heading[0].length).split(/\n#{1,6}\s/)[0].trim()) throw new HttpError(400, `Add a nonempty ${section} section`);
-  }
-  const acceptance = /^#{1,6}\s+Acceptance criteria\s*\r?\n([\s\S]*?)(?=\n#{1,6}\s|$)/im.exec(body)?.[1] || '';
-  const criteria = acceptance.split(/\r?\n/).filter(line => /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line)).map(line => line.replace(/^\s*(?:[-*+]\s|\d+[.)]\s)(?:\[[ xX]\]\s*)?/, '').trim()).filter(Boolean);
-  if (!criteria.length) throw new HttpError(400, 'List observable acceptance criteria as Markdown bullets');
+  const acceptance = /^(?:#{1,6}[ \t]+)?(?:Done when:|Acceptance criteria)[ \t]*\r?\n([\s\S]*?)(?=\n#{1,6}\s|(?![\s\S]))/im.exec(body);
+  if (!acceptance) throw new HttpError(400, 'Add Done when: with observable results as Markdown bullets');
+  if (!body.slice(0, acceptance.index).replace(/^#{1,6}[^\r\n]*/gm, '').trim()) throw new HttpError(400, 'Describe what to change before Done when:');
+  const criteria = acceptance[1].split(/\r?\n/).filter(line => /^\s*(?:[-*+]\s|\d+[.)]\s)/.test(line)).map(line => line.replace(/^\s*(?:[-*+]\s|\d+[.)]\s)(?:\[[ xX]\]\s*)?/, '').trim()).filter(Boolean);
+  if (!criteria.length) throw new HttpError(400, 'List observable results under Done when: as Markdown bullets');
   return { id, title, dependencies, criteria };
 }
 export function attachmentReferences(markdown: string): string[] {
