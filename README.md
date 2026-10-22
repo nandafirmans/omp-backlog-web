@@ -32,16 +32,23 @@ Remote access remains tailnet-only and requires application login. Bun and Caddy
 
 ## Navigation
 
-Home (`/`) puts projects first in a shared-width workspace, with compact scheduler controls and horizontal folder cards showing each project's path, execution permission, total ticket count, and nonzero lifecycle-status counts. Removed tickets are excluded. Ready counts describe ticket status, not a promise of execution: repository permission, dependencies, and the global slot still govern eligibility. Long paths truncate visually but remain available on hover. **Add project** opens the local-folder picker. **Home**, **Settings**, and **Implementation plan** live in the header; secondary navigation collapses under **Menu** on mobile. The pause control remains visible, and pausing new starts never stops a current run.
+Home (`/`) puts projects first in a full-width, viewport-height workspace, with compact scheduler controls and rounded folder cards showing each project's path, execution permission, total ticket count, and nonzero lifecycle-status counts. Removed tickets are excluded. Ready counts describe ticket status, not a promise of execution: repository permission, dependencies, and the global slot still govern eligibility. Long paths truncate visually but remain available on hover. **Add project** opens the local-folder picker. **Home**, **Settings**, and **Implementation plan** live in the header; secondary navigation collapses under **Menu** on mobile. The pause control remains visible, and pausing new starts never stops a current run.
 
 Global scheduler controls appear on Home only, not project, ticket, run, settings, or folder-picker pages. Project execution permissions and actionable active-run alerts remain contextual.
 
-Header navigation pairs icons with visible labels and highlights the current page. The theme icon button opens a keyboard-accessible menu for System, Light, or Dark; selection persists locally. Mobile navigation closes after following a link.
+Header navigation pairs icons with visible labels and highlights the current page. The labeled theme button opens a keyboard-accessible menu for Tokyo Night, Kanagawa, Gruvbox, Catppuccin, Light, or System; selection persists locally. System follows operating-system appearance changes. Mobile navigation closes after following a link.
+
+Project tickets use a compact execution header and a **Board / List** switch. The board groups tickets by their exact lifecycle status: Draft, Ready, Running, Stopping, Paused, Blocked, Needs review, Failed, Interrupted, and Done. Empty statuses are hidden by default; **Display** can reveal empty statuses or hide individual columns. Hidden matching tickets remain counted in the toolbar and footer. Layout and display preferences persist in this browser. Search filters titles and IDs without changing queue order. Cards show dependencies only when present, approval when revision-bound, and abbreviated errors; open a ticket for full details. Status changes still require the existing approval, run-control, retry, and review actions, not dragging cards.
+
+The board fills the remaining viewport rather than a centered, fixed-width wrapper. Its toolbar and footer stay visible; long columns scroll independently, with horizontal scrolling confined to the board. List view scrolls within the same workspace. Short mobile viewports can scroll the surrounding workspace to keep controls accessible. Status ordering, Board/List switching, and empty-group visibility follow the interaction patterns documented in [Linear's board layout guidance](https://linear.app/docs/board-layout).
+
+Opening a ticket keeps the board in place and shows a right-side panel with readable requirements, permission/review actions, attachments, and run history. **Edit Markdown** opens the existing Markdown/Preview editors; **Reading view** becomes available again after saving unsaved work. **New ticket** opens a focused creation editor with optional Markdown import under **Import existing Markdown**. Panels can expand to full width and fit the mobile viewport. Closing follows normal route navigation, including unsaved-change confirmation, and returns focus to the originating card or New ticket control when available. **Project settings** contains the repository path and project switcher; execution permission and its consequences stay visible in the header.
+
 
 - `/projects/new`: authenticated local-folder picker.
 - `/projects/:repoId`: project permissions and backlog.
-- `/projects/:repoId/tickets/new`: new ticket editor.
-- `/projects/:repoId/tickets/:ticketId`: ticket editor and run history.
+- `/projects/:repoId/tickets/new`: focused new-ticket panel.
+- `/projects/:repoId/tickets/:ticketId`: readable ticket panel, editor, and run history.
 - `/runs/:runId`: run details.
 - `/settings`: workspace settings.
 - `/plan`: implementation plan.
@@ -89,7 +96,7 @@ Reference: [Synthetic records](attachments/records.json)
 
 ### Editor controls
 
-The workspace uses Ant Design styled after [Nanda's portfolio](https://nandafirmans.my.id/): Tokyo Night slate surfaces, teal accents, square edges, and terminal-style metadata. Choose **System theme**, **Dark theme**, or **Light theme** in the header; the selection persists in this browser. Dark mode uses the portfolio palette; light mode uses matching cool neutrals and a darker teal for contrast.
+The workspace takes its terminal-inspired direction from [Nanda's portfolio](https://nandafirmans.my.id/): monospace chrome, themed surfaces, accent lighting, and subtle gradients. Rounded cards, panels, controls, editors, and dialogs share the selected palette, including Ant Design popups. Glow stays on accent controls, focused fields, and hovered cards rather than body text. Tokyo Night preserves the original slate/teal palette; the other terminal palettes change the entire interface. Light uses darker accents for contrast. Reduced-motion preferences disable decorative transitions.
 Typography pairs self-hosted IBM Plex Sans for content with IBM Plex Mono for controls, metadata, and Markdown. Font files and their OFL license live in `public/fonts`; no external font requests are required. Browsers synthesize italics for these normal-only font faces so Markdown emphasis remains visible; weight synthesis stays disabled. App copy stays at 15px; desktop Markdown and editable Preview use 14px. Markdown increases to 16px on small screens to avoid mobile input zoom. Ant Design's compact density is disabled to keep controls readable.
 
 Markdown source highlighting uses theme-aware Tokyo Night colors: blue headings, violet emphasis, teal links, amber code, green quotes, and quieter syntax markers. Font sizes stay unchanged.
