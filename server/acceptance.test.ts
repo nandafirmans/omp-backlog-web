@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { createStore, closeStore, database } from './store';
 import { createApi } from './api';
 import { reconcileTickets, safePath, snapshotTicket, uploadAttachment, writeTicket } from './tickets';
+import { eligible } from './runtime';
 import type { Repo, Runtime } from './contracts';
 
 const root = await mkdtemp(join(tmpdir(), 'omp-backlog-acceptance-'));
@@ -60,6 +61,58 @@ describe('requirements and filesystem boundaries', () => {
     expect(changed.approvedRevision).not.toBe(changed.revision);
     expect(await Bun.file(join(snapshot, 'attachments', 'example.json')).text()).toBe(original);
     await expect(uploadAttachment(store, repo, 'T004', '../unsafe.json', new Uint8Array(), changed.revision)).rejects.toThrow();
+  });
+  test('unreferenced uploads and empty purpose labels can be saved but cannot run or retain approval', async () => {
+    const automatic = { ...repo, mode: 'automatic' as const };
+    const approved = { ...repo, mode: 'approved' as const };
+    const ticket = await writeTicket(store, repo, markdown('T005'));
+    store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision });
+    const uploaded = await uploadAttachment(store, repo, 'T005', 'expected.png', new Uint8Array([1]), ticket.revision);
+    expect(uploaded.error).toContain('Attachment expected.png is unreferenced');
+    expect(uploaded.approvedRevision).toBeNull();
+    expect(eligible(store, automatic, uploaded)).toBe(false);
+
+    const empty = await writeTicket(store, repo, markdown('T005') + '\n![   ](attachments/expected.png "   ")\n', uploaded.revision, 'T005');
+    expect(empty.error).toContain('Attachment expected.png needs a purpose');
+    expect(eligible(store, automatic, empty)).toBe(false);
+    const fixed = await writeTicket(store, repo, markdown('T005') + '\n![Expected empty-state layout at narrow viewport](attachments/expected.png)\n', empty.revision, 'T005');
+    expect(fixed.error).toBeNull();
+    expect(eligible(store, automatic, fixed)).toBe(true);
+    expect(eligible(store, approved, fixed)).toBe(false);
+    store.save('tickets', { ...fixed, status: 'ready', approvedRevision: fixed.revision });
+    expect(eligible(store, approved, store.get('tickets', `${repo.id}/T005`)!)).toBe(true);
+
+    const revised = await writeTicket(store, repo, markdown('T005') + '\n![](attachments/expected.png)\n', fixed.revision, 'T005');
+    expect(revised.error).toContain('needs a purpose');
+    expect(revised.approvedRevision).toBeNull();
+    expect(eligible(store, automatic, revised)).toBe(false);
+    expect(eligible(store, approved, revised)).toBe(false);
+  });
+  test('missing attachment drafts accept uploads and a link title can supply their purpose', async () => {
+    const ticket = await writeTicket(store, repo, markdown('T006') + '\n[](attachments/rows.json)\n');
+    expect(ticket.error).toContain('Missing attachment rows.json');
+    const uploaded = await uploadAttachment(store, repo, 'T006', 'rows.json', new TextEncoder().encode('[{"synthetic":true}]'), ticket.revision);
+    expect(uploaded.error).toContain('Attachment rows.json needs a purpose');
+    expect(eligible(store, { ...repo, mode: 'automatic' }, uploaded)).toBe(false);
+    const fixed = await writeTicket(store, repo, markdown('T006') + "\n[ ](attachments/rows.json 'Synthetic example records for export verification')\n", uploaded.revision, 'T006');
+    expect(fixed.error).toBeNull();
+    expect(eligible(store, { ...repo, mode: 'automatic' }, fixed)).toBe(true);
+    const extra = await uploadAttachment(store, repo, 'T006', 'notes.txt', new TextEncoder().encode('Use synthetic rows only.'), fixed.revision);
+    expect(extra.error).toContain('Attachment notes.txt is unreferenced');
+    expect(eligible(store, { ...repo, mode: 'automatic' }, extra)).toBe(false);
+    const complete = await writeTicket(store, repo, fixed.markdown + '\n[Notes explaining the synthetic input constraints](attachments/notes.txt)\n', extra.revision, 'T006');
+    expect(complete.error).toBeNull();
+    expect(eligible(store, { ...repo, mode: 'automatic' }, complete)).toBe(true);
+  });
+  test('a purpose-bearing reference permits empty duplicate references to the same attachment', async () => {
+    const ticket = await writeTicket(store, repo, markdown('T007') + '\n[](attachments/layout.png)\n![Expected empty-state layout](attachments/layout.png)\n![](attachments/layout.png)\n');
+    expect(ticket.error).toContain('Missing attachment layout.png');
+    const uploaded = await uploadAttachment(store, repo, 'T007', 'layout.png', new Uint8Array([1]), ticket.revision);
+    expect(uploaded.error).toBeNull();
+    expect(eligible(store, { ...repo, mode: 'automatic' }, uploaded)).toBe(true);
+    const titlePurpose = await writeTicket(store, repo, markdown('T007') + '\n![](attachments/layout.png)\n[](attachments/layout.png "Expected empty-state layout")\n', uploaded.revision, 'T007');
+    expect(titlePurpose.error).toBeNull();
+    expect(eligible(store, { ...repo, mode: 'automatic' }, titlePurpose)).toBe(true);
   });
 });
 

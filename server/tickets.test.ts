@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { parseTicket } from './tickets';
+import { attachmentReferences, parseTicket } from './tickets';
 
 const frontmatter = '---\nid: T001\ntitle: Export orders\ndepends_on: []\n---\n\n';
 
@@ -18,5 +18,23 @@ describe('ticket completion criteria', () => {
     expect(() => parseTicket(frontmatter + 'Done when:\n- Export works.\n')).toThrow('Describe what to change');
     expect(() => parseTicket(frontmatter + 'Export orders.\n')).toThrow('Add Done when:');
     expect(() => parseTicket(frontmatter + 'Export orders.\n\nDone when:\n- \n- [ ]\n')).toThrow('List observable results');
+  });
+});
+
+describe('inline attachment references', () => {
+  test('keeps decoded unique paths while inspecting labels and either quoted title', () => {
+    expect(attachmentReferences([
+      '[Representative export rows](attachments/example%20rows.json)',
+      '![](attachments/expected.png "Expected empty-state layout")',
+      "[ ](<attachments/expected.png> 'Expected layout at narrow viewport')",
+      '[](attachments/staged.txt)',
+      '[Documentation](https://example.com/guide)',
+    ].join('\n'))).toEqual(['example rows.json', 'expected.png', 'staged.txt']);
+  });
+
+  test('retains local path and URL-encoding protections', () => {
+    expect(() => attachmentReferences('[Purpose](../example.json)')).toThrow('Local attachment links');
+    expect(() => attachmentReferences('[Purpose](attachments/%2e%2e%2fexample.json)')).toThrow('Unsafe or unsupported attachment');
+    expect(() => attachmentReferences('[Purpose](attachments/%broken.json)')).toThrow('Invalid attachment URL encoding');
   });
 });

@@ -108,7 +108,7 @@ Keep the application database, run snapshots, and transcript records in a privat
 - Markdown owns title, goal, requirements, acceptance criteria, dependencies, scope, verification instructions, and attachment references.
 - SQLite owns approval, runtime status, ordering, attempts, pause state, and evidence records.
 - The website combines these views; do not maintain competing status fields in both stores.
-- Existing BACKLOG.md files may be imported explicitly. Do not silently rewrite or discard them.
+- Automatic conversion or splitting of existing BACKLOG.md files into tickets is out of scope and is not pending work. Users may explicitly load Markdown into a single-ticket draft and adapt it manually. Never silently rewrite or discard existing BACKLOG.md files.
 - The RPC worker selects one ticket. Do not ask the installed backlog-worker skill to independently process the entire backlog in parallel with the scheduler.
 
 ### Recommended ticket format
@@ -154,7 +154,7 @@ Orders page already supports date and status filters.
 
 Good tickets specify an outcome, scope, observable acceptance, and verification. Clarify materially ambiguous requirements before approving execution. Do not invent requirements.
 
-Each attachment must explain its purpose. Screenshot requirements should identify viewport, relevant elements, and acceptable differences. JSON examples should use synthetic data, not credentials or customer records.
+Each uploaded attachment must have at least one inline Markdown link or image with a nonblank purpose label or quoted link title. Incomplete drafts and upload staging may be saved, but unreferenced attachments or missing purpose labels block approval and execution, including Automatic mode. Empty duplicate references are allowed if another reference to the same file supplies its purpose. Humans assess whether the purpose is meaningful. Screenshot requirements should identify viewport, relevant elements, and acceptable differences. JSON examples should use synthetic data, not credentials or customer records.
 
 ### Attachment handling
 
@@ -331,6 +331,21 @@ Keep blocker questions and approval requests prominent, not buried in logs. Supp
 | 6. Recovery and verification | Snapshots, evidence review, restart handling | Crash becomes Interrupted; no blind replay; new revision cannot inherit old success |
 
 Verify with disposable repositories and real OMP execution. Browser verification must cover login, upload, permission, pause, blockers, and completion review. Exercise watcher duplicate events, dependency cycles, active-ticket edits, browser disconnects, backend restart, and failed provider turns. Use deterministic automated tests for state transitions, permissions, path containment, approval/revision binding, and duplicate-run prevention.
+
+### Implementation and verification status
+
+All six implementation phases have code paths. Repository cards now show lifecycle-status counts, and attachment-purpose validation participates in ticket eligibility. Automatic BACKLOG.md conversion remains out of scope.
+
+Verification completed using isolated application data and disposable workspaces:
+
+- Real browser/OMP flow: owner login, folder registration, authenticated upload, exact-revision approval, paused repositories starting nothing, agent questions and supported tool approvals, proof-file write/read, persisted criterion evidence, human completion review, and dependent execution only after Done in a fresh session.
+- Real interruption flow: closing the browser left an unanswered question pending without granting consent; pause cleared the dialog and stopped the child; resume retained the session and required a new answer. A Stop answer produced an investigated blocker and explicit retry used a fresh session.
+- Real revision/restart flow: edits during execution invalidated approval without changing the run snapshot; restarting the backend left the unfinished run Interrupted without replay, preserved completed tickets, and rejected completion of changed requirements using old evidence.
+- Browser surface: per-repository counts matched persisted statuses on desktop and mobile, with no horizontal overflow at a 390px viewport. Logout revoked protected access.
+- Deterministic suite: 40 tests passed, covering permissions, paths, dependency cycles, revision/attachment approval binding, actual duplicate filesystem events, multi-repository fairness, global-slot exclusion, post-admission provider errors, pause/resume identity, active-edit completion binding, surviving-child recovery, and time/token limits. Provider-error and limit cases use a protocol-speaking child fixture, not an induced live-provider outage.
+- ESLint and strict TypeScript checks passed. No production build was run.
+
+These checks establish the exercised scenarios, not sandboxing or universal provider compatibility. Semantic attachment-purpose quality and visual/subjective ticket acceptance remain human review responsibilities.
 
 ## Initialization delivery
 

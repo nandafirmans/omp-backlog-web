@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Alert, Button, ConfigProvider, Input, Select, Skeleton, Tag, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Dropdown, Input, Skeleton, Tag, theme } from 'antd';
+import { HouseIcon, GearSixIcon, BlueprintIcon, DesktopIcon, MoonIcon, SunIcon, SignOutIcon, ListIcon, XIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useLocation } from 'react-router';
 import type { Snapshot } from '../server/contracts';
 import plan from '../PLAN.md?raw';
@@ -19,6 +20,7 @@ export default function App() {
   const [connection, setConnection] = useState('Connecting');
   const [error, setError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
+  const [menuPath, setMenuPath] = useState<string>();
   const csrf = useRef('');
   const refreshSequence = useRef(0);
   const [colorMode, setColorMode] = useState<'system' | 'light' | 'dark'>(() => {
@@ -127,37 +129,57 @@ export default function App() {
     <ConfigProvider theme={{
       algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
       token: {
-        colorPrimary: dark ? '#84c99a' : '#226c40',
-        colorInfo: dark ? '#84c99a' : '#226c40',
-        colorBgBase: dark ? '#141918' : '#f5f7f5',
-        colorBgContainer: dark ? '#191f1d' : '#fafcf9',
-        colorBgElevated: dark ? '#202824' : '#fafcf9',
-        colorText: dark ? '#e0e8e1' : '#202c25',
-        colorTextSecondary: dark ? '#a2b1a7' : '#54645a',
-        colorBorder: dark ? '#47564d' : '#a9b8ae',
-        colorError: dark ? '#f19a91' : '#ad342e',
-        borderRadius: 2,
-        fontFamily: "'SFMono-Regular', Consolas, 'Liberation Mono', monospace",
+        colorPrimary: dark ? '#4fb6b2' : '#216e6b',
+        colorInfo: dark ? '#4fb6b2' : '#216e6b',
+        colorBgBase: dark ? '#151922' : '#eef1f5',
+        colorBgContainer: dark ? '#1d2430' : '#f8fafc',
+        colorBgElevated: dark ? '#283341' : '#f8fafc',
+        colorText: dark ? '#e5eaf0' : '#243041',
+        colorTextSecondary: dark ? '#9aa8b8' : '#526174',
+        colorTextPlaceholder: dark ? '#9aa8b8' : '#526174',
+        colorBorder: dark ? '#3b495b' : '#a3b1c2',
+        colorError: dark ? '#d97878' : '#a83d45',
+        colorWarning: dark ? '#d4b176' : '#805714',
+        borderRadius: 0,
+        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
         fontSize: 15,
         fontSizeSM: 13,
         fontWeightStrong: 700,
         controlHeight: 38,
         motion: false,
       },
-      components: { Button: { fontWeight: 600, primaryColor: dark ? '#142219' : '#fafcf9', defaultShadow: 'none', primaryShadow: 'none' } },
+      components: { Button: { fontWeight: 600, primaryColor: dark ? '#151922' : '#f8fafc', defaultShadow: 'none', primaryShadow: 'none' } },
     }}>
       <div className="workspace">
         <a className="skip-link" href="#content">Skip to content</a>
         <div className="page">
           <header className="topbar">
             <Link className="brand" to="/"><span className="brand-mark" aria-hidden="true">ob</span><span>OMP Backlog<small>Local workspace</small></span></Link>
-            <span className="breadcrumb"><Link to="/">Home</Link>{pathname !== '/' && <><span className="separator">/</span>{view === 'settings' ? 'Settings' : view === 'plan' ? 'Implementation plan' : pathname === '/projects/new' ? 'Add project' : pathname.startsWith('/runs/') ? 'Run' : 'Project'}</>}</span>
-            <div className="toolbar">
-              <Select aria-label="Color theme" value={colorMode} onChange={setColorMode} options={[{ value: 'system', label: 'System theme' }, { value: 'dark', label: 'Dark theme' }, { value: 'light', label: 'Light theme' }]} popupMatchSelectWidth={false} />
-              {session?.authenticated && <><Tag className={`connection ${connection === 'Live' ? 'connected' : 'unavailable'}`} role="status">{connection}</Tag><Button onClick={() => void logout()}>Log out</Button></>}
+            <div className={`primary-navigation${menuPath === pathname ? ' is-open' : ''}`}>
+              <Button className="navigation-toggle" icon={menuPath === pathname ? <XIcon size={18} aria-hidden="true" /> : <ListIcon size={18} aria-hidden="true" />} aria-expanded={menuPath === pathname} aria-controls="main-navigation" onClick={() => setMenuPath(menuPath === pathname ? undefined : pathname)}>Menu</Button>
+              <nav id="main-navigation" aria-label="Main navigation">
+                <Link to="/" onClick={() => setMenuPath(undefined)} aria-current={pathname === '/' ? 'page' : undefined}><HouseIcon size={18} aria-hidden="true" />Home</Link>
+                {session?.authenticated && <Link to="/settings" onClick={() => setMenuPath(undefined)} aria-current={view === 'settings' ? 'page' : undefined}><GearSixIcon size={18} aria-hidden="true" />Settings</Link>}
+                <Link to="/plan" onClick={() => setMenuPath(undefined)} aria-current={view === 'plan' ? 'page' : undefined}><BlueprintIcon size={18} aria-hidden="true" />Implementation plan</Link>
+              </nav>
+            </div>
+            <div className="toolbar navbar-tools">
+              <Dropdown trigger={['click']} menu={{
+                selectable: true,
+                selectedKeys: [colorMode],
+                items: [
+                  { key: 'system', icon: <DesktopIcon size={18} aria-hidden="true" />, label: 'System' },
+                  { key: 'light', icon: <SunIcon size={18} aria-hidden="true" />, label: 'Light' },
+                  { key: 'dark', icon: <MoonIcon size={18} aria-hidden="true" />, label: 'Dark' },
+                ],
+                onClick: ({ key }) => { if (key === 'system' || key === 'light' || key === 'dark') setColorMode(key); },
+              }}>
+                <Button className="theme-toggle" aria-label={`Color theme: ${colorMode}`} title={`Color theme: ${colorMode}`} icon={colorMode === 'system' ? <DesktopIcon size={18} aria-hidden="true" /> : colorMode === 'dark' ? <MoonIcon size={18} aria-hidden="true" /> : <SunIcon size={18} aria-hidden="true" />} />
+              </Dropdown>
+              {session?.authenticated && <><Tag icon={connection === 'Live' ? <BroadcastIcon size={15} aria-hidden="true" /> : <WarningCircleIcon size={15} aria-hidden="true" />} className={`connection ${connection === 'Live' ? 'connected' : 'unavailable'}`} role="status" aria-label={connection} title={connection}><span className="connection-label">{connection}</span></Tag><Button icon={<SignOutIcon size={18} aria-hidden="true" />} onClick={() => void logout()}>Log out</Button></>}
             </div>
           </header>
-          <main id="content" tabIndex={-1}>
+          <main id="content" tabIndex={-1} className={session?.authenticated && (pathname === '/' || pathname === '/projects/new') ? 'home-main' : undefined}>
             {error && <Alert type="error" title={error} closable={{ onClose: () => setError('') }} role="alert" />}
             {view === 'plan' ? <section className="plan-view" aria-labelledby="plan-heading">
               <div className="section-heading"><h1 id="plan-heading">Implementation plan</h1><Button href={downloadUrl} download="PLAN.md">Download Markdown</Button></div>
@@ -170,8 +192,6 @@ export default function App() {
                   : <form className="panel login-form" onSubmit={event => void login(event)}><h2>Sign in</h2><label htmlFor="username">Username<Input id="username" name="username" autoComplete="username" required autoFocus /></label><label htmlFor="password">Password<Input.Password id="password" name="password" autoComplete="current-password" required /></label><Button type="primary" htmlType="submit" disabled={loggingIn}>{loggingIn ? 'Signing in…' : 'Sign in'}</Button><p className="muted">One owner. Loopback access. No public registration.</p></form>}
               </section>
               : snapshot ? <Workspace snapshot={snapshot} api={api} refresh={refresh} onError={setError} /> : <div role="status" aria-label="Loading repositories"><Skeleton active={false} paragraph={{ rows: 6 }} /></div>}
-            {pathname === '/' && !session?.authenticated && <nav className="home-navigation" aria-label="Home navigation"><Link to="/plan">Implementation plan</Link></nav>}
-            <footer><span>OMP Backlog Web</span><span>Local execution / Explicit permission</span></footer>
           </main>
         </div>
       </div>

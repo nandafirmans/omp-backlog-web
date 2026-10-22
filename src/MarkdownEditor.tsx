@@ -3,12 +3,14 @@ import { Switch } from 'antd';
 import { Annotation, Compartment, EditorState, Prec, Transaction } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
-import { defaultHighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
+import { tags } from '@lezer/highlight';
 import { markdown } from '@codemirror/lang-markdown';
 import { acceptCompletion, autocompletion, closeCompletion, completionStatus, moveCompletionSelection, startCompletion } from '@codemirror/autocomplete';
 import type { CompletionContext, CompletionResult } from '@codemirror/autocomplete';
 import { getCM, vim } from '@replit/codemirror-vim';
 import { mentionAt } from './mentions';
+import type { UploadAttachments } from './attachments';
 import './MarkdownEditor.css';
 
 interface Props {
@@ -18,6 +20,7 @@ interface Props {
   api: <T>(path: string, init?: RequestInit) => Promise<T>;
   disabled?: boolean;
   label?: string;
+  onUpload?: UploadAttachments;
 }
 interface CompletionResponse {
   items: { label: string; value: string; description?: string }[];
@@ -49,30 +52,44 @@ const editorTheme = EditorView.theme({
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'var(--accent)' },
   '.cm-gutters': { color: 'var(--muted)', backgroundColor: 'var(--surface)', borderRight: '1px solid var(--line)' },
   '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'var(--accent-soft, var(--surface-elevated))' },
-  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': { backgroundColor: 'var(--accent-soft, #29483b)' },
-  '.cm-tooltip': { color: 'var(--text)', backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--line)', borderRadius: '2px', fontFamily: 'inherit' },
+  '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': { backgroundColor: 'var(--accent-soft)' },
+  '.cm-tooltip': { color: 'var(--text)', backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--line)', borderRadius: '0', fontFamily: 'inherit' },
   '.cm-tooltip-autocomplete > ul > li[aria-selected]': { color: 'var(--surface)', backgroundColor: 'var(--accent)' },
   '.cm-completionDetail': { marginLeft: '12px', opacity: '0.8' },
   '.cm-panels': { color: 'var(--text)', backgroundColor: 'var(--surface-elevated)' },
 });
 
-export default function MarkdownEditor({ value, onChange, repoId, api, disabled = false, label = 'Ticket Markdown' }: Props) {
+const markdownHighlightStyle = HighlightStyle.define([
+  { tag: tags.heading, color: 'var(--syntax-heading)', fontWeight: '600' },
+  { tag: tags.strong, color: 'var(--syntax-emphasis)', fontWeight: '600' },
+  { tag: tags.emphasis, color: 'var(--syntax-emphasis)', fontStyle: 'italic' },
+  { tag: tags.strikethrough, color: 'var(--muted)', textDecoration: 'line-through' },
+  { tag: tags.link, color: 'var(--syntax-link)', textDecoration: 'underline', textUnderlineOffset: '3px' },
+  { tag: tags.url, color: 'var(--syntax-link)' },
+  { tag: tags.monospace, color: 'var(--syntax-code)' },
+  { tag: tags.quote, color: 'var(--syntax-quote)' },
+  { tag: [tags.processingInstruction, tags.meta, tags.contentSeparator], color: 'var(--syntax-marker)' },
+]);
+
+export default function MarkdownEditor({ value, onChange, repoId, api, disabled = false, label = 'Ticket Markdown', onUpload }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
-  const latest = useRef({ value, onChange, api, disabled });
+  const latest = useRef({ value, onChange, api, disabled, onUpload });
   const compartments = useRef({ vim: new Compartment(), editable: new Compartment(), label: new Compartment() });
   const cancelCompletion = useRef<(() => void) | null>(null);
   const [vimEnabled, setVimEnabled] = useState(storedVimPreference);
   const [mode, setMode] = useState('NORMAL');
   const [completionNotice, setCompletionNotice] = useState('');
   const [completionError, setCompletionError] = useState(false);
+  const [attachmentNotice, setAttachmentNotice] = useState('');
+  const [attachmentError, setAttachmentError] = useState(false);
   const id = useId();
   const labelId = `${id}-label`;
   const contentId = `${id}-content`;
   const hintId = `${id}-hint`;
   const statusId = `${id}-status`;
 
-  useEffect(() => { latest.current = { value, onChange, api, disabled }; }, [value, onChange, api, disabled]);
+  useEffect(() => { latest.current = { value, onChange, api, disabled, onUpload }; }, [value, onChange, api, disabled, onUpload]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -81,6 +98,7 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
     let generation = 0;
     const cancel = () => { generation++; request?.abort(); request = null; };
     cancelCompletion.current = cancel;
+    const pastePositions = new Set<{ position: number }>();
     const notice = (text: string, error = false) => {
       if (!disposed) { setCompletionNotice(text); setCompletionError(error); }
     };
@@ -130,7 +148,7 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
           compartments.current.editable.of([EditorState.readOnly.of(latest.current.disabled), EditorView.editable.of(!latest.current.disabled)]),
           compartments.current.label.of([]),
           lineNumbers(), highlightSpecialChars(), history(), drawSelection(), highlightActiveLine(),
-          markdown(), syntaxHighlighting(defaultHighlightStyle), EditorView.lineWrapping, editorTheme,
+          markdown(), syntaxHighlighting(markdownHighlightStyle), EditorView.lineWrapping, editorTheme,
           autocompletion({ override: [source], defaultKeymap: false, activateOnTypingDelay: 0, interactionDelay: 0, icons: false }),
           // DOM-handler precedence is required: Vim handles keys before ordinary CM keymaps.
           Prec.highest(EditorView.domEventHandlers({
@@ -151,12 +169,43 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
               if (event.key === 'Enter' || event.key === 'Tab') return acceptCompletion(currentView);
               return false;
             },
+            paste(event, currentView) {
+              const upload = latest.current.onUpload;
+              const files = Array.from(event.clipboardData?.files ?? []);
+              if (!upload || !files.length || latest.current.disabled) return false;
+              event.preventDefault();
+              // Insert rather than removing selected user text; map the paste point through later edits.
+              const position = { position: currentView.state.selection.main.head };
+              const text = event.clipboardData?.getData('text/plain') ?? '';
+              if (text) {
+                currentView.dispatch({ changes: { from: position.position, insert: text }, userEvent: 'input.paste' });
+                position.position += text.length;
+              }
+              pastePositions.add(position);
+              setAttachmentNotice('Preparing pasted attachments…'); setAttachmentError(false);
+              void upload(files).then(references => {
+                if (disposed) return;
+                const insert = `\n${references.map(reference => reference.markdown).join('\n')}\n`;
+                const selection = currentView.state.selection.main;
+                const moveCursor = selection.empty && selection.head === position.position;
+                currentView.dispatch({
+                  changes: { from: position.position, insert },
+                  selection: moveCursor ? { anchor: position.position + insert.length } : undefined,
+                  userEvent: 'input.paste',
+                });
+                setAttachmentNotice('Attachment references inserted. Save the Markdown explicitly.');
+              }).catch(cause => {
+                if (!disposed) { setAttachmentNotice(cause instanceof Error ? cause.message : String(cause)); setAttachmentError(true); }
+              }).finally(() => pastePositions.delete(position));
+              return true;
+            },
             blur() { cancel(); notice(''); return false; },
           })),
           keymap.of([...defaultKeymap, ...historyKeymap]),
           EditorView.updateListener.of(update => {
             if (update.docChanged) {
-              notice('');
+              for (const position of pastePositions) position.position = update.changes.mapPos(position.position, -1);
+              setAttachmentNotice(''); setAttachmentError(false); notice('');
               if (update.transactions.some(transaction => !transaction.annotation(externalChange))) latest.current.onChange(update.state.doc.toString());
             } else if (update.selectionSet && completionStatus(update.state) === null) notice('');
           }),
@@ -214,8 +263,8 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
     </div>
     <div ref={host} className="markdown-editor-host" />
     <div className="markdown-editor-footer">
-      <span id={hintId}>Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
-      <span id={statusId} role="status" aria-live="polite" className={completionError ? 'markdown-editor-error' : ''}>{disabled ? '' : completionNotice}</span>
+      <span id={hintId}>Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete{onUpload ? ' · Paste images or files to attach' : ''}{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
+      <span id={statusId} role={attachmentError ? 'alert' : 'status'} aria-live="polite" className={completionError || attachmentError ? 'markdown-editor-error' : ''}>{disabled ? '' : attachmentNotice || completionNotice}</span>
     </div>
   </div>;
 }

@@ -72,18 +72,31 @@ export function parseTicket(markdown: string, expected?: string): { id: string; 
   if (!criteria.length) throw new HttpError(400, 'List observable results under Done when: as Markdown bullets');
   return { id, title, dependencies, criteria };
 }
-export function attachmentReferences(markdown: string): string[] {
-  const names: string[] = [];
-  for (const match of markdown.matchAll(/!?\[[^\]]*\]\((?:<)?([^\s)>]+)(?:>)?(?:\s+["'][^)]*)?\)/g)) {
-    const href = match[1];
+function inspectAttachmentReferences(markdown: string): { name: string; purpose: string }[] {
+  const references: { name: string; purpose: string }[] = [];
+  for (const match of markdown.matchAll(/!?\[([^\]]*)\]\((?:<)?([^\s)>]+)(?:>)?(?:\s+(?:"([^"]*)"|'([^']*)'))?\)/g)) {
+    const href = match[2];
     if (/^(?:https?:|mailto:|#)/i.test(href)) continue;
     if (!href.startsWith('attachments/')) throw new HttpError(400, 'Local attachment links must use attachments/<filename>');
     let name: string;
     try { name = decodeURIComponent(href.slice('attachments/'.length)); } catch { throw new HttpError(400, 'Invalid attachment URL encoding'); }
     if (!validAttachmentName(name)) throw new HttpError(400, `Unsafe or unsupported attachment reference: ${name}`);
-    names.push(name);
+    references.push({ name, purpose: match[1].trim() || (match[3] ?? match[4] ?? '').trim() });
   }
-  return [...new Set(names)].sort();
+  return references;
+}
+export function attachmentReferences(markdown: string): string[] {
+  return [...new Set(inspectAttachmentReferences(markdown).map(reference => reference.name))].sort();
+}
+function validateAttachmentPurposes(markdown: string, attachments: Attachment[]): void {
+  const references = inspectAttachmentReferences(markdown);
+  for (const { name } of references) {
+    if (!attachments.some(file => file.name === name)) throw new HttpError(400, `Missing attachment ${name}; upload it or remove the reference`);
+  }
+  for (const { name } of attachments) {
+    if (!references.some(reference => reference.name === name)) throw new HttpError(400, `Attachment ${name} is unreferenced; add a Markdown link/image with a label or title describing its purpose`);
+    if (!references.some(reference => reference.name === name && reference.purpose)) throw new HttpError(400, `Attachment ${name} needs a purpose; add a nonempty descriptive Markdown link/image label or link title`);
+  }
 }
 async function readTicket(repo: Repo, id: string): Promise<{ markdown: string; attachments: Attachment[]; revision: string }> {
   const directory = await ticketDirectory(repo, id);
@@ -135,7 +148,7 @@ async function reconcile(store: Store, force: boolean): Promise<void> {
         if (!force && observed && Date.now() - observed.since < 500) continue;
         const changed = ticket.revision !== content.revision;
         ticket = { ...ticket, ...content, error: !changed && previous?.error?.startsWith('Dependency ') ? previous.error : null };
-        try { const parsed = parseTicket(content.markdown, id); attachmentReferences(content.markdown).forEach(name => { if (!content.attachments.some(file => file.name === name)) throw new HttpError(400, `Missing attachment ${name}; upload it or remove the reference`); }); ticket = { ...ticket, title: parsed.title, dependencies: parsed.dependencies, criteria: parsed.criteria }; }
+        try { const parsed = parseTicket(content.markdown, id); validateAttachmentPurposes(content.markdown, content.attachments); ticket = { ...ticket, title: parsed.title, dependencies: parsed.dependencies, criteria: parsed.criteria }; }
         catch (error) { ticket.error = error instanceof Error ? error.message : 'Invalid ticket'; }
         if (changed) { ticket.approvedRevision = null; if (!['running', 'stopping', 'paused'].includes(ticket.status)) ticket.status = 'draft'; }
       } catch (error) { ticket.error = error instanceof Error ? error.message : 'Cannot read ticket'; ticket.approvedRevision = null; }

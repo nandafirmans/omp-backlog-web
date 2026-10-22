@@ -32,7 +32,11 @@ Remote access remains tailnet-only and requires application login. Bun and Caddy
 
 ## Navigation
 
-Home (`/`) contains the project selector, **Add project**, **Settings**, and **Implementation plan**. There is no sidebar. The header's **Home** link returns to this hub from every page.
+Home (`/`) puts projects first in a shared-width workspace, with compact scheduler controls and horizontal folder cards showing each project's path, execution permission, total ticket count, and nonzero lifecycle-status counts. Removed tickets are excluded. Ready counts describe ticket status, not a promise of execution: repository permission, dependencies, and the global slot still govern eligibility. Long paths truncate visually but remain available on hover. **Add project** opens the local-folder picker. **Home**, **Settings**, and **Implementation plan** live in the header; secondary navigation collapses under **Menu** on mobile. The pause control remains visible, and pausing new starts never stops a current run.
+
+Global scheduler controls appear on Home only, not project, ticket, run, settings, or folder-picker pages. Project execution permissions and actionable active-run alerts remain contextual.
+
+Header navigation pairs icons with visible labels and highlights the current page. The theme icon button opens a keyboard-accessible menu for System, Light, or Dark; selection persists locally. Mobile navigation closes after following a link.
 
 - `/projects/new`: authenticated local-folder picker.
 - `/projects/:repoId`: project permissions and backlog.
@@ -48,7 +52,7 @@ React Router supports direct links, reloads, and browser Back/Forward. Unknown p
 
 1. Add a local directory using the authenticated folder picker. Initial allowed root: `~/Development`.
 2. New repositories start **Paused**. Create a Markdown ticket with an ID, title, a short request, optional constraints, and **Done when:** bullets describing observable results and verification.
-3. Upload references into the ticket's `attachments/` directory and link the files from the Markdown. Use synthetic JSON; explain what each screenshot or document demonstrates.
+3. Paste images or supported files into **Markdown** or **Preview**. Existing tickets upload immediately into their `attachments/` directory and insert relative image/file links without saving your text. New tickets stage files in the current tab until **Create ticket**. Use synthetic examples; explain what each screenshot or document demonstrates.
 4. Save and inspect validation errors. Dependencies use ticket IDs within the same repository.
 5. Approve the exact revision, then choose **Approved tickets only**. Changing Markdown or referenced attachments invalidates approval. **Automatic** is standing permission to execute eligible revisions; enable deliberately.
 6. Watch the run, answer questions, and inspect verification evidence. **Needs review** is not **Done**. Confirm acceptance before dependents can run.
@@ -85,10 +89,15 @@ Reference: [Synthetic records](attachments/records.json)
 
 ### Editor controls
 
-The workspace uses Ant Design with a terminal-style monospace theme. Choose **System theme**, **Dark theme**, or **Light theme** in the header; the selection persists in this browser.
-Typography uses semibold text, 15px controls/body copy, 13px minimum helper text, and a 16px Markdown editor. Ant Design's compact density is disabled to keep controls readable.
+The workspace uses Ant Design styled after [Nanda's portfolio](https://nandafirmans.my.id/): Tokyo Night slate surfaces, teal accents, square edges, and terminal-style metadata. Choose **System theme**, **Dark theme**, or **Light theme** in the header; the selection persists in this browser. Dark mode uses the portfolio palette; light mode uses matching cool neutrals and a darker teal for contrast.
+Typography pairs self-hosted IBM Plex Sans for content with IBM Plex Mono for controls, metadata, and Markdown. Font files and their OFL license live in `public/fonts`; no external font requests are required. Browsers synthesize italics for these normal-only font faces so Markdown emphasis remains visible; weight synthesis stays disabled. App copy stays at 15px; desktop Markdown and editable Preview use 14px. Markdown increases to 16px on small screens to avoid mobile input zoom. Ant Design's compact density is disabled to keep controls readable.
 
-- Markdown entry uses CodeMirror, including syntax highlighting, line numbers, undo, and the existing preview.
+Markdown source highlighting uses theme-aware Tokyo Night colors: blue headings, violet emphasis, teal links, amber code, green quotes, and quieter syntax markers. Font sizes stay unchanged.
+
+- **Markdown** uses CodeMirror with syntax highlighting, line numbers, undo, and optional Vim keybindings. **Preview** is an editable MDXEditor surface with formatting controls, task lists, tables, links, images, and fenced code. Both modes share one draft; saving remains explicit.
+- Preview keeps leading YAML metadata separate and read-only, preserving its bytes and line endings. Edit metadata in Markdown. Unsupported constructs, including raw HTML, show preserved source instead of silently dropping content.
+- Paste uploads use unique filenames, enforce existing file limits, and preserve unsaved edits. Upload failures retain staged files and offer **Retry uploads**; interrupted ticket creation can finish without creating a second ticket. New-ticket staged files exist only in the current tab until creation succeeds. External revision conflicts require reconciliation before uploading. **Load current version** fetches the latest revision even after partial ticket creation and keeps staged files for retry; copy or download unsaved Markdown before replacing the draft.
+- Every uploaded attachment needs at least one inline Markdown link or image with a nonblank purpose label or quoted link title, for example `[Expected export rows](attachments/rows.json)`. Incomplete drafts and uploads can be saved, but unreferenced files and missing purpose labels block approval and execution, including Automatic mode. Empty duplicate references are allowed when another reference to the same file supplies its purpose. Humans still review whether descriptions are meaningful and screenshots specify viewport and acceptable differences.
 - Type `/skill:` to search installed skill names and descriptions. Type `@` to search files in the selected repository. Use arrows to choose a result and **Enter** or **Tab** to insert it; **Ctrl-Space** requests completion again. Files with spaces insert as `@"path with spaces"`.
 - Toggle **VIM** in the editor toolbar for Vim keybindings. The preference persists in this browser. `i` enters Insert mode, **Esc** returns to Normal mode and dismisses completion, and `u` undoes edits. The toolbar displays the current mode.
 - Completion shows loading, no-match, and request-error states without changing the draft. It never saves, approves, or starts work. **Save revision** remains explicit.
@@ -128,3 +137,5 @@ bun run test
 ```
 
 For isolated verification, use a disposable repository and a separate `OMP_BACKLOG_DATA` directory. Do not run smoke tickets against existing projects. A real model run requires working OMP provider authentication; provider failures are execution failures, not completion evidence.
+
+The deterministic runtime integration suite uses a protocol-speaking child process, not a model or credentials. It covers real filesystem watch events, cross-repository fairness, the global execution slot, provider-error events after admission, pause/resume session identity, active revision edits, surviving-child recovery, and time/token limits. Keep this coverage distinct from a real OMP/browser smoke run; passing a fixture does not establish provider availability.

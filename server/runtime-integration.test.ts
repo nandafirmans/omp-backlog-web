@@ -1,0 +1,286 @@
+import { expect, test } from 'bun:test';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { watch } from 'node:fs';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { Repo, Run, Runtime, Settings, Store } from './contracts';
+import { createRuntime } from './runtime';
+import { closeStore, createStore, subscribe } from './store';
+import { writeTicket } from './tickets';
+
+// These are process/protocol acceptance tests. The child verifies a disposable
+// proof file; it does not exercise a real OMP installation, model, or credentials.
+interface Event { event: string; pid: number; sessionId: string; command?: string; op?: string; resumed?: boolean; revision?: string; sessionFile?: string }
+interface Harness { root: string; store: Store; executable: string; runtime: Runtime | null }
+
+// Real timers are intentional: detached children and fs.watch run outside the
+// test clock. Poll persisted state with a deadline instead of guessing completion.
+async function waitFor<T>(description: string, observe: () => T | undefined | false | Promise<T | undefined | false>, timeout = 10_000): Promise<T> {
+  const deadline = performance.now() + timeout;
+  while (performance.now() < deadline) {
+    const value = await observe();
+    if (value !== undefined && value !== false) return value;
+    await Bun.sleep(20);
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function events(repo: Repo): Promise<Event[]> {
+  try { return (await readFile(join(repo.path, 'fixture-events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as Event); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []; throw error; }
+}
+
+async function withHarness(run: (harness: Harness) => Promise<void>, settings: Partial<Settings> = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'omp-runtime-integration-'));
+  const executable = join(root, 'protocol-child');
+  await writeFile(executable, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./fixtures/runtime-child.ts', import.meta.url).href)};\n`, { mode: 0o700 });
+  const store = createStore(join(root, 'private'));
+  store.setSettings({ ...store.settings(), roots: [root], executable, ...settings });
+  const harness: Harness = { root, store, executable, runtime: null };
+  try { await run(harness); }
+  finally {
+    await harness.runtime?.close();
+    closeStore(store);
+    // Snapshot directories are deliberately immutable; unlock only this fixture.
+    async function unlock(path: string) {
+      await chmod(path, 0o700);
+      for (const entry of await readdir(path, { withFileTypes: true })) if (entry.isDirectory()) await unlock(join(path, entry.name));
+    }
+    await unlock(root);
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+async function repository(harness: Harness, id: string, lastStarted = 0, scenario = 'hold'): Promise<Repo> {
+  const path = join(harness.root, id);
+  await mkdir(path);
+  await writeFile(join(path, 'fixture.json'), JSON.stringify({ scenario, tokens: 7 }));
+  const repo: Repo = { id, name: id, path, git: false, mode: 'automatic', lastStarted };
+  harness.store.save('repos', repo);
+  return repo;
+}
+
+async function ticket(harness: Harness, repo: Repo, id = 'T001') {
+  const markdown = `---\nid: ${id}\ntitle: Disposable proof\ndepends_on: []\n---\n# Goal\nWrite a disposable proof file.\n# Acceptance criteria\n- proof.txt contains verified.\n# Verification\nRead proof.txt.\n`;
+  const value = await writeTicket(harness.store, repo, markdown);
+  harness.store.save('tickets', { ...value, status: 'ready', approvedRevision: value.revision });
+  return value;
+}
+
+async function start(harness: Harness) {
+  harness.runtime = await createRuntime(harness.store);
+  await harness.runtime.reconcile();
+}
+
+async function running(harness: Harness, repoId?: string): Promise<Run> {
+  return waitFor('a running child with its completion barrier', () => harness.store.list('runs').find(run => run.status === 'running' && run.dialog?.id === 'finish' && (!repoId || run.repoId === repoId)));
+}
+
+async function finish(harness: Harness, run: Run) {
+  await harness.runtime!.answer(run.id, { id: 'finish', value: 'finish' });
+  return waitFor('revision-bound evidence and observed child exit', () => {
+    const current = harness.store.get('runs', run.id);
+    return current?.status === 'needs_review' && current.pid === null ? current : undefined;
+  });
+}
+
+test('actual child transport enforces the global slot and rotates fairly between repositories', async () => {
+  await withHarness(async harness => {
+    const first = await repository(harness, 'a', 0);
+    const second = await repository(harness, 'b', 100);
+    await ticket(harness, first, 'T001');
+    await ticket(harness, first, 'T002');
+    await ticket(harness, second, 'T001');
+    await start(harness);
+    const one = await running(harness, first.id);
+    await Promise.all(Array.from({ length: 12 }, () => harness.runtime!.reconcile()));
+    expect(harness.store.list('runs')).toHaveLength(1);
+    expect((await events(second)).filter(event => event.event === 'spawn')).toHaveLength(0);
+    await finish(harness, one);
+    const two = await running(harness, second.id);
+    expect(harness.store.list('runs')).toHaveLength(2);
+    expect(two.started).toBeGreaterThanOrEqual(harness.store.get('runs', one.id)!.finished!);
+    await finish(harness, two);
+    const three = await running(harness, first.id);
+    expect(three.ticketId).toBe('T002');
+    expect(harness.store.list('runs').filter(run => run.pid !== null)).toHaveLength(1);
+    await finish(harness, three);
+    expect(harness.store.list('runs').every(run => run.status === 'needs_review' && run.pid === null)).toBe(true);
+    expect(harness.store.list('tickets').every(value => value.status === 'needs_review')).toBe(true);
+  });
+}, 20_000);
+
+test('duplicate real fs.watch events launch once without manual scheduler wakes', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'watched');
+    const value = await ticket(harness, repo);
+    await start(harness);
+    // Drain createRuntime's initial wake while scheduling remains globally paused.
+    await Bun.sleep(1_200);
+    expect(harness.store.list('runs')).toHaveLength(0);
+    const observed: string[] = [];
+    const observer = watch(join(repo.path, '.omp-backlog'), { recursive: true }, (_event, name) => observed.push(String(name)));
+    try {
+      harness.store.setSettings({ ...harness.store.settings(), paused: false });
+      const path = join(repo.path, '.omp-backlog', 'tickets', value.id, 'ticket.md');
+      for (let index = 0; index < 6; index++) { await writeFile(path, value.markdown); await Bun.sleep(30); }
+      await waitFor('multiple operating-system watch deliveries', () => observed.length >= 2);
+      const run = await running(harness);
+      expect(harness.store.list('runs')).toHaveLength(1);
+      expect((await events(repo)).filter(event => event.event === 'spawn')).toHaveLength(1);
+      await finish(harness, run);
+      // More physical writes must not replay completed work in automatic mode.
+      await writeFile(path, value.markdown);
+      await Bun.sleep(1_300);
+      expect(harness.store.list('runs')).toHaveLength(1);
+    } finally { observer.close(); }
+  }, { paused: true });
+}, 15_000);
+
+test('provider failure after successful prompt admission fails the run and never infers completion', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'provider-failure', 0, 'provider-failure');
+    await ticket(harness, repo);
+    await start(harness);
+    const run = await waitFor('provider failure and observed shutdown', () => harness.store.list('runs').find(value => value.status === 'failed' && value.pid === null));
+    const log = await events(repo);
+    expect(log.some(event => event.event === 'prompt-admitted')).toBe(true);
+    expect(log.some(event => event.event === 'executing')).toBe(true);
+    expect(log.some(event => event.event === 'result-accepted')).toBe(false);
+    expect(run.error).toContain('Deterministic provider failure after admission');
+    expect(run.evidence).toEqual([]);
+    expect(harness.store.get('tickets', `${repo.id}/T001`)?.status).toBe('failed');
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(1);
+  });
+}, 15_000);
+
+test('pause retains the claim and resume uses the same durable session and immutable run', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'paused');
+    await ticket(harness, repo);
+    await ticket(harness, repo, 'T002');
+    await start(harness);
+    const before = await running(harness);
+    const session = await readFile(before.sessionFile!, 'utf8');
+    await harness.runtime!.control(before.id, 'pause');
+    const paused = harness.store.get('runs', before.id)!;
+    expect(paused.status).toBe('paused');
+    expect(paused.pid).toBeNull();
+    expect(paused.finished).toBeNull();
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(1);
+    await harness.runtime!.control(before.id, 'resume');
+    const resumed = await running(harness);
+    expect(resumed.id).toBe(before.id);
+    expect(resumed.started).toBe(before.started);
+    expect(resumed.revision).toBe(before.revision);
+    expect(resumed.snapshot).toBe(before.snapshot);
+    expect(resumed.sessionId).toBe(before.sessionId);
+    expect(resumed.sessionFile).toBe(before.sessionFile);
+    expect(resumed.pid).not.toBe(before.pid);
+    expect(await readFile(resumed.sessionFile!, 'utf8')).toBe(session);
+    const log = await events(repo);
+    expect(log.filter(event => event.event === 'spawn').map(event => event.resumed)).toEqual([false, true]);
+    const resumedCommands = log.filter(event => event.pid === resumed.pid && event.event === 'command');
+    expect(resumedCommands.filter(event => event.command === 'goal').map(event => event.op)).toEqual(['pause', 'resume']);
+    expect(resumedCommands.findIndex(event => event.command === 'prompt')).toBeLessThan(resumedCommands.findIndex(event => event.command === 'goal' && event.op === 'resume'));
+    await finish(harness, resumed);
+  });
+}, 15_000);
+
+test('editing active requirements cannot apply old evidence to the new revision or silently replay it', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'edited');
+    const original = await ticket(harness, repo);
+    await start(harness);
+    const run = await running(harness);
+    const updated = await writeTicket(harness.store, repo, original.markdown.replace('Write a disposable proof file.', 'Write an updated disposable proof file.'), original.revision, original.id);
+    expect(updated.revision).not.toBe(run.revision);
+    expect(updated.status).toBe('running');
+    const completed = await finish(harness, run);
+    expect(completed.revision).toBe(original.revision);
+    expect(completed.evidence).toHaveLength(1);
+    expect(await readFile(join(completed.snapshot, 'ticket.md'), 'utf8')).toBe(original.markdown);
+    const current = harness.store.get('tickets', `${repo.id}/${original.id}`)!;
+    expect(current.revision).toBe(updated.revision);
+    expect(current.status).toBe('draft');
+    expect(current.approvedRevision).toBeNull();
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(1);
+  });
+}, 15_000);
+
+test('startup terminates an identity-matched surviving child before interrupting it, without replay', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'recovery');
+    const selected = await ticket(harness, repo);
+    const id = 'surviving-run';
+    const directory = join(harness.store.dataDir, 'runtime', id);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'ticket.json'), JSON.stringify(selected));
+    await writeFile(join(directory, 'config.yml'), '');
+    const child = spawn(harness.executable, ['--config', join(directory, 'config.yml'), '--session-dir', join(directory, 'sessions')], { cwd: repo.path, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const exited = once(child, 'close');
+    child.stdout.resume(); child.stderr.resume();
+    try {
+      await waitFor('surviving fixture startup', async () => (await events(repo)).find(event => event.event === 'spawn'));
+      const pid = child.pid!;
+      const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
+      const startTime = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+      await writeFile(join(directory, 'identity.json'), JSON.stringify({ pid, start: startTime, boot: (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim() }));
+      const run: Run = { id, repoId: repo.id, ticketId: selected.id, revision: selected.revision, status: 'running', started: Date.now(), finished: null, pid, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
+      harness.store.save('runs', run);
+      harness.store.save('tickets', { ...selected, status: 'running', runId: id });
+      await start(harness);
+      expect((await exited)[1]).toBe('SIGTERM');
+      await harness.runtime!.reconcile();
+      expect(harness.store.get('runs', id)?.status).toBe('interrupted');
+      expect(harness.store.get('runs', id)?.pid).toBeNull();
+      expect(harness.store.get('tickets', `${repo.id}/${selected.id}`)?.status).toBe('interrupted');
+      await harness.runtime!.reconcile();
+      expect(harness.store.list('runs')).toHaveLength(1);
+      const log = await events(repo);
+      expect(log.filter(event => event.event === 'spawn')).toHaveLength(1);
+      expect(log.filter(event => event.event === 'command')).toHaveLength(0);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      await exited;
+    }
+  });
+}, 15_000);
+
+for (const limit of ['time', 'tokens'] as const) {
+  test(`${limit} limit transitions through stopping to failed without releasing a live child or replaying`, async () => {
+    await withHarness(async harness => {
+      const repo = await repository(harness, limit, 0, limit === 'tokens' ? 'tokens' : 'hold');
+      await ticket(harness, repo);
+      await start(harness);
+      const run = await running(harness);
+      const transitions: Run[] = [];
+      const unsubscribe = subscribe(harness.store, () => {
+        const current = harness.store.get('runs', run.id);
+        if (current) transitions.push(current);
+      });
+      let failed: Run;
+      try {
+        failed = await waitFor(`${limit} budget failure`, () => {
+          const current = harness.store.get('runs', run.id);
+          return current?.status === 'failed' && current.pid === null ? current : undefined;
+        });
+      } finally { unsubscribe(); }
+      expect(transitions.some(value => value.status === 'stopping' && value.pid === run.pid)).toBe(true);
+      expect(transitions.at(-1)?.status).toBe('failed');
+      expect(failed.error).toContain(`Execution ${limit === 'tokens' ? 'token' : 'time'} budget exhausted`);
+      expect(failed.evidence).toEqual([]);
+      expect(harness.store.get('tickets', `${repo.id}/T001`)?.status).toBe('failed');
+      const log = await events(repo);
+      expect(log.some(event => event.event === 'exit')).toBe(true);
+      if (limit === 'tokens') expect(log.some(event => event.command === 'get_session_stats')).toBe(true);
+      await harness.runtime!.reconcile();
+      expect(harness.store.list('runs')).toHaveLength(1);
+    }, limit === 'time' ? { timeLimitMinutes: 0.05 } : { tokenBudget: 7 });
+  }, 15_000);
+}

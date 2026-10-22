@@ -1,0 +1,166 @@
+.rich-markdown-editor {
+  min-width: 0;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.rich-markdown-help {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rich-markdown-help button {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rich-markdown-help button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.rich-markdown-help button:disabled { opacity: .55; cursor: not-allowed; }
+.rich-markdown-help input[hidden] { display: none; }
+.rich-markdown-status, .rich-markdown-error { margin: 0; padding: 10px 12px; font-size: 13px; }
+.rich-markdown-status { color: var(--muted); }
+.rich-markdown-error, .rich-markdown-recovery > p { color: var(--danger, var(--text)); }
+.rich-markdown-metadata { padding: 10px 12px; border-bottom: 1px solid var(--line); color: var(--muted); }
+.rich-markdown-metadata summary { width: fit-content; cursor: pointer; font-size: 12px; }
+.rich-markdown-metadata pre { margin: 10px 0 0; padding: 10px; font-size: 12px; line-height: 1.6; }
+.rich-markdown-recovery { padding: 12px; }
+.rich-markdown-recovery > p { margin: 0 0 12px; font-size: 13px; }
+.rich-markdown-recovery textarea, .rich-markdown-references {
+  width: 100%;
+  min-height: 240px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  color: var(--text);
+  background: var(--surface);
+  font: 13px/1.65 var(--font-mono);
+  resize: vertical;
+}
+.rich-markdown-references { min-height: 90px; }
+.rich-markdown-editor [hidden] { display: none; }
+
+/* MDXEditor applies this same class to its portal root. Both editor and dialogs
+   use app semantic colors rather than a separate light/dark section theme. */
+.rich-markdown-theme {
+  --basePageBg: var(--surface);
+  --baseBase: var(--surface);
+  --baseBgSubtle: var(--surface);
+  --baseBg: var(--surface-raised, var(--surface));
+  --baseBgHover: var(--surface-raised, var(--surface));
+  --baseBgActive: var(--accent-soft, var(--surface));
+  --baseLine: var(--line);
+  --baseBorder: var(--line);
+  --baseBorderHover: var(--muted);
+  --baseSolid: var(--muted);
+  --baseSolidHover: var(--muted);
+  --baseText: var(--text);
+  --baseTextContrast: var(--text);
+  --accentBase: var(--surface);
+  --accentBgSubtle: var(--accent-soft, var(--surface));
+  --accentBg: var(--accent-soft, var(--surface));
+  --accentBgHover: var(--accent-soft, var(--surface));
+  --accentBgActive: var(--accent-soft, var(--surface));
+  --accentLine: var(--line);
+  --accentBorder: var(--accent);
+  --accentBorderHover: var(--accent);
+  --accentSolid: var(--accent);
+  --accentSolidHover: var(--accent);
+  --accentText: var(--accent);
+  --accentTextContrast: var(--text);
+  --font-body: var(--font-sans);
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --text-base: 14px;
+  --text-sm: 13px;
+  --text-xs: 12px;
+  --radius-small: 0px;
+  --radius-base: 0px;
+  --radius-medium: 0px;
+  --radius-large: 0px;
+  --radius-extra-large: 0px;
+  --radius-full: 0px;
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+
+.rich-markdown-theme .rich-markdown-toolbar {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  width: 100%;
+  min-height: 40px;
+  padding: 5px 8px;
+  gap: 3px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  scrollbar-width: thin;
+}
+.rich-markdown-theme .rich-markdown-toolbar button { flex-shrink: 0; min-width: 28px; min-height: 28px; border-radius: 0; }
+.rich-markdown-theme .rich-markdown-toolbar button[data-state='on'] { color: var(--accent); background: var(--accent-soft, var(--surface)); }
+.rich-markdown-theme :is(button, input, select, textarea, [role='dialog'], [role='listbox'], [role='menu']) { border-radius: 0; }
+.rich-markdown-theme :is(button, [role='option']):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rich-markdown-theme :is(input, textarea) { color: var(--text); caret-color: var(--accent); }
+.rich-markdown-theme :is(input, textarea)::placeholder { color: var(--muted); }
+.rich-markdown-theme [role='dialog'] { max-width: min(640px, calc(100vw - 32px)); }
+.rich-markdown-theme [role='dialog'] h2 { font-size: 16px; }
+
+.rich-markdown-theme .rich-markdown-body {
+  min-height: 350px;
+  padding: 18px 20px 28px;
+  color: var(--text);
+  background: var(--surface);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  caret-color: var(--accent);
+}
+.rich-markdown-theme .rich-markdown-body:focus { outline: none; }
+.rich-markdown-theme .mdxeditor-root-contenteditable:focus-within { box-shadow: inset 2px 0 var(--accent); }
+.rich-markdown-theme .rich-markdown-body :is(p, ul, ol, blockquote) { margin-block: 0 12px; font-size: 14px; line-height: 1.7; }
+.rich-markdown-theme .rich-markdown-body :is(ul, ol) { padding-inline-start: 26px; }
+.rich-markdown-theme .rich-markdown-body li { margin-block: 3px; }
+.rich-markdown-theme .rich-markdown-body li > p { margin-bottom: 4px; }
+.rich-markdown-theme .rich-markdown-body :is(h1, h2, h3, h4, h5, h6) { margin: 20px 0 10px; letter-spacing: -.25px; line-height: 1.4; }
+.rich-markdown-theme .rich-markdown-body h1 { font-size: 24px; }
+.rich-markdown-theme .rich-markdown-body h2 { font-size: 20px; }
+.rich-markdown-theme .rich-markdown-body h3 { font-size: 17px; }
+.rich-markdown-theme .rich-markdown-body :is(h4, h5, h6) { font-size: 14px; }
+.rich-markdown-theme .rich-markdown-body > :first-child { margin-top: 0; }
+.rich-markdown-theme .rich-markdown-body blockquote { padding-inline-start: 14px; border-inline-start: 2px solid var(--accent); color: var(--muted); }
+.rich-markdown-theme .rich-markdown-body a { color: var(--accent); text-decoration: underline; }
+.rich-markdown-theme .rich-markdown-body code { font-family: var(--font-mono); font-size: 13px; }
+.rich-markdown-theme .rich-markdown-body img { max-width: 100%; height: auto; border: 1px solid var(--line); }
+.rich-markdown-theme .rich-markdown-body hr { margin-block: 20px; border: 0; border-top: 1px solid var(--line); }
+.rich-markdown-theme .rich-markdown-body table { border-collapse: collapse; font-size: 14px; }
+.rich-markdown-theme .rich-markdown-body :is(td, th) { border-color: var(--line); }
+.rich-markdown-theme .cm-editor { border-radius: 0; color: var(--text); background: var(--surface-inset, var(--surface)); }
+.rich-markdown-theme .cm-editor .cm-scroller { font: 13px/1.65 var(--font-mono); }
+.rich-markdown-theme .cm-editor .cm-content { caret-color: var(--accent); }
+.rich-markdown-theme .cm-editor .cm-gutters { color: var(--muted); background: var(--surface); border-color: var(--line); }
+.rich-markdown-theme .cm-editor .cm-cursor { border-left-color: var(--accent); }
+.rich-markdown-theme .cm-editor .cm-activeLine, .rich-markdown-theme .cm-editor .cm-activeLineGutter { background: var(--accent-soft, var(--surface)); }
+.rich-markdown-theme .cm-editor .cm-selectionBackground { background: var(--accent-soft, var(--surface)); }
+
+@media (max-width: 600px) {
+  .rich-markdown-theme .rich-markdown-body { padding: 14px 12px 24px; }
+  .rich-markdown-help { align-items: flex-start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rich-markdown-editor *, .rich-markdown-theme, .rich-markdown-theme * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

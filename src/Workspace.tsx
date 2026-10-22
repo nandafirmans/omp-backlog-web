@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Button, Input, InputNumber, Modal, Segmented, Select, Tag } from 'antd';
+import { FolderIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
-import MarkdownPreview from './MarkdownPreview';
+import { attachmentReference } from './attachments';
+import type { AttachmentReference, StagedAttachment } from './attachments';
 import MarkdownEditor from './MarkdownEditor';
+
+const RichMarkdownEditor = lazy(() => import('./RichMarkdownEditor'));
 
 export type RequestApi = <T>(path: string, init?: RequestInit) => Promise<T>;
 type Execute = (name: string, work: () => Promise<void>) => Promise<boolean>;
@@ -14,6 +18,7 @@ const json = (method: string, body: unknown): RequestInit => ({ method, body: JS
 const message = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const activeStatuses = ['running', 'stopping', 'paused'];
 const modes: Record<Mode, string> = { paused: 'Paused', approved: 'Approved tickets only', automatic: 'Automatic' };
+const queueStatuses: Ticket['status'][] = ['ready', 'running', 'stopping', 'paused', 'blocked', 'needs_review', 'failed', 'interrupted', 'draft', 'done'];
 
 function Status({ value }: { value: string }) { return <Tag className={`badge status-${value}`}>{value.replaceAll('_', ' ')}</Tag>; }
 
@@ -34,6 +39,14 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const selectedRun = snapshot.runs.find(value => value.id === runId);
   const activeRun = snapshot.runs.find(value => activeStatuses.includes(value.status));
   const busy = !!pending;
+  const queueSummaries = new Map<string, { total: number; counts: Partial<Record<Ticket['status'], number>> }>();
+  for (const item of snapshot.tickets) {
+    if (item.removed) continue;
+    let summary = queueSummaries.get(item.repoId);
+    if (!summary) { summary = { total: 0, counts: {} }; queueSummaries.set(item.repoId, summary); }
+    summary.total++;
+    summary.counts[item.status] = (summary.counts[item.status] ?? 0) + 1;
+  }
 
   const execute: Execute = async (name, work) => {
     setPending(name); setNotice(''); onError('');
@@ -42,7 +55,6 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
     finally { setPending(''); }
   };
 
-  function selectRepo(id: string) { void navigate(`/projects/${encode(id)}`); }
   function setRunId(id: string) { void navigate(`/runs/${encode(id)}`); }
 
   async function changeMode(mode: Mode) {
@@ -51,22 +63,33 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
     await execute('Repository permission saved.', async () => { await api(`/api/repos/${encode(repo.id)}`, json('PATCH', { mode })); });
   }
 
+  const scheduler = <div className={`execution-strip${snapshot.settings.paused ? ' scheduler-paused' : ''}`} aria-label="Scheduler">
+    <div><strong>Scheduler: {snapshot.settings.paused ? 'all new starts paused' : 'following repository permissions'}</strong><small>One active ticket globally. Pausing new starts lets the current run continue.</small></div>
+    <Button disabled={busy} onClick={() => void execute(snapshot.settings.paused ? 'New starts enabled.' : 'All new starts paused. Current run continues.', async () => { await api('/api/settings', json('PATCH', { paused: !snapshot.settings.paused })); })}>{snapshot.settings.paused ? 'Allow new starts' : 'Pause all new starts'}</Button>
+  </div>;
+
   return <>
     {modalContext}
-    <div className="execution-strip">
-      <div><span className="small-label">Scheduler</span><strong>{snapshot.settings.paused ? 'All new starts paused' : 'Following repository permissions'}</strong><small>One active ticket globally. Pausing new starts lets the current run continue.</small></div>
-      <Button disabled={busy} onClick={() => void execute(snapshot.settings.paused ? 'New starts enabled.' : 'All new starts paused. Current run continues.', async () => { await api('/api/settings', json('PATCH', { paused: !snapshot.settings.paused })); })}>{snapshot.settings.paused ? 'Allow new starts' : 'Pause all new starts'}</Button>
-    </div>
     {activeRun && <section className="active-run" aria-label="Current run"><div><Status value={activeRun.status} /><strong>{snapshot.repos.find(value => value.id === activeRun.repoId)?.name} / {activeRun.ticketId}</strong>{activeRun.dialog && <Tag className="attention">Answer needed</Tag>}</div><div className="toolbar"><Button onClick={() => setRunId(activeRun.id)}>Open current run</Button>{activeRun.status === 'running' && <Button disabled={busy} onClick={() => void execute('Pause requested. Wait for the run to stop.', async () => { await api(`/api/runs/${encode(activeRun.id)}/control`, json('POST', { action: 'pause' })); })}>Pause current run</Button>}{activeRun.status === 'paused' && <Button disabled={busy} onClick={() => void execute('Run resume requested.', async () => { await api(`/api/runs/${encode(activeRun.id)}/control`, json('POST', { action: 'resume' })); })}>Resume current run</Button>}</div></section>}
     {activeRun?.dialog && runId !== activeRun.id && <DialogForm key={activeRun.dialog.id} dialog={activeRun.dialog} runId={activeRun.id} repoId={activeRun.repoId} api={api} execute={execute} busy={busy} />}
     <p className="operation-status" role="status" aria-live="polite">{pending ? 'Working...' : notice}</p>
     {home || picking ? <section className="home-view" aria-labelledby="home-heading">
       <div className="section-heading"><div><h1 id="home-heading">Home</h1><p className="muted">Choose a project to manage tickets and review runs.</p></div><Link className="home-action" to="/projects/new">Add project +</Link></div>
-      <div className="panel project-selector"><label>Project<Select aria-label="Project" placeholder="Select a project" value={undefined} onChange={selectRepo} options={snapshot.repos.map(value => ({ value: value.id, label: `${value.name} / ${modes[value.mode]}` }))} notFoundContent="No projects registered" /></label>
-        {!snapshot.repos.length && <p className="muted">No projects yet. Add a local folder to get started. New projects start paused.</p>}
-      </div>
-      <nav className="home-navigation" aria-label="Home navigation"><Link to="/settings">Settings</Link><Link to="/plan">Implementation plan</Link></nav>
-      <p className="muted">Permission before execution. Local folders are not sandboxes. Closing this tab or logging out does not stop work.</p>
+      {home && scheduler}
+      {snapshot.repos.length ? <ul className="project-grid" aria-label="Projects">
+        {snapshot.repos.map(project => {
+          const summary = queueSummaries.get(project.id);
+          return <li key={project.id}>
+          <Link className="project-folder" to={`/projects/${encode(project.id)}`}>
+            <FolderIcon className="project-folder-icon" size={30} weight="duotone" aria-hidden="true" />
+            <strong>{project.name}</strong>
+            <span className="path" title={project.path}>{project.path}</span>
+            <span className="project-folder-meta"><span>{modes[project.mode]}</span><span>Tickets: {summary?.total ?? 0}</span></span>
+            <span className="project-queue" aria-label="Ticket status counts">{summary ? queueStatuses.map(status => summary.counts[status] ? <span key={status}><Status value={status} /> <span>{summary.counts[status]}</span></span> : null) : <span>No tickets</span>}</span>
+          </Link>
+          </li>;
+        })}
+      </ul> : <div className="panel empty-state"><FolderIcon className="project-folder-icon" size={40} weight="duotone" aria-hidden="true" /><h2>No projects yet</h2><p>Add a local folder to get started. New projects start paused.</p></div>}
     </section> : settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : repo ? <>
       <div className="section-heading workspace-heading"><h1>{repo.name}</h1><Link to="/">Choose project</Link></div>
         {repo && <section className="panel repo-summary" aria-label="Repository execution permission"><div><h2>{repo.name}</h2><code className="path">{repo.path}</code>{!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}</div><label>Execution permission<Select aria-label="Execution permission" disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={Object.entries(modes).map(([value, label]) => ({ value: value as Mode, label }))} /><small>{repo.mode === 'paused' ? 'No new starts. A current run continues.' : repo.mode === 'approved' ? 'Only explicitly approved revisions may start.' : 'Standing permission: eligible revisions may run automatically.'}</small></label></section>}
@@ -76,7 +99,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
         </div>
     </> : !selectedRun && <section className="panel empty-state"><h1>Page not found</h1><p>This project, run, or page is unavailable.</p><Link to="/">Return Home</Link></section>}
     {selectedRun && <RunPanel run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => { void navigate(`/projects/${encode(selectedRun.repoId)}/tickets/${encode(selectedRun.ticketId)}`); }} />}
-    {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => { void navigate('/'); }} onRegistered={selectRepo} />}
+    {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => { void navigate('/'); }} onRegistered={id => { void navigate(`/projects/${encode(id)}`); }} />}
   </>;
 }
 
@@ -84,60 +107,194 @@ interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; api: Re
 const template = '---\nid: T001\ntitle: \ndepends_on: []\n---\n\n[What to change and where.]\n\n[Constraints or reference, if needed.]\n\nDone when:\n- [Observable result.]\n- [How to verify it.]\n';
 function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, onCreated, onRun }: EditorProps) {
   const [draft, setDraft] = useState(ticket?.markdown ?? template);
+  const latestDraft = useRef(draft);
+  useEffect(() => { latestDraft.current = draft; }, [draft]);
   const [base, setBase] = useState({ markdown: ticket?.markdown ?? template, revision: ticket?.revision ?? '' });
   const [preview, setPreview] = useState(false);
   const [conflict, setConflict] = useState('');
   const [attachment, setAttachment] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [stagedCount, setStagedCount] = useState(0);
+  const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({});
+  const staged = useRef<StagedAttachment[]>([]);
+  const serverTicket = useRef(ticket);
+  const [knownRevisions, setKnownRevisions] = useState(() => new Set(ticket ? [ticket.revision] : []));
+  const [hasServerTicket, setHasServerTicket] = useState(Boolean(ticket));
+  const uploadTask = useRef<Promise<void> | null>(null);
+  const createAttempt = useRef<{ markdown: string; previousIds: Set<string> } | null>(null);
+  const alive = useRef(true);
   const [modal, modalContext] = Modal.useModal();
-  const stale = !!ticket && ticket.revision !== base.revision;
+  const stale = !!ticket && !uploading && !knownRevisions.has(ticket.revision);
   const dirty = draft !== base.markdown;
+  const actionsBusy = busy || uploading || stagedCount > 0;
   const savedNavigation = useRef(false);
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && !savedNavigation.current && currentLocation.pathname !== nextLocation.pathname);
+  const unsaved = dirty || stagedCount > 0 || (!ticket && hasServerTicket);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => unsaved && !savedNavigation.current && currentLocation.pathname !== nextLocation.pathname);
   const working = !!ticket && activeStatuses.includes(ticket.status);
   const path = ticket ? `/api/repos/${encode(ticket.repoId)}/tickets/${encode(ticket.id)}` : '';
-  const source = draft.replace(/(\]\()(?:\.\/)?attachments\//g, `$1${path}/attachments/`);
+  const attachmentBase = path ? `${path}/attachments/` : '';
 
   useEffect(() => {
-    if (!dirty) return;
+    alive.current = true;
+    const files = staged.current;
+    return () => {
+      alive.current = false;
+      for (const file of files) if (file.objectUrl) URL.revokeObjectURL(file.objectUrl);
+    };
+  }, []);
+
+  function acceptRevision(saved: Ticket) {
+    serverTicket.current = saved;
+    if (alive.current) {
+      setKnownRevisions(previous => previous.has(saved.revision) ? previous : new Set(previous).add(saved.revision));
+      setHasServerTicket(true);
+      setBase({ markdown: saved.markdown, revision: saved.revision });
+    }
+  }
+
+  async function recoverUpload(file: StagedAttachment, before: Ticket): Promise<Ticket | undefined> {
+    const state = await api<Snapshot>('/api/state');
+    const current = state.tickets.find(value => value.repoId === repo.id && value.id === before.id);
+    const alreadyKnown = before.attachments.some(value => value.name === file.name);
+    if (!current || current.markdown !== before.markdown || current.attachments.length !== before.attachments.length + (alreadyKnown ? 0 : 1)) return;
+    if (!before.attachments.every(old => current.attachments.some(value => value.name === old.name && value.hash === old.hash))) return;
+    const uploaded = current.attachments.find(value => value.name === file.name);
+    if (!uploaded || uploaded.size !== file.file.size) return;
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await file.file.arrayBuffer())), byte => byte.toString(16).padStart(2, '0')).join('');
+    return uploaded.hash === hash ? current : undefined;
+  }
+
+  function flushUploads(): Promise<void> {
+    if (uploadTask.current) return uploadTask.current;
+    if (!serverTicket.current || !staged.current.some(file => !file.uploaded)) return Promise.resolve();
+    setUploading(true); setUploadError('');
+    const task = (async () => {
+      for (const file of staged.current) {
+        if (file.uploaded || !alive.current) continue;
+        const before = serverTicket.current!;
+        if (before.attachments.some(value => value.name === file.name)) {
+          const recovered = await recoverUpload(file, before);
+          if (!recovered) throw new Error(`Attachment ${file.name} does not match the pasted file. Preserve your draft and reconcile the attachment.`);
+          file.uploaded = true; acceptRevision(recovered);
+          if (alive.current) setStagedCount(staged.current.filter(value => !value.uploaded).length);
+          continue;
+        }
+        const data = new FormData();
+        data.set('file', file.file, file.name);
+        data.set('revision', before.revision);
+        let saved: Ticket;
+        try {
+          saved = await api<Ticket>(`/api/repos/${encode(repo.id)}/tickets/${encode(before.id)}/attachments`, { method: 'POST', body: data });
+        } catch (cause) {
+          // A disconnected response may still have committed. Confirm its exact bytes before retrying.
+          const recovered = await recoverUpload(file, before).catch(() => undefined);
+          if (!recovered) throw cause;
+          saved = recovered;
+        }
+        if (saved.markdown !== before.markdown || saved.attachments.length !== before.attachments.length + 1 || !before.attachments.every(old => saved.attachments.some(value => value.name === old.name && value.hash === old.hash)) || !saved.attachments.some(value => value.name === file.name)) throw new Error('Requirements changed during upload. Your draft and staged files are preserved; reconcile before retrying.');
+        file.uploaded = true;
+        acceptRevision(saved);
+        if (alive.current) setStagedCount(staged.current.filter(value => !value.uploaded).length);
+      }
+    })().catch(cause => {
+      if (alive.current) setUploadError(`${message(cause)} Your Markdown and pasted files are preserved. Reconcile any external changes, then retry uploads.`);
+      throw cause;
+    }).finally(() => {
+      uploadTask.current = null;
+      if (alive.current) setUploading(false);
+    });
+    uploadTask.current = task;
+    return task;
+  }
+
+  async function uploadFiles(files: File[]): Promise<AttachmentReference[]> {
+    if (busy || ticket?.removed) throw new Error('Attachments are unavailable while the ticket is busy or missing.');
+    if (stale) throw new Error('A newer revision is available. Your draft is preserved; reconcile it before pasting attachments.');
+    // Validate the entire paste before staging anything; rejected files never become Markdown references.
+    const references = files.map(file => ({ ...attachmentReference(file), file, uploaded: false } as StagedAttachment));
+    const total = (serverTicket.current?.attachments.reduce((sum, file) => sum + file.size, 0) ?? 0)
+      + staged.current.filter(file => !file.uploaded).reduce((sum, file) => sum + file.file.size, 0)
+      + files.reduce((sum, file) => sum + file.size, 0);
+    if (total > 50 * 1024 * 1024) throw new Error('Ticket attachments exceed the 50 MiB limit.');
+    const count = (serverTicket.current?.attachments.length ?? 0) + staged.current.filter(file => !file.uploaded).length + references.length;
+    if (count > 100) throw new Error('At most 100 attachments are permitted per ticket.');
+    for (const reference of references) {
+      if (/\.(png|jpe?g|gif|webp)$/i.test(reference.name)) reference.objectUrl = URL.createObjectURL(reference.file);
+      staged.current.push(reference);
+    }
+    setAttachmentUrls(Object.fromEntries(staged.current.filter(file => file.objectUrl).map(file => [file.url, file.objectUrl!])));
+    setStagedCount(staged.current.filter(file => !file.uploaded).length);
+    setUploadError('');
+    if (ticket) void flushUploads().catch(() => undefined);
+    return references;
+  }
+
+  useEffect(() => {
+    if (!unsaved) return;
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); };
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
-  }, [dirty]);
+  }, [unsaved]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!draft) return;
+    if (!draft || busy || uploading) return;
+    const submitted = draft;
     await execute(ticket ? 'Ticket saved. Revision permissions refreshed.' : 'Ticket created. Repository permission still applies.', async () => {
       try {
-        const saved = await api<Ticket>(ticket ? path : `/api/repos/${encode(repo.id)}/tickets`, json(ticket ? 'PUT' : 'POST', ticket ? { markdown: draft, revision: base.revision } : { markdown: draft }));
-        setBase({ markdown: saved.markdown, revision: saved.revision }); setDraft(saved.markdown); setConflict('');
-        if (!ticket) { savedNavigation.current = true; onCreated(saved.id); }
+        if (!ticket && !serverTicket.current) {
+          if (!createAttempt.current) {
+            const state = await api<Snapshot>('/api/state');
+            createAttempt.current = { markdown: submitted, previousIds: new Set(state.tickets.filter(value => value.repoId === repo.id).map(value => value.id)) };
+          } else {
+            const state = await api<Snapshot>('/api/state');
+            const attempt = createAttempt.current;
+            const created = state.tickets.find(value => value.repoId === repo.id && !attempt.previousIds.has(value.id) && value.markdown === attempt.markdown);
+            if (created) acceptRevision(created);
+          }
+          if (!serverTicket.current) {
+            const saved = await api<Ticket>(`/api/repos/${encode(repo.id)}/tickets`, json('POST', { markdown: createAttempt.current.markdown }));
+            acceptRevision(saved);
+          }
+        }
+        await flushUploads();
+        const current = serverTicket.current!;
+        const saved = ticket || current.markdown !== submitted
+          ? await api<Ticket>(`/api/repos/${encode(repo.id)}/tickets/${encode(current.id)}`, json('PUT', { markdown: submitted, revision: current.revision }))
+          : current;
+        acceptRevision(saved);
+        setDraft(value => value === submitted ? saved.markdown : value); setConflict('');
+        if (!ticket && latestDraft.current === submitted) { savedNavigation.current = true; onCreated(saved.id); }
       } catch (cause) {
+        if (!serverTicket.current && typeof cause === 'object' && cause !== null && 'status' in cause && typeof cause.status === 'number' && cause.status >= 400 && cause.status < 500) createAttempt.current = null;
         if (typeof cause === 'object' && cause !== null && 'status' in cause && cause.status === 409) setConflict('This save conflicted with a newer revision. Your draft is preserved below. Copy it before loading the current file, then reconcile the changes.');
         throw cause;
       }
     });
   }
 
+  async function loadCurrentVersion() {
+    const identity = ticket ?? serverTicket.current;
+    if (!identity) return;
+    if (dirty && !await modal.confirm({ title: 'Replace unsaved draft?', content: 'Replace your unsaved editor contents with the current file? Copy or download your draft first.', okText: 'Load current version', cancelText: 'Keep draft', okButtonProps: { danger: true } })) return;
+    await execute('Current revision loaded. Staged attachments preserved.', async () => {
+      const state = await api<Snapshot>('/api/state');
+      const current = state.tickets.find(value => value.repoId === repo.id && value.id === identity.id);
+      if (!current || current.removed) throw new Error('Ticket file is missing. Restore it before reconciling this draft.');
+      setDraft(current.markdown);
+      acceptRevision(current);
+      setConflict('');
+    });
+  }
+
   async function action(value: 'approve' | 'retry' | 'done' | 'changes' | 'reorder', order?: number) {
-    if (!ticket) return;
+    if (!ticket || uploading || stagedCount > 0) return;
     if (value === 'retry' && ticket.status === 'interrupted' && !await modal.confirm({ title: 'Retry interrupted run?', content: 'Have you reviewed this interrupted run and its partial filesystem changes? Retrying starts a fresh session and may repeat actions.', okText: 'Retry reviewed run', cancelText: 'Cancel' })) return;
     if (value === 'done' && !await modal.confirm({ title: 'Mark this revision Done?', content: 'Confirm every acceptance criterion has revision-bound evidence and any visual or subjective requirements have been reviewed.', okText: 'Mark revision Done', cancelText: 'Keep in review' })) return;
     await execute(value === 'done' ? 'Reviewed revision marked Done.' : `Ticket ${value} recorded.`, async () => { await api(`/api/tickets/${encode(ticket.repoId)}/${encode(ticket.id)}/action`, json('POST', { action: value, revision: ticket.revision, ...(order !== undefined ? { order } : {}) })); });
   }
 
-  async function upload(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!ticket) return;
-    const form = event.currentTarget;
-    const data = new FormData(form);
-    data.set('revision', ticket.revision);
-    await execute('Attachment uploaded. Reference its purpose in the ticket before approving this revision.', async () => {
-      const saved = await api<Ticket>(`${path}/attachments`, { method: 'POST', body: data });
-      if (!dirty && !stale) { setBase({ markdown: saved.markdown, revision: saved.revision }); setDraft(saved.markdown); }
-      form.reset();
-    });
-  }
 
   return <div className="panel editor-panel">
     {modalContext}
@@ -146,17 +303,22 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}
     {stale && <div className="notice"><div><h3>Requirements changed{working ? ' during execution' : ' outside this editor'}.</h3><p>Your editor has not been overwritten. The current run keeps its immutable revision; changed requirements require new approval.</p></div></div>}
-    {(stale || conflict) && <div className="conflict-box" role="alert"><p>{conflict || 'A newer ticket or attachment revision is available. Preserve your draft and reconcile before saving.'}</p><div className="toolbar"><Button onClick={() => { void navigator.clipboard.writeText(draft).catch(() => setConflict('Clipboard unavailable. Select and copy the Markdown from the editor before loading the current version.')); }}>Copy my draft</Button><Button download={`${ticket?.id ?? 'ticket'}-draft.md`} href={`data:text/markdown;charset=utf-8,${encode(draft)}`}>Download draft</Button><Button onClick={async () => { if (!ticket || (dirty && !await modal.confirm({ title: 'Replace unsaved draft?', content: 'Replace your unsaved editor contents with the current file? Copy or download your draft first.', okText: 'Load current version', cancelText: 'Keep draft', okButtonProps: { danger: true } }))) return; setDraft(ticket.markdown); setBase({ markdown: ticket.markdown, revision: ticket.revision }); setConflict(''); }}>Load current version</Button></div></div>}
+    {(stale || conflict) && <div className="conflict-box" role="alert"><p>{conflict || 'A newer ticket or attachment revision is available. Preserve your draft and reconcile before saving.'}</p><div className="toolbar"><Button onClick={() => { void navigator.clipboard.writeText(draft).catch(() => setConflict('Clipboard unavailable. Select and copy the Markdown from the editor before loading the current version.')); }}>Copy my draft</Button><Button download={`${ticket?.id ?? 'ticket'}-draft.md`} href={`data:text/markdown;charset=utf-8,${encode(draft)}`}>Download draft</Button><Button disabled={busy || uploading} onClick={() => void loadCurrentVersion()}>Load current version</Button></div></div>}
     {ticket && <div className="ticket-facts"><p><span>Dependencies</span>{ticket.dependencies.length ? ticket.dependencies.join(', ') : 'None'}</p><p><span>Approval</span>{ticket.approvedRevision === ticket.revision ? 'Current revision approved' : 'Current revision not approved'}</p><p><span>Acceptance criteria</span>{ticket.criteria.length}</p></div>}
     <form onSubmit={event => void save(event)}>
       {!ticket && <label className="import-draft">Import Markdown into this draft<input type="file" disabled={busy} accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={event => { const file = event.target.files?.[0]; if (!file) return; void file.text().then(text => { setDraft(text); setConflict(''); }).catch(cause => setConflict(message(cause))); event.target.value = ''; }} /><small>Explicit import only. Existing BACKLOG.md is never rewritten. Use a unique frontmatter id/title, describe what to change, and add Done when: bullets with observable results and how to verify them.</small></label>}
       <div className="editor-tabs"><Segmented aria-label="Ticket view" options={['Markdown', 'Preview']} value={preview ? 'Preview' : 'Markdown'} onChange={value => setPreview(value === 'Preview')} /><span className="muted">{dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></div>
-      {preview ? <div className="ticket-preview"><MarkdownPreview source={source} /></div> : <MarkdownEditor label="Ticket Markdown" value={draft} onChange={setDraft} repoId={repo.id} api={api} disabled={busy} />}
-      <div className="toolbar editor-actions"><Button type="primary" htmlType="submit" className="primary" disabled={busy || !!ticket?.removed || !draft}>{ticket ? 'Save revision' : 'Create ticket'}</Button><small>Explicit save only. Edits never silently replace an active run's instructions.</small></div>
+      {preview ? <div className="ticket-preview"><Suspense fallback={<p role="status" aria-live="polite">Loading editable Preview… Your Markdown is preserved.</p>}><RichMarkdownEditor value={draft} onChange={setDraft} disabled={busy} onUpload={uploadFiles} attachmentBase={attachmentBase} attachmentUrls={attachmentUrls} /></Suspense></div> : <MarkdownEditor label="Ticket Markdown" value={draft} onChange={setDraft} repoId={repo.id} api={api} disabled={busy} onUpload={uploadFiles} />}
+      <div className="attachment-paste-status" aria-live="polite">
+        <p className="muted" role="status">{uploading ? `Uploading pasted attachments… ${stagedCount} remaining. Keep editing; your Markdown is not saved automatically.` : stagedCount ? `${stagedCount} pasted attachment${stagedCount === 1 ? '' : 's'} ${hasServerTicket ? 'waiting to upload' : 'staged in this tab until Create ticket'}.` : 'Paste images or supported files directly into Markdown or Preview to attach them.'}</p>
+        {uploadError && <div className="error-banner" role="alert"><p>{uploadError}</p>{hasServerTicket && <Button disabled={busy || uploading || stale} onClick={() => void flushUploads().catch(() => undefined)}>Retry uploads</Button>}</div>}
+      </div>
+      <p className="muted">Every uploaded file needs a Markdown link or image with a descriptive purpose label or title before execution. Explain what screenshots demonstrate, including viewport and acceptable differences. Purpose quality remains part of human review.</p>
+      <div className="toolbar editor-actions"><Button type="primary" htmlType="submit" className="primary" disabled={busy || uploading || !!ticket?.removed || !draft}>{ticket ? 'Save revision' : hasServerTicket ? 'Finish creating ticket' : 'Create ticket'}</Button><small>Explicit save only. Edits never silently replace an active run's instructions.</small></div>
     </form>
     {ticket && <>
-      <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar"><Button disabled={busy || ticket.removed || !!ticket.error || dirty || stale || working || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>{['blocked', 'failed', 'interrupted'].includes(ticket.status) && <Button disabled={busy || dirty || stale || ticket.removed || !!ticket.error} onClick={() => void action('retry')}>Review & retry</Button>}{ticket.status === 'needs_review' && <><Button type="primary" className="primary" disabled={busy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={busy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}{tickets.length > 1 && <><Button disabled={busy || tickets[0]?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i - 1]?.order ?? ticket.order) - 0.5); }}>Move up</Button><Button disabled={busy || tickets.at(-1)?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i + 1]?.order ?? ticket.order) + 0.5); }}>Move down</Button></>}</div><p className="muted">Approval is revision-bound, not a command to bypass dependencies or pauses. Dependencies wait for Done, not Needs review.</p>{ticket.status === 'interrupted' && <p className="warning-text">Recovery required: inspect the previous transcript and partial changes before explicitly retrying. No mutating action is replayed automatically.</p>}{working && <p className="warning-text">To stop active work, open its run and pause it. Repository pause only prevents future starts.</p>}</section>
-      <section className="detail-section" aria-labelledby="attachment-heading"><h3 id="attachment-heading">Attachments</h3><p className="muted">References are not executable instructions. Describe each file's purpose in the Markdown. Use synthetic examples, never credentials.</p>{ticket.attachments.length ? <ul className="attachment-list">{ticket.attachments.map(file => <li key={file.name}><Button type="link" href={`${path}/attachments/${encode(file.name)}`} target="_blank" rel="noreferrer">{file.name}</Button><small>{(file.size / 1024).toFixed(1)} KB</small><Button onClick={() => setAttachment(attachment === file.name ? '' : file.name)}>{attachment === file.name ? 'Close preview' : 'Preview'}</Button></li>)}</ul> : <p className="muted">No attachments.</p>}{attachment && ticket.attachments.some(file => file.name === attachment) && <AttachmentPreview key={`${attachment}-${ticket.revision}`} name={attachment} url={`${path}/attachments/${encode(attachment)}`} api={api} />}<form className="upload-form" onSubmit={event => void upload(event)}><label>Attach reference file<input type="file" name="file" accept=".png,.jpg,.jpeg,.gif,.webp,.json,.txt,.md,.csv,.pdf,.doc,.docx,.xls,.xlsx,.odt" required disabled={busy || stale || dirty || ticket.removed} /></label><Button htmlType="submit" disabled={busy || stale || dirty || ticket.removed}>Upload attachment</Button></form>{(dirty || stale) && <p className="muted">Save or reconcile the editor before uploading attachments.</p>}</section>
+      <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar"><Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>{['blocked', 'failed', 'interrupted'].includes(ticket.status) && <Button disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onClick={() => void action('retry')}>Review & retry</Button>}{ticket.status === 'needs_review' && <><Button type="primary" className="primary" disabled={actionsBusy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={actionsBusy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}{tickets.length > 1 && <><Button disabled={actionsBusy || tickets[0]?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i - 1]?.order ?? ticket.order) - 0.5); }}>Move up</Button><Button disabled={actionsBusy || tickets.at(-1)?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i + 1]?.order ?? ticket.order) + 0.5); }}>Move down</Button></>}</div><p className="muted">Approval is revision-bound, not a command to bypass dependencies or pauses. Dependencies wait for Done, not Needs review.</p>{ticket.status === 'interrupted' && <p className="warning-text">Recovery required: inspect the previous transcript and partial changes before explicitly retrying. No mutating action is replayed automatically.</p>}{working && <p className="warning-text">To stop active work, open its run and pause it. Repository pause only prevents future starts.</p>}</section>
+      <section className="detail-section" aria-labelledby="attachment-heading"><h3 id="attachment-heading">Attachments</h3><p className="muted">Paste files into either editor to attach them. References are not executable instructions. Describe each file's purpose in the Markdown. Use synthetic examples, never credentials.</p>{ticket.attachments.length ? <ul className="attachment-list">{ticket.attachments.map(file => <li key={file.name}><Button type="link" href={`${path}/attachments/${encode(file.name)}`} target="_blank" rel="noreferrer">{file.name}</Button><small>{(file.size / 1024).toFixed(1)} KB</small><Button onClick={() => setAttachment(attachment === file.name ? '' : file.name)}>{attachment === file.name ? 'Close preview' : 'Preview'}</Button></li>)}</ul> : <p className="muted">No attachments.</p>}{attachment && ticket.attachments.some(file => file.name === attachment) && <AttachmentPreview key={`${attachment}-${ticket.revision}`} name={attachment} url={`${path}/attachments/${encode(attachment)}`} api={api} />}</section>
       <section className="detail-section" aria-labelledby="history-heading"><h3 id="history-heading">Run history</h3>{runs.length ? <ul className="run-list">{runs.map(run => <li key={run.id}><Button className="run-history-entry" onClick={() => onRun(run.id)}><span><Status value={run.status} /> <time dateTime={new Date(run.started).toISOString()}>{new Date(run.started).toLocaleString()}</time></span><small>Revision {run.revision.slice(0, 10)}{run.revision !== ticket.revision ? ' · Older requirements' : ' · Current requirements'}</small>{run.dialog && <Tag className="attention">Answer needed</Tag>}</Button></li>)}</ul> : <p className="muted">No runs. A fresh session starts only when this revision is eligible and permitted.</p>}</section>
     </>}
   </div>;
