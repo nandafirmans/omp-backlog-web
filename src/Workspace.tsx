@@ -1,12 +1,14 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Button, Input, InputNumber, Modal, Segmented, Select, Tag } from 'antd';
-import { FolderIcon } from '@phosphor-icons/react';
+import { Button, Checkbox, Drawer, Input, InputNumber, Modal, Popover, Segmented, Select, Tag } from 'antd';
+import { ArrowsInIcon, ArrowsOutIcon, ColumnsIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, PlusIcon, SlidersHorizontalIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
 import { attachmentReference } from './attachments';
 import type { AttachmentReference, StagedAttachment } from './attachments';
 import MarkdownEditor from './MarkdownEditor';
+import Markdown, { defaultUrlTransform } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 const RichMarkdownEditor = lazy(() => import('./RichMarkdownEditor'));
 
@@ -18,9 +20,13 @@ const json = (method: string, body: unknown): RequestInit => ({ method, body: JS
 const message = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const activeStatuses = ['running', 'stopping', 'paused'];
 const modes: Record<Mode, string> = { paused: 'Paused', approved: 'Approved tickets only', automatic: 'Automatic' };
-const queueStatuses: Ticket['status'][] = ['ready', 'running', 'stopping', 'paused', 'blocked', 'needs_review', 'failed', 'interrupted', 'draft', 'done'];
+const queueStatuses: Ticket['status'][] = ['draft', 'ready', 'running', 'stopping', 'paused', 'blocked', 'needs_review', 'failed', 'interrupted', 'done'];
 
 function Status({ value }: { value: string }) { return <Tag className={`badge status-${value}`}>{value.replaceAll('_', ' ')}</Tag>; }
+
+function StatusLabel({ value }: { value: Ticket['status'] }) {
+  return <span className={`status-label status-dot-${value}`}><span aria-hidden="true" />{value.replaceAll('_', ' ')}</span>;
+}
 
 export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const { repoId, ticketId, runId } = useParams();
@@ -33,12 +39,29 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const [pending, setPending] = useState('');
   const [notice, setNotice] = useState('');
   const [modal, modalContext] = Modal.useModal();
+  const [layout, setLayout] = useState(() => localStorage.getItem('omp-ticket-layout') === 'list' ? 'list' : 'board');
+  const [showEmpty, setShowEmpty] = useState(() => localStorage.getItem('omp-ticket-empty') === 'true');
+  const [hiddenStatuses, setHiddenStatuses] = useState(() => (localStorage.getItem('omp-ticket-hidden') ?? '').split(',').filter(value => queueStatuses.includes(value as Ticket['status'])));
+  const [search, setSearch] = useState('');
+  const [expanded, setExpanded] = useState(false);
+  const returnFocus = useRef<HTMLAnchorElement | null>(null);
+  const newTicketLink = useRef<HTMLAnchorElement | null>(null);
+  useEffect(() => {
+    localStorage.setItem('omp-ticket-layout', layout);
+    localStorage.setItem('omp-ticket-empty', String(showEmpty));
+    localStorage.setItem('omp-ticket-hidden', hiddenStatuses.join(','));
+  }, [layout, showEmpty, hiddenStatuses]);
   const repo = snapshot.repos.find(value => value.id === repoId);
   const tickets = snapshot.tickets.filter(value => value.repoId === repo?.id).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const ticket = tickets.find(value => value.id === ticketId);
   const selectedRun = snapshot.runs.find(value => value.id === runId);
   const activeRun = snapshot.runs.find(value => activeStatuses.includes(value.status));
   const busy = !!pending;
+  const matchingTickets = tickets.filter(value => `${value.id} ${value.title}`.toLowerCase().includes(search.trim().toLowerCase()));
+  const columns = queueStatuses.map(status => ({ status, tickets: matchingTickets.filter(value => value.status === status) }));
+  const visibleColumns = matchingTickets.length === 0 && search.trim() ? [] : columns.filter(column => !hiddenStatuses.includes(column.status) && (showEmpty || column.tickets.length > 0));
+  const hiddenTickets = matchingTickets.filter(value => hiddenStatuses.includes(value.status)).length;
+  const emptyStatuses = columns.filter(column => column.tickets.length === 0 && !hiddenStatuses.includes(column.status)).length;
   const queueSummaries = new Map<string, { total: number; counts: Partial<Record<Ticket['status'], number>> }>();
   for (const item of snapshot.tickets) {
     if (item.removed) continue;
@@ -91,12 +114,43 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
         })}
       </ul> : <div className="panel empty-state"><FolderIcon className="project-folder-icon" size={40} weight="duotone" aria-hidden="true" /><h2>No projects yet</h2><p>Add a local folder to get started. New projects start paused.</p></div>}
     </section> : settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : repo ? <>
-      <div className="section-heading workspace-heading"><h1>{repo.name}</h1><Link to="/">Choose project</Link></div>
-        {repo && <section className="panel repo-summary" aria-label="Repository execution permission"><div><h2>{repo.name}</h2><code className="path">{repo.path}</code>{!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}</div><label>Execution permission<Select aria-label="Execution permission" disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={Object.entries(modes).map(([value, label]) => ({ value: value as Mode, label }))} /><small>{repo.mode === 'paused' ? 'No new starts. A current run continues.' : repo.mode === 'approved' ? 'Only explicitly approved revisions may start.' : 'Standing permission: eligible revisions may run automatically.'}</small></label></section>}
-        <div className="backlog-layout">
-          <section className="ticket-queue" aria-labelledby="queue-heading"><div className="section-heading"><h2 id="queue-heading">Backlog</h2><Link to={`/projects/${encode(repo.id)}/tickets/new`}>New ticket +</Link></div>{tickets.length === 0 && <div className="empty-state"><p>No tickets yet.</p><small>Create a Markdown ticket, or add one under .omp-backlog/tickets/ in this repository.</small></div>}<ol className="ticket-list">{tickets.map((value, index) => <li key={value.id}><Link className={`ticket-card ${ticket?.id === value.id ? 'selected' : ''}`} aria-current={ticket?.id === value.id ? 'page' : undefined} to={`/projects/${encode(repo.id)}/tickets/${encode(value.id)}`}><span className="ticket-meta"><span>{String(index + 1).padStart(2, '0')} · {value.id}</span><Status value={value.status} /></span><strong>{value.title || value.id}</strong><small>{value.removed ? 'Ticket file removed' : value.dependencies.length ? `Depends on ${value.dependencies.join(', ')}` : 'No dependencies'}</small>{value.error && <span className="ticket-error">{value.error}</span>}{value.approvedRevision === value.revision && <span className="permission-note">This revision approved</span>}</Link></li>)}</ol></section>
-          <section className="ticket-detail" aria-label="Ticket details">{creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : <div className="empty-state detail-empty"><h2>{ticketId ? 'Ticket not found' : 'No ticket selected'}</h2><p>{ticketId ? 'This ticket is not available in this project.' : 'Select a ticket to review requirements, attachments, permissions, and run evidence.'}</p></div>}</section>
+      <header className="project-header">
+        <div className="project-title"><Link to="/">Projects</Link><span aria-hidden="true">/</span><h1>{repo.name}</h1></div>
+        <div className="project-controls">
+          <Popover trigger="click" placement="bottomRight" title="Project settings" content={<div className="project-settings"><code className="path">{repo.path}</code>{!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}<Link to="/">Choose another project</Link></div>}><Button type="text">Project settings</Button></Popover>
+          <label className="execution-control">Execution<Select aria-label="Execution permission" disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={Object.entries(modes).map(([value, label]) => ({ value: value as Mode, label }))} /></label>
+          <Link className="new-ticket-link" ref={newTicketLink} onClick={event => { returnFocus.current = event.currentTarget; }} to={`/projects/${encode(repo.id)}/tickets/new`}><PlusIcon size={16} aria-hidden="true" />New ticket</Link>
         </div>
+      </header>
+      <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. A current run continues.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and the global slot still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'}</p>
+      <section className="ticket-workspace" aria-label="Project tickets">
+        <div className="board-toolbar">
+          <Segmented aria-label="Ticket layout" value={layout} onChange={setLayout} options={[{ value: 'board', label: <span className="view-label"><ColumnsIcon size={16} aria-hidden="true" />Board</span> }, { value: 'list', label: <span className="view-label"><ListBulletsIcon size={16} aria-hidden="true" />List</span> }]} />
+          <Input className="ticket-search" aria-label="Search tickets" placeholder="Search by title or ID…" prefix={<MagnifyingGlassIcon size={16} aria-hidden="true" />} value={search} allowClear onChange={event => setSearch(event.target.value)} />
+          <Popover trigger="click" placement="bottomRight" title="Display" content={<div className="board-display">
+            <Checkbox checked={showEmpty} onChange={event => setShowEmpty(event.target.checked)}>Show empty statuses</Checkbox>
+            <div className="display-statuses"><strong>Visible statuses</strong>{columns.map(column => <Checkbox key={column.status} checked={!hiddenStatuses.includes(column.status)} onChange={event => setHiddenStatuses(previous => event.target.checked ? previous.filter(value => value !== column.status) : [...previous, column.status])}><StatusLabel value={column.status} /><span className="display-count">{column.tickets.length}</span></Checkbox>)}</div>
+            <Button type="link" onClick={() => { setShowEmpty(false); setHiddenStatuses([]); }}>Reset display</Button>
+          </div>}><Button className="display-button" icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />}>Display{hiddenTickets > 0 ? ` · ${hiddenTickets} hidden` : ''}</Button></Popover>
+        </div>
+        <div className={`ticket-surface ${layout === 'list' ? 'ticket-list-view' : 'kanban-board'}`} role="region" aria-label={layout === 'list' ? 'Tickets grouped by status' : 'Ticket status board'} tabIndex={0}>
+          {visibleColumns.map(column => <section className="kanban-column" key={column.status} aria-labelledby={`column-${column.status}`}>
+            <div className="kanban-heading"><h2 id={`column-${column.status}`}><StatusLabel value={column.status} /></h2><span className="kanban-count">{column.tickets.length}</span></div>
+            <ol className="ticket-list">{column.tickets.map(value => <li key={value.id}><Link className={`ticket-card ${ticket?.id === value.id ? 'selected' : ''}`} aria-current={ticket?.id === value.id ? 'page' : undefined} onClick={event => { returnFocus.current = event.currentTarget; }} to={`/projects/${encode(repo.id)}/tickets/${encode(value.id)}`}>
+              <span className="ticket-meta">{value.id}</span><strong>{value.title || value.id}</strong>
+              {(value.removed || value.dependencies.length > 0) && <small>{value.removed ? 'Ticket file removed' : `Depends on ${value.dependencies.join(', ')}`}</small>}
+              {value.error && <span className="ticket-error" title={value.error}>{value.error}</span>}
+              {value.approvedRevision === value.revision && <span className="permission-note">✓ Revision approved</span>}
+            </Link></li>)}</ol>
+            {column.tickets.length === 0 && <p className="kanban-empty">No tickets in this status</p>}
+          </section>)}
+          {visibleColumns.length === 0 && <div className="board-empty"><FolderIcon size={32} weight="duotone" aria-hidden="true" /><h2>{tickets.length === 0 ? 'A clear board. A place to start.' : matchingTickets.length === 0 ? 'No matching tickets' : 'All matching tickets are hidden'}</h2><p>{tickets.length === 0 ? 'Create a draft, describe the change, and define what done looks like.' : matchingTickets.length === 0 ? 'Try another title or ticket ID.' : 'Open Display to reveal their statuses.'}</p>{tickets.length === 0 ? <Link to={`/projects/${encode(repo.id)}/tickets/new`}>Create your first ticket</Link> : <Button onClick={() => { setSearch(''); setHiddenStatuses([]); }}>Show all tickets</Button>}</div>}
+        </div>
+        <footer className="board-footer"><span>{matchingTickets.length} of {tickets.length} tickets{hiddenTickets > 0 && <span className="warning-text"> · {hiddenTickets} hidden by Display</span>}{!showEmpty && emptyStatuses > 0 && ` · ${emptyStatuses} empty statuses hidden`}</span><span>{activeRun ? `${activeRun.repoId === repo.id ? 'Active run' : 'Global slot in use'} · ${activeRun.ticketId}` : 'No active run'}</span></footer>
+      </section>
+      <Drawer className="ticket-drawer" title={creating ? 'New ticket' : ticket?.id ?? 'Ticket unavailable'} open={creating || !!ticketId} onClose={() => { void navigate(`/projects/${encode(repo.id)}`); }} size={expanded ? '100vw' : 'min(800px, 100vw)'} destroyOnHidden afterOpenChange={open => { if (!open) { setExpanded(false); (returnFocus.current?.isConnected ? returnFocus.current : newTicketLink.current)?.focus({ preventScroll: true }); } }} extra={<Button type="text" aria-label={expanded ? 'Restore ticket panel' : 'Expand ticket panel'} icon={expanded ? <ArrowsInIcon size={18} /> : <ArrowsOutIcon size={18} />} onClick={() => setExpanded(value => !value)} />}>
+        {creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : ticketId ? <div className="empty-state"><h2>Ticket not found</h2><p>This ticket is not available in this project.</p><Link to={`/projects/${encode(repo.id)}`}>Return to board</Link></div> : null}
+      </Drawer>
     </> : !selectedRun && <section className="panel empty-state"><h1>Page not found</h1><p>This project, run, or page is unavailable.</p><Link to="/">Return Home</Link></section>}
     {selectedRun && <RunPanel run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => { void navigate(`/projects/${encode(selectedRun.repoId)}/tickets/${encode(selectedRun.ticketId)}`); }} />}
     {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => { void navigate('/'); }} onRegistered={id => { void navigate(`/projects/${encode(id)}`); }} />}
@@ -111,6 +165,7 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   useEffect(() => { latestDraft.current = draft; }, [draft]);
   const [base, setBase] = useState({ markdown: ticket?.markdown ?? template, revision: ticket?.revision ?? '' });
   const [preview, setPreview] = useState(false);
+  const [editing, setEditing] = useState(!ticket);
   const [conflict, setConflict] = useState('');
   const [attachment, setAttachment] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -299,14 +354,19 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   return <div className="panel editor-panel">
     {modalContext}
     <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Discard changes" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Your unsaved ticket changes will be discarded.</p></Modal>
-    <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'New ticket'}</h2></div>{ticket && <Status value={ticket.status} />}</div>
+    <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}
     {stale && <div className="notice"><div><h3>Requirements changed{working ? ' during execution' : ' outside this editor'}.</h3><p>Your editor has not been overwritten. The current run keeps its immutable revision; changed requirements require new approval.</p></div></div>}
     {(stale || conflict) && <div className="conflict-box" role="alert"><p>{conflict || 'A newer ticket or attachment revision is available. Preserve your draft and reconcile before saving.'}</p><div className="toolbar"><Button onClick={() => { void navigator.clipboard.writeText(draft).catch(() => setConflict('Clipboard unavailable. Select and copy the Markdown from the editor before loading the current version.')); }}>Copy my draft</Button><Button download={`${ticket?.id ?? 'ticket'}-draft.md`} href={`data:text/markdown;charset=utf-8,${encode(draft)}`}>Download draft</Button><Button disabled={busy || uploading} onClick={() => void loadCurrentVersion()}>Load current version</Button></div></div>}
     {ticket && <div className="ticket-facts"><p><span>Dependencies</span>{ticket.dependencies.length ? ticket.dependencies.join(', ') : 'None'}</p><p><span>Approval</span>{ticket.approvedRevision === ticket.revision ? 'Current revision approved' : 'Current revision not approved'}</p><p><span>Acceptance criteria</span>{ticket.criteria.length}</p></div>}
-    <form onSubmit={event => void save(event)}>
-      {!ticket && <label className="import-draft">Import Markdown into this draft<input type="file" disabled={busy} accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={event => { const file = event.target.files?.[0]; if (!file) return; void file.text().then(text => { setDraft(text); setConflict(''); }).catch(cause => setConflict(message(cause))); event.target.value = ''; }} /><small>Explicit import only. Existing BACKLOG.md is never rewritten. Use a unique frontmatter id/title, describe what to change, and add Done when: bullets with observable results and how to verify them.</small></label>}
+    {ticket && <>
+      <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar"><Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>{['blocked', 'failed', 'interrupted'].includes(ticket.status) && <Button disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onClick={() => void action('retry')}>Review & retry</Button>}{ticket.status === 'needs_review' && <><Button type="primary" className="primary" disabled={actionsBusy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={actionsBusy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}{tickets.length > 1 && <><Button disabled={actionsBusy || tickets[0]?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i - 1]?.order ?? ticket.order) - 0.5); }}>Move up</Button><Button disabled={actionsBusy || tickets.at(-1)?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i + 1]?.order ?? ticket.order) + 0.5); }}>Move down</Button></>}</div><p className="muted">Approval is revision-bound, not a command to bypass dependencies or pauses. Dependencies wait for Done, not Needs review.</p>{ticket.status === 'interrupted' && <p className="warning-text">Recovery required: inspect the previous transcript and partial changes before explicitly retrying. No mutating action is replayed automatically.</p>}{working && <p className="warning-text">To stop active work, open its run and pause it. Repository pause only prevents future starts.</p>}</section>
+    </>}
+    {ticket && <div className="requirements-heading"><h3>Requirements</h3><Button disabled={actionsBusy || (editing && unsaved)} onClick={() => setEditing(value => !value)}>{editing ? 'Reading view' : 'Edit Markdown'}</Button></div>}
+    {!editing && <article className="ticket-reading" aria-label="Ticket requirements"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => url.startsWith('attachments/') ? `${attachmentBase}${url.slice('attachments/'.length)}` : defaultUrlTransform(url)} components={{ a: ({ href, children }) => <a href={href} rel="noreferrer">{children}</a> }}>{draft.replace(/^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '')}</Markdown></article>}
+    {editing && <form onSubmit={event => void save(event)}>
+      {!ticket && <details className="import-options"><summary>Import existing Markdown</summary><label className="import-draft">Markdown file<input type="file" disabled={busy} accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={event => { const file = event.target.files?.[0]; if (!file) return; void file.text().then(text => { setDraft(text); setConflict(''); }).catch(cause => setConflict(message(cause))); event.target.value = ''; }} /><small>Explicit import only. Existing BACKLOG.md is never rewritten. Use a unique frontmatter id/title, describe what to change, and add Done when: bullets with observable results and how to verify them.</small></label></details>}
       <div className="editor-tabs"><Segmented aria-label="Ticket view" options={['Markdown', 'Preview']} value={preview ? 'Preview' : 'Markdown'} onChange={value => setPreview(value === 'Preview')} /><span className="muted">{dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></div>
       {preview ? <div className="ticket-preview"><Suspense fallback={<p role="status" aria-live="polite">Loading editable Preview… Your Markdown is preserved.</p>}><RichMarkdownEditor value={draft} onChange={setDraft} disabled={busy} onUpload={uploadFiles} attachmentBase={attachmentBase} attachmentUrls={attachmentUrls} /></Suspense></div> : <MarkdownEditor label="Ticket Markdown" value={draft} onChange={setDraft} repoId={repo.id} api={api} disabled={busy} onUpload={uploadFiles} />}
       <div className="attachment-paste-status" aria-live="polite">
@@ -315,9 +375,8 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
       </div>
       <p className="muted">Every uploaded file needs a Markdown link or image with a descriptive purpose label or title before execution. Explain what screenshots demonstrate, including viewport and acceptable differences. Purpose quality remains part of human review.</p>
       <div className="toolbar editor-actions"><Button type="primary" htmlType="submit" className="primary" disabled={busy || uploading || !!ticket?.removed || !draft}>{ticket ? 'Save revision' : hasServerTicket ? 'Finish creating ticket' : 'Create ticket'}</Button><small>Explicit save only. Edits never silently replace an active run's instructions.</small></div>
-    </form>
+    </form>}
     {ticket && <>
-      <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar"><Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>{['blocked', 'failed', 'interrupted'].includes(ticket.status) && <Button disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onClick={() => void action('retry')}>Review & retry</Button>}{ticket.status === 'needs_review' && <><Button type="primary" className="primary" disabled={actionsBusy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={actionsBusy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}{tickets.length > 1 && <><Button disabled={actionsBusy || tickets[0]?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i - 1]?.order ?? ticket.order) - 0.5); }}>Move up</Button><Button disabled={actionsBusy || tickets.at(-1)?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i + 1]?.order ?? ticket.order) + 0.5); }}>Move down</Button></>}</div><p className="muted">Approval is revision-bound, not a command to bypass dependencies or pauses. Dependencies wait for Done, not Needs review.</p>{ticket.status === 'interrupted' && <p className="warning-text">Recovery required: inspect the previous transcript and partial changes before explicitly retrying. No mutating action is replayed automatically.</p>}{working && <p className="warning-text">To stop active work, open its run and pause it. Repository pause only prevents future starts.</p>}</section>
       <section className="detail-section" aria-labelledby="attachment-heading"><h3 id="attachment-heading">Attachments</h3><p className="muted">Paste files into either editor to attach them. References are not executable instructions. Describe each file's purpose in the Markdown. Use synthetic examples, never credentials.</p>{ticket.attachments.length ? <ul className="attachment-list">{ticket.attachments.map(file => <li key={file.name}><Button type="link" href={`${path}/attachments/${encode(file.name)}`} target="_blank" rel="noreferrer">{file.name}</Button><small>{(file.size / 1024).toFixed(1)} KB</small><Button onClick={() => setAttachment(attachment === file.name ? '' : file.name)}>{attachment === file.name ? 'Close preview' : 'Preview'}</Button></li>)}</ul> : <p className="muted">No attachments.</p>}{attachment && ticket.attachments.some(file => file.name === attachment) && <AttachmentPreview key={`${attachment}-${ticket.revision}`} name={attachment} url={`${path}/attachments/${encode(attachment)}`} api={api} />}</section>
       <section className="detail-section" aria-labelledby="history-heading"><h3 id="history-heading">Run history</h3>{runs.length ? <ul className="run-list">{runs.map(run => <li key={run.id}><Button className="run-history-entry" onClick={() => onRun(run.id)}><span><Status value={run.status} /> <time dateTime={new Date(run.started).toISOString()}>{new Date(run.started).toLocaleString()}</time></span><small>Revision {run.revision.slice(0, 10)}{run.revision !== ticket.revision ? ' · Older requirements' : ' · Current requirements'}</small>{run.dialog && <Tag className="attention">Answer needed</Tag>}</Button></li>)}</ul> : <p className="muted">No runs. A fresh session starts only when this revision is eligible and permitted.</p>}</section>
     </>}
