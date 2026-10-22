@@ -10,7 +10,7 @@
   color: var(--text);
   background: var(--surface-inset, var(--surface));
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: 12px;
   font-family: var(--font-mono);
   font-weight: 400;
 }
@@ -58,7 +58,7 @@
     --syntax-marker: #9aa8c0;
   }
 }
-:root[data-theme='dark'] .markdown-editor {
+:root[data-theme]:not([data-theme='light']) .markdown-editor {
   --syntax-heading: #82aaff;
   --syntax-emphasis: #c5a0ef;
   --syntax-link: #73daca;

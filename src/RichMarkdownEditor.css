@@ -3,6 +3,8 @@
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: clip;
   font-size: 14px;
 }
 
@@ -22,7 +24,7 @@
 .rich-markdown-help button {
   padding: 5px 9px;
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: 6px;
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
@@ -44,7 +46,7 @@
   min-height: 240px;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: 8px;
   color: var(--text);
   background: var(--surface);
   font: 13px/1.65 var(--font-mono);
@@ -86,12 +88,12 @@
   --text-base: 14px;
   --text-sm: 13px;
   --text-xs: 12px;
-  --radius-small: 0px;
-  --radius-base: 0px;
-  --radius-medium: 0px;
-  --radius-large: 0px;
-  --radius-extra-large: 0px;
-  --radius-full: 0px;
+  --radius-small: 4px;
+  --radius-base: 6px;
+  --radius-medium: 8px;
+  --radius-large: 10px;
+  --radius-extra-large: 12px;
+  --radius-full: 999px;
   color: var(--text);
   font-family: var(--font-sans);
   font-size: 14px;
@@ -106,13 +108,13 @@
   padding: 5px 8px;
   gap: 3px;
   border-bottom: 1px solid var(--line);
-  border-radius: 0;
+  border-radius: 10px 10px 0 0;
   background: var(--surface);
   scrollbar-width: thin;
 }
-.rich-markdown-theme .rich-markdown-toolbar button { flex-shrink: 0; min-width: 28px; min-height: 28px; border-radius: 0; }
+.rich-markdown-theme .rich-markdown-toolbar button { flex-shrink: 0; min-width: 28px; min-height: 28px; border-radius: 6px; }
 .rich-markdown-theme .rich-markdown-toolbar button[data-state='on'] { color: var(--accent); background: var(--accent-soft, var(--surface)); }
-.rich-markdown-theme :is(button, input, select, textarea, [role='dialog'], [role='listbox'], [role='menu']) { border-radius: 0; }
+.rich-markdown-theme :is(button, input, select, textarea, [role='dialog'], [role='listbox'], [role='menu']) { border-radius: 8px; }
 .rich-markdown-theme :is(button, [role='option']):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rich-markdown-theme :is(input, textarea) { color: var(--text); caret-color: var(--accent); }
 .rich-markdown-theme :is(input, textarea)::placeholder { color: var(--muted); }
@@ -149,7 +151,7 @@
 .rich-markdown-theme .rich-markdown-body hr { margin-block: 20px; border: 0; border-top: 1px solid var(--line); }
 .rich-markdown-theme .rich-markdown-body table { border-collapse: collapse; font-size: 14px; }
 .rich-markdown-theme .rich-markdown-body :is(td, th) { border-color: var(--line); }
-.rich-markdown-theme .cm-editor { border-radius: 0; color: var(--text); background: var(--surface-inset, var(--surface)); }
+.rich-markdown-theme .cm-editor { border-radius: 8px; color: var(--text); background: var(--surface-inset, var(--surface)); }
 .rich-markdown-theme .cm-editor .cm-scroller { font: 13px/1.65 var(--font-mono); }
 .rich-markdown-theme .cm-editor .cm-content { caret-color: var(--accent); }
 .rich-markdown-theme .cm-editor .cm-gutters { color: var(--muted); background: var(--surface); border-color: var(--line); }

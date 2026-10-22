@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Alert, Button, ConfigProvider, Dropdown, Input, Skeleton, Tag, theme } from 'antd';
-import { HouseIcon, GearSixIcon, BlueprintIcon, DesktopIcon, MoonIcon, SunIcon, SignOutIcon, ListIcon, XIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { HouseIcon, GearSixIcon, BlueprintIcon, CheckIcon, DesktopIcon, SignOutIcon, ListIcon, XIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useLocation } from 'react-router';
 import type { Snapshot } from '../server/contracts';
 import plan from '../PLAN.md?raw';
 import MarkdownPreview from './MarkdownPreview';
 import Workspace from './Workspace';
 import type { RequestApi } from './Workspace';
+import { isThemeMode, themeModes, themes } from './themes';
+import type { ThemeMode } from './themes';
 
 interface Session { authenticated: boolean; configured: boolean; csrf: string }
 const downloadUrl = `data:text/markdown;charset=utf-8,${encodeURIComponent(plan)}`;
@@ -23,12 +25,15 @@ export default function App() {
   const [menuPath, setMenuPath] = useState<string>();
   const csrf = useRef('');
   const refreshSequence = useRef(0);
-  const [colorMode, setColorMode] = useState<'system' | 'light' | 'dark'>(() => {
+  const [colorMode, setColorMode] = useState<ThemeMode>(() => {
     const saved = localStorage.getItem('omp-color-mode');
-    return saved === 'light' || saved === 'dark' ? saved : 'system';
+    return isThemeMode(saved) ? saved : 'system';
   });
   const [systemDark, setSystemDark] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches);
-  const dark = colorMode === 'system' ? systemDark : colorMode === 'dark';
+  const resolvedTheme = colorMode === 'system' ? (systemDark ? 'dark' : 'light') : colorMode;
+  const palette = themes[resolvedTheme];
+  const dark = resolvedTheme !== 'light';
+  const themeLabel = colorMode === 'system' ? 'System' : palette.label;
 
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)');
@@ -38,9 +43,15 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    const root = document.documentElement;
+    root.dataset.theme = resolvedTheme;
+    root.style.colorScheme = dark ? 'dark' : 'light';
+    for (const [name, value] of Object.entries(palette)) {
+      if (name !== 'label') root.style.setProperty(`--${['elevated', 'inset', 'raised'].includes(name) ? 'surface-' : ''}${name}`, value);
+    }
+    root.style.setProperty('--accent-soft', 'color-mix(in srgb, var(--accent) 14%, var(--surface))');
     localStorage.setItem('omp-color-mode', colorMode);
-  }, [colorMode, dark]);
+  }, [colorMode, resolvedTheme, palette, dark]);
 
   const api: RequestApi = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const headers = new Headers(init?.headers);
@@ -129,26 +140,26 @@ export default function App() {
     <ConfigProvider theme={{
       algorithm: dark ? theme.darkAlgorithm : theme.defaultAlgorithm,
       token: {
-        colorPrimary: dark ? '#4fb6b2' : '#216e6b',
-        colorInfo: dark ? '#4fb6b2' : '#216e6b',
-        colorBgBase: dark ? '#151922' : '#eef1f5',
-        colorBgContainer: dark ? '#1d2430' : '#f8fafc',
-        colorBgElevated: dark ? '#283341' : '#f8fafc',
-        colorText: dark ? '#e5eaf0' : '#243041',
-        colorTextSecondary: dark ? '#9aa8b8' : '#526174',
-        colorTextPlaceholder: dark ? '#9aa8b8' : '#526174',
-        colorBorder: dark ? '#3b495b' : '#a3b1c2',
-        colorError: dark ? '#d97878' : '#a83d45',
-        colorWarning: dark ? '#d4b176' : '#805714',
-        borderRadius: 0,
-        fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+        colorPrimary: palette.accent,
+        colorInfo: palette.accent,
+        colorBgBase: palette.surface,
+        colorBgContainer: palette.elevated,
+        colorBgElevated: palette.raised,
+        colorText: palette.text,
+        colorTextSecondary: palette.muted,
+        colorTextPlaceholder: palette.muted,
+        colorBorder: palette.line,
+        colorError: palette.danger,
+        colorWarning: palette.warning,
+        borderRadius: 10,
+        fontFamily: "'IBM Plex Mono', monospace",
         fontSize: 15,
         fontSizeSM: 13,
         fontWeightStrong: 700,
         controlHeight: 38,
         motion: false,
       },
-      components: { Button: { fontWeight: 600, primaryColor: dark ? '#151922' : '#f8fafc', defaultShadow: 'none', primaryShadow: 'none' } },
+      components: { Button: { fontWeight: 600, primaryColor: dark ? palette.surface : palette.elevated, defaultShadow: 'none', primaryShadow: 'none' } },
     }}>
       <div className="workspace">
         <a className="skip-link" href="#content">Skip to content</a>
@@ -167,19 +178,19 @@ export default function App() {
               <Dropdown trigger={['click']} menu={{
                 selectable: true,
                 selectedKeys: [colorMode],
-                items: [
-                  { key: 'system', icon: <DesktopIcon size={18} aria-hidden="true" />, label: 'System' },
-                  { key: 'light', icon: <SunIcon size={18} aria-hidden="true" />, label: 'Light' },
-                  { key: 'dark', icon: <MoonIcon size={18} aria-hidden="true" />, label: 'Dark' },
-                ],
-                onClick: ({ key }) => { if (key === 'system' || key === 'light' || key === 'dark') setColorMode(key); },
+                items: themeModes.map(mode => ({
+                  key: mode,
+                  icon: mode === colorMode ? <CheckIcon size={18} aria-hidden="true" /> : mode === 'system' ? <DesktopIcon size={18} aria-hidden="true" /> : <span aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: themes[mode].accent }} />,
+                  label: mode === 'system' ? 'System' : themes[mode].label,
+                })),
+                onClick: ({ key }) => { if (isThemeMode(key)) setColorMode(key); },
               }}>
-                <Button className="theme-toggle" aria-label={`Color theme: ${colorMode}`} title={`Color theme: ${colorMode}`} icon={colorMode === 'system' ? <DesktopIcon size={18} aria-hidden="true" /> : colorMode === 'dark' ? <MoonIcon size={18} aria-hidden="true" /> : <SunIcon size={18} aria-hidden="true" />} />
+                <Button className="theme-toggle" aria-label={`Color theme: ${themeLabel}`} title={colorMode === 'system' ? `System: ${palette.label}` : themeLabel} icon={<span className="theme-swatch" aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: palette.accent }} />}>{themeLabel}</Button>
               </Dropdown>
               {session?.authenticated && <><Tag icon={connection === 'Live' ? <BroadcastIcon size={15} aria-hidden="true" /> : <WarningCircleIcon size={15} aria-hidden="true" />} className={`connection ${connection === 'Live' ? 'connected' : 'unavailable'}`} role="status" aria-label={connection} title={connection}><span className="connection-label">{connection}</span></Tag><Button icon={<SignOutIcon size={18} aria-hidden="true" />} onClick={() => void logout()}>Log out</Button></>}
             </div>
           </header>
-          <main id="content" tabIndex={-1} className={session?.authenticated && (pathname === '/' || pathname === '/projects/new') ? 'home-main' : undefined}>
+          <main id="content" tabIndex={-1} className={session?.authenticated ? (pathname === '/' || pathname === '/projects/new' ? 'home-main' : pathname.startsWith('/projects/') ? 'workspace-main' : undefined) : undefined}>
             {error && <Alert type="error" title={error} closable={{ onClose: () => setError('') }} role="alert" />}
             {view === 'plan' ? <section className="plan-view" aria-labelledby="plan-heading">
               <div className="section-heading"><h1 id="plan-heading">Implementation plan</h1><Button href={downloadUrl} download="PLAN.md">Download Markdown</Button></div>
