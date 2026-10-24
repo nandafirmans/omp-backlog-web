@@ -56,6 +56,8 @@ Self-hosted IBM Plex fonts and existing theme palettes remain authoritative. Do 
 
 At narrow widths, headers and controls wrap into a single-column flow. Keep horizontal scrolling inside editors, tables and the board rather than the document. Do not shrink text or controls to force desktop layouts onto mobile. Keep all actions reachable on short viewports.
 
+
+Board/list workspaces retain a 480px minimum height at every width. The surrounding main container scrolls vertically when headers, warnings and the board no longer fit, rather than compressing the ticket viewport. Project headers do not shrink. Tall windows still fill available space without unnecessary page scrolling; horizontal overflow stays inside the board.
 Page and bounded-conversation scrollbars use the board's `scrollbar-width: thin` and `scrollbar-color: var(--line) transparent`. Drafting content grows naturally inside the main page scroller. Keep bounded conversation/editor scrolling and board column/surface scrolling where content needs its own viewport; do not add a second full-page scrollbar inside the drafting panel.
 
 Preserve labeled controls, keyboard navigation, focus outlines, unsaved-change confirmation, semantic status text and theme selection. Do not convey state through color alone. Check both a dark theme and Light after changing shared styles; verify enabled action/label contrast against its actual surface. Disabled controls must remain distinguishable but are not evidence that an enabled state was tested.
