@@ -27,7 +27,8 @@ Self-hosted IBM Plex fonts and existing theme palettes remain authoritative. Do 
 
 ## Composition and components
 
-- **Page header:** one route title, short description and contextual actions. Project and drafting pages use Ant Design `Breadcrumb` above the title: Home / project / current task. Ancestors are React Router links; the current location is text with `aria-current="page"`. Do not combine a back arrow and slash-separated labels into one link, or place a breadcrumb inline with the heading. Use shared gutters; wrap at narrow widths.
+- **Page header:** one route title, short description and contextual actions. Project and drafting pages use Ant Design `Breadcrumb` above the title: Projects / project / current task. Ancestors are React Router links; the current location is text with `aria-current="page"`. Do not combine a back arrow and slash-separated labels into one link, or place a breadcrumb inline with the heading. Use shared gutters; wrap at narrow widths.
+- **Global header:** brand links to Projects; do not duplicate it with Home/Projects navigation. Keep compact icon-only Settings and Log out controls with accessible names and tooltips; connection status retains its semantic name and state-specific icon. Theme selection belongs in Settings > Appearance, not the navbar. Keep existing routes, including direct `/plan` access; implementation documentation is not primary navigation. Preserve native control sizing and keyboard focus. Header wraps only when needed on narrow screens.
 - **Work surface:** border plus elevated surface. Toolbars use the same quiet tinted treatment as `.board-toolbar`; they are not floating marketing navigation.
 - **Route actions:** `.home-action`, `.new-ticket-link` and `.agent-ticket-link` share geometry in `src/styles.css`. Keep React Router links for navigation. Primary links match primary buttons; secondary links match bordered buttons.
 - **Local view switches:** existing Ant Design `Segmented`, with explicit accessible labels. Board/List, Discuss/Review ticket and Markdown/Preview remain separate scopes.
@@ -45,7 +46,7 @@ Self-hosted IBM Plex fonts and existing theme palettes remain authoritative. Do 
 | Home | Project-first navigation, reusable route action, familiar folder cards and contextual scheduler controls. |
 | Project board/list | Full-width viewport workspace; scrolling contained in the board; established cards, toolbar and footer. |
 | Manual ticket/detail | Existing drawer, expandable width, Markdown/Preview, attachments, revision and review safeguards. |
-| Agent creation | Separate full-width page, framed session toolbar/conversation/composer, Discuss/Review ticket switch. Review uses the same framed form language as settings/manual editing. |
+| Agent creation | Separate full-width page; main page owns vertical scrolling, not an inset editor-panel scroller. Framed session toolbar/conversation/composer and Discuss/Review ticket switch. Review uses the same framed form language as settings/manual editing. |
 | Settings | Shared route title, bordered form, native component sizing and visible safety explanations. |
 | Plan | Shared route title and framed reading document. Document headings retain their own reading hierarchy. |
 | Run evidence | Existing framed panel, metadata, readable transcript, explicit evidence provenance and contextual controls. |
@@ -54,6 +55,8 @@ Self-hosted IBM Plex fonts and existing theme palettes remain authoritative. Do 
 ## Responsive and accessibility contract
 
 At narrow widths, headers and controls wrap into a single-column flow. Keep horizontal scrolling inside editors, tables and the board rather than the document. Do not shrink text or controls to force desktop layouts onto mobile. Keep all actions reachable on short viewports.
+
+Page and bounded-conversation scrollbars use the board's `scrollbar-width: thin` and `scrollbar-color: var(--line) transparent`. Drafting content grows naturally inside the main page scroller. Keep bounded conversation/editor scrolling and board column/surface scrolling where content needs its own viewport; do not add a second full-page scrollbar inside the drafting panel.
 
 Preserve labeled controls, keyboard navigation, focus outlines, unsaved-change confirmation, semantic status text and theme selection. Do not convey state through color alone. Check both a dark theme and Light after changing shared styles; verify enabled action/label contrast against its actual surface. Disabled controls must remain distinguishable but are not evidence that an enabled state was tested.
 
@@ -84,3 +87,7 @@ User-requested refinement after native sizing: standard control text is now 13px
 ### Execution menu refinement
 
 Added mode-specific icons to every option and the selected value, removed the redundant Project settings popover, and made permission labels fit the trigger and menu. ESLint passed. Synthetic-API real-browser checks confirmed all three menu options contain icons and fit without text overflow at desktop, full Approved tickets only text fits at 390px and 320px, and no horizontal page overflow occurred. Kanagawa and Light mobile menus were visually inspected. Non-Git warning remains visible; selecting Automatic still opens the existing safety confirmation, and canceling preserves the current permission. No real permission changes or provider runs were performed.
+
+### Drafting page scroll ownership
+
+Removed overflow and flex viewport constraints from the drafting root, and routed agent creation to the normal scrolling main container instead of the board's overflow-hidden workspace layout. ESLint passed. Synthetic-API browser assertions confirmed main owns drafting scrolling, the drafting root has visible overflow/no scroll range, and main uses the thin theme-colored scrollbar. Expanded context and mobile Review creation controls were reachable by scrolling main; Kanagawa/Light mobile Review was visually inspected without horizontal page overflow. Board main remains overflow-hidden while its surface retains auto/thin scrolling. No runtime errors were recorded; no backend/provider was attached.

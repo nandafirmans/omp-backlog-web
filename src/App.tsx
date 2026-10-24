@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Alert, Button, ConfigProvider, Dropdown, Input, Skeleton, Tag, theme } from 'antd';
-import { HouseIcon, GearSixIcon, BlueprintIcon, CheckIcon, DesktopIcon, SignOutIcon, ListIcon, XIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { GearSixIcon, CheckIcon, DesktopIcon, SignOutIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useLocation } from 'react-router';
 import type { Snapshot } from '../server/contracts';
 import plan from '../PLAN.md?raw';
@@ -22,7 +22,6 @@ export default function App() {
   const [connection, setConnection] = useState('Connecting');
   const [error, setError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
-  const [menuPath, setMenuPath] = useState<string>();
   const csrf = useRef('');
   const refreshSequence = useRef(0);
   const [colorMode, setColorMode] = useState<ThemeMode>(() => {
@@ -163,32 +162,13 @@ export default function App() {
         <a className="skip-link" href="#content">Skip to content</a>
         <div className="page">
           <header className="topbar">
-            <Link className="brand" to="/"><span className="brand-mark" aria-hidden="true">ob</span><span>OMP Backlog<small>Local workspace</small></span></Link>
-            <div className={`primary-navigation${menuPath === pathname ? ' is-open' : ''}`}>
-              <Button className="navigation-toggle" icon={menuPath === pathname ? <XIcon size={18} aria-hidden="true" /> : <ListIcon size={18} aria-hidden="true" />} aria-expanded={menuPath === pathname} aria-controls="main-navigation" onClick={() => setMenuPath(menuPath === pathname ? undefined : pathname)}>Menu</Button>
-              <nav id="main-navigation" aria-label="Main navigation">
-                <Link to="/" onClick={() => setMenuPath(undefined)} aria-current={pathname === '/' ? 'page' : undefined}><HouseIcon size={18} aria-hidden="true" />Home</Link>
-                {session?.authenticated && <Link to="/settings" onClick={() => setMenuPath(undefined)} aria-current={view === 'settings' ? 'page' : undefined}><GearSixIcon size={18} aria-hidden="true" />Settings</Link>}
-                <Link to="/plan" onClick={() => setMenuPath(undefined)} aria-current={view === 'plan' ? 'page' : undefined}><BlueprintIcon size={18} aria-hidden="true" />Implementation plan</Link>
-              </nav>
-            </div>
+            <Link className="brand" to="/" aria-label="OMP Backlog projects"><span className="brand-mark" aria-hidden="true">ob</span><span>OMP Backlog<small>Projects workspace</small></span></Link>
             <div className="toolbar navbar-tools">
-              <Dropdown trigger={['click']} menu={{
-                selectable: true,
-                selectedKeys: [colorMode],
-                items: themeModes.map(mode => ({
-                  key: mode,
-                  icon: mode === colorMode ? <CheckIcon size={18} aria-hidden="true" /> : mode === 'system' ? <DesktopIcon size={18} aria-hidden="true" /> : <span aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: themes[mode].accent }} />,
-                  label: mode === 'system' ? 'System' : themes[mode].label,
-                })),
-                onClick: ({ key }) => { if (isThemeMode(key)) setColorMode(key); },
-              }}>
-                <Button className="theme-toggle" aria-label={`Color theme: ${themeLabel}`} title={colorMode === 'system' ? `System: ${palette.label}` : themeLabel} icon={<span className="theme-swatch" aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: palette.accent }} />}>{themeLabel}</Button>
-              </Dropdown>
-              {session?.authenticated && <><Tag icon={connection === 'Live' ? <BroadcastIcon size={15} aria-hidden="true" /> : <WarningCircleIcon size={15} aria-hidden="true" />} className={`connection ${connection === 'Live' ? 'connected' : 'unavailable'}`} role="status" aria-label={connection} title={connection}><span className="connection-label">{connection}</span></Tag><Button icon={<SignOutIcon size={18} aria-hidden="true" />} onClick={() => void logout()}>Log out</Button></>}
+              {session?.authenticated && <nav className="primary-navigation" aria-label="Workspace navigation"><Link to="/settings" aria-label="Settings" title="Settings" aria-current={view === 'settings' ? 'page' : undefined}><GearSixIcon size={18} aria-hidden="true" /></Link></nav>}
+              {session?.authenticated && <><Tag icon={connection === 'Live' ? <BroadcastIcon size={15} aria-hidden="true" /> : <WarningCircleIcon size={15} aria-hidden="true" />} className={`connection ${connection === 'Live' ? 'connected' : 'unavailable'}`} role="status" aria-label={connection} title={connection} /><Button aria-label="Log out" title="Log out" icon={<SignOutIcon size={18} aria-hidden="true" />} onClick={() => void logout()} /></>}
             </div>
           </header>
-          <main id="content" tabIndex={-1} className={session?.authenticated ? (pathname === '/' || pathname === '/projects/new' ? 'home-main' : pathname.startsWith('/projects/') ? 'workspace-main' : undefined) : undefined}>
+          <main id="content" tabIndex={-1} className={session?.authenticated ? (pathname === '/' || pathname === '/projects/new' ? 'home-main' : pathname.endsWith('/tickets/new/agent') ? 'drafting-main' : pathname.startsWith('/projects/') ? 'workspace-main' : undefined) : undefined}>
             {error && <Alert type="error" title={error} closable={{ onClose: () => setError('') }} role="alert" />}
             {view === 'plan' ? <section className="plan-view" aria-labelledby="plan-heading">
               <div className="section-heading"><h1 id="plan-heading">Implementation plan</h1><Button href={downloadUrl} download="PLAN.md">Download Markdown</Button></div>
@@ -201,6 +181,22 @@ export default function App() {
                   : <form className="panel login-form" onSubmit={event => void login(event)}><h2>Sign in</h2><label htmlFor="username">Username<Input id="username" name="username" autoComplete="username" required autoFocus /></label><label htmlFor="password">Password<Input.Password id="password" name="password" autoComplete="current-password" required /></label><Button type="primary" htmlType="submit" disabled={loggingIn}>{loggingIn ? 'Signing in…' : 'Sign in'}</Button><p className="muted">One owner. Loopback access. No public registration.</p></form>}
               </section>
               : snapshot ? <Workspace snapshot={snapshot} api={api} refresh={refresh} onError={setError} /> : <div role="status" aria-label="Loading repositories"><Skeleton active={false} paragraph={{ rows: 6 }} /></div>}
+            {session?.authenticated && view === 'settings' && <section className="panel appearance-settings" aria-labelledby="appearance-heading">
+              <h2 id="appearance-heading">Appearance</h2>
+              <p className="muted">Color theme for this browser. Changes apply immediately; System follows your device.</p>
+              <Dropdown trigger={['click']} menu={{
+                selectable: true,
+                selectedKeys: [colorMode],
+                items: themeModes.map(mode => ({
+                  key: mode,
+                  icon: mode === colorMode ? <CheckIcon size={18} aria-hidden="true" /> : mode === 'system' ? <DesktopIcon size={18} aria-hidden="true" /> : <span aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: themes[mode].accent }} />,
+                  label: mode === 'system' ? 'System' : themes[mode].label,
+                })),
+                onClick: ({ key }) => { if (isThemeMode(key)) setColorMode(key); },
+              }}>
+                <Button className="theme-toggle" aria-label={`Color theme: ${themeLabel}`} title={colorMode === 'system' ? `System: ${palette.label}` : themeLabel} icon={<span className="theme-swatch" aria-hidden="true" style={{ display: 'inline-block', width: 12, height: 12, borderRadius: '50%', background: palette.accent }} />}>{themeLabel}</Button>
+              </Dropdown>
+            </section>}
           </main>
         </div>
       </div>
