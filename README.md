@@ -2,6 +2,8 @@
 
 Local, single-owner website for Markdown backlogs and OMP RPC execution. Approved requirements and lifecycle: [PLAN.md](PLAN.md).
 
+See [Current agent workflow](docs/current-agent-workflow.md) for implemented changes, end-to-end ticket execution, evidence/review gates, operator reconciliation, verification status and remaining adoption work.
+
 ## Start
 
 Requires Linux (process recovery uses `/proc`), Bun 1.3+, and an installed, configured `omp` for agent execution.
@@ -38,7 +40,11 @@ Global scheduler controls appear on Home only, not project, ticket, run, setting
 
 Header navigation pairs icons with visible labels and highlights the current page. The labeled theme button opens a keyboard-accessible menu for Tokyo Night, Kanagawa, Gruvbox, Catppuccin, Light, or System; selection persists locally. System follows operating-system appearance changes. Mobile navigation closes after following a link.
 
-Project tickets use a compact execution header and a **Board / List** switch. The board groups tickets by their exact lifecycle status: Draft, Ready, Running, Stopping, Paused, Blocked, Needs review, Failed, Interrupted, and Done. Empty statuses are hidden by default; **Display** can reveal empty statuses or hide individual columns. Hidden matching tickets remain counted in the toolbar and footer. Layout and display preferences persist in this browser. Search filters titles and IDs without changing queue order. Cards show dependencies only when present, approval when revision-bound, and abbreviated errors; open a ticket for full details. Status changes still require the existing approval, run-control, retry, and review actions, not dragging cards.
+Project tickets use a compact execution header and a **Board / List** switch. Six visual stages retain exact status badges: **Draft**, **Ready**, **In progress** (Running, Stopping, Paused), **Needs attention** (Failed, Blocked, Interrupted), **Needs review**, and **Done**. Paused work still holds the global execution slot. Attention status chips filter the group without changing queue order. Cards show short failure/blocker reasons, recovery warnings, revision approval, and contextual review links.
+
+Drag a card by its grip to reorder within a stage or request a supported move into Ready or Done. Cross-stage moves require explicit Yes/No confirmation before any request is saved: approve a Draft revision, retry Failed/Blocked/Interrupted work, request changes from Needs review, or accept revision-bound evidence as Done. Interrupted retries warn about remaining partial changes and repeated actions; Done shows acceptance criteria and recorded evidence. Execution-owned stages are not arbitrary drop targets, and active tickets cannot be dragged. Each card’s **Actions** menu provides the same moves plus Move up/Move down without dragging, including on keyboard and touch devices. Native dragging is intended for desktop pointers; touch users can use Actions. Reordering never changes the ticket’s exact status. Existing backend permissions, revision checks, review gates, and scheduler rules still apply.
+
+Empty stages are hidden by default; eligible empty destinations appear temporarily during dragging. **Display** reveals empty stages or hides individual statuses inside their groups. Hidden matching tickets remain counted in the toolbar and footer. Layout and display preferences persist in this browser. Search filters titles and IDs without changing queue order. Canceling a confirmation leaves status and order unchanged; failed or stale requests show an error rather than an optimistic status change.
 
 The board fills the remaining viewport rather than a centered, fixed-width wrapper. Its toolbar and footer stay visible; long columns scroll independently, with horizontal scrolling confined to the board. List view scrolls within the same workspace. Short mobile viewports can scroll the surrounding workspace to keep controls accessible. Status ordering, Board/List switching, and empty-group visibility follow the interaction patterns documented in [Linear's board layout guidance](https://linear.app/docs/board-layout).
 
@@ -121,7 +127,9 @@ Repository pause stops new starts, not the active run. Run pause interrupts goal
 
 An observed paused run keeps the global execution slot until explicitly resumed. A resumed run keeps the same session and immutable requirements; canceled questions must be asked again, never treated as consent. Startup reconciles surviving process identities before permitting new work; unresolved work becomes Interrupted rather than replaying automatically.
 
-Git workspaces with pre-existing changes outside `.omp-backlog/` are conservatively blocked: inspect/reconcile those changes, then explicitly retry. The app never resets the tree. Non-Git workspaces have no Git changed-file summary.
+Git workspaces use **operator reconciliation**, not automatic commits or per-ticket worktrees. Git changes outside `.omp-backlog/` or unavailable Git inspection persist a project-level handoff gate and stop new starts in that project, without consuming each queued ticket as a blocked run. Dirty changes left after a run or interrupted-run recovery also require handoff. Home shows the warning; the project page lists affected paths, source run and recovery steps. Other projects can still use the global slot.
+
+Review evidence/partial work, preserve unrelated edits, then reconcile in your terminal under your own authorization. The app never commits, stashes, resets, or deletes work. Choose **Recheck workspace** and confirm: authenticated inspection uses Git status with optional locks disabled; only a clean observed tree outside `.omp-backlog/` and no active/paused work can release the current gate. Dirty/unavailable Git stays blocked. Git ignore rules still apply; this is not sandboxing or proof about ignored files. Done, switching execution modes, and merely becoming clean do not clear a recorded gate. Clearing it may let eligible queued work start under existing permissions/dependencies/global pause; previously blocked tickets still need explicit retry. Non-Git workspaces have no Git handoff/changed-file guarantee.
 
 Each run has a private requirements/attachment snapshot and a fresh OMP session. The scheduler advances between tickets; OMP goal mode continues within a ticket. No additional `/loop` is needed. Time and token limits prevent indefinite unattended continuation.
 
@@ -144,5 +152,11 @@ bun run test
 ```
 
 For isolated verification, use a disposable repository and a separate `OMP_BACKLOG_DATA` directory. Do not run smoke tickets against existing projects. A real model run requires working OMP provider authentication; provider failures are execution failures, not completion evidence.
+
+Project-local recipe: [verify-backlog](.omp/skills/verify-backlog/SKILL.md), with a starter [feature map](.omp/skills/verify-backlog/features/README.md). Its helper uses installed Playwright, terminal-only owner setup and private disposable data; no automatic installs. Optional `--review-fixture` drives review paths using a protocol child, not a live provider. Explicit map maintenance lives in [maintain-backlog-verification](.omp/skills/maintain-backlog-verification/SKILL.md).
+
+New ticket runs submit `backlog_evidence` receipts before `backlog_result`: criterion, feature/entry point, method/command, reported outcome/details and recipe identity, optionally a sanitized png/jpg/txt/json artifact. Each criterion needs reported passing checks; unresolved failed/blocked/not-run journeys prevent completion. Reports are **agent claims**, not independent command verification. Host records receipt identity/time and artifact bytes/hash. Proof is private and run-owned (100 receipts, 512 KiB/file, 10 MiB/run), authenticated on download, retained after run teardown, and never uploaded as requirement attachments. Legacy runs remain readable with unverified text evidence.
+
+Request changes requires specific feedback through ticket panel, board Actions or drag confirmation. Feedback stays on the reviewed run/revision and is included in subsequent authorized attempts, including older-revision context. This does not bypass dirty-tree safety or authorize automatic commits. Blocked results trigger host-owned pause/shutdown without asking the model to complete an unmet goal. Run progress shows host activity and last reported OMP session-token usage with its accounting basis; no completion percentage is inferred.
 
 The deterministic runtime integration suite uses a protocol-speaking child process, not a model or credentials. It covers real filesystem watch events, cross-repository fairness, the global execution slot, provider-error events after admission, pause/resume session identity, active revision edits, surviving-child recovery, and time/token limits. Keep this coverage distinct from a real OMP/browser smoke run; passing a fixture does not establish provider availability.

@@ -347,6 +347,118 @@ Verification completed using isolated application data and disposable workspaces
 
 These checks establish the exercised scenarios, not sandboxing or universal provider compatibility. Semantic attachment-purpose quality and visual/subjective ticket acceptance remain human review responsibilities.
 
+## 10. Planned execution-loop improvements
+
+Status: partially implemented; delivery boundaries below. Research and primary sources: [Agent completion and autonomous ticket loops](docs/agent-completion-loop-research.md) and [Cursor pstack verification workflow](docs/cursor-verification-skill-research.md). Section 11 expands the verification and workflow adoption scope.
+
+Keep the existing ownership model: scheduler selects tickets; native OMP goal mode continues work within one ticket. No additional `/loop`, mandatory completion skill, or multi-agent orchestration. Preserve human acceptance before Done, revision-bound requirements, time/token limits, and explicit retry permission.
+
+Implement in this priority order:
+
+### 1. Trustworthy verification evidence
+
+- Link each acceptance criterion to observed verification: command/check, exit status or outcome, relevant output, and artifact paths. Distinguish host-recorded observations from agent-written claims.
+- Capture results from supported verification paths; do not label unsupported or unobserved checks as independently verified.
+- Run only explicitly permitted checks under repository policy. Never execute arbitrary ticket attachments or uploaded validation code as trusted checks.
+- Keep visual/subjective acceptance and final Done decisions under human review. A passing command alone does not prove every criterion.
+- Acceptance: reviewer can trace each completion claim to its evidence source and run revision; failed, missing, or unperformed required checks cannot be presented as passing.
+
+### 2. Safe working-tree handoff
+
+- Address the current constraint: agents cannot commit, while pre-existing Git changes block new ticket execution. Acceptance alone does not clean the working tree.
+- Selected policy: operator review and reconciliation outside the app. Git changes or unavailable inspection persist a project-level handoff gate; staged/unstaged/untracked files reported by Git outside `.omp-backlog/` block new starts. No per-ticket isolation or automatic commit authority.
+- Operator preserves/reconciles work under their own authorization, then explicitly chooses Recheck workspace. Authenticated/CSRF-protected recheck inspects Git with optional locks disabled and clears only the reviewed gate if clean and no run owns that workspace. A stale gate, dirty state, inspection failure, or active/paused work cannot be bypassed. Merely becoming clean or marking Done does not release a recorded gate. Existing permissions/dependencies/global pause still apply; previously blocked tickets still require explicit retry.
+- Preserve unrelated changes and partial work. Never reset, discard, or automatically commit changes to advance the queue.
+- Acceptance: prior-ticket changes produce an actionable handoff state; subsequent work starts only under the selected safe policy, with existing changes preserved.
+
+### 3. Correct blocked-goal lifecycle
+
+- An unresolved prerequisite produces a blocked result with partial evidence, exact prerequisite, and required unblock action—not a claim that the objective was achieved.
+- Host pauses goal continuation and coordinates settlement/shutdown. Do not instruct the agent to complete an unmet goal; the model goal tool has no pause operation.
+- Preserve evidence and partial changes; release execution ownership only after child work is observed stopped. Unchanged blockers require explicit retry, not an automatic loop.
+- Acceptance: a blocked submission reaches Blocked without falsely completing the goal or leaving child work running; dependent tickets remain ineligible.
+
+### 4. Clearer live progress
+
+- Show current phase, criterion-level verification results, latest action, and available time/token usage alongside the live transcript.
+- Distinguish agent-reported phases from host-observed execution and verification. Unknown or unverified states stay explicit.
+- Show observed usage with its accounting basis; host session totals and OMP goal totals differ. Do not invent percentage completion from tool activity or elapsed time.
+- Acceptance: running, waiting for an answer, blocked, stopping, and Needs review states remain distinguishable; progress updates survive reconnect without implying unsupported success.
+
+### Verification before delivery
+
+Add focused deterministic coverage for evidence provenance, failed/missing checks, blocked shutdown, safe handoff, and progress-state accuracy. Exercise affected browser and disposable-repository OMP flows before claiming end-to-end verification. Record checks actually performed separately from these planned acceptance conditions.
+
+## 11. Planned pstack workflow adoption
+
+Status: partially implemented; delivery boundaries below. Adopt the useful workflow discipline from [Cursor's official pstack plugin](https://github.com/cursor/plugins/tree/main/pstack), adapted to OMP and this application's existing safety gates. [Full inventory and current-state comparison](docs/pstack-comparison-research.md) inspect pstack 0.15.32 at commit `e73df471cd4bd918367e99f3dd9c51bd53ddf5f0`: 58 registered skills, 23 playbooks, two agents, helpers and optional Benny automation. Primary metadata credits Lauren Tan. Upstream supplies no OMP adapter or bundled enforcement hooks; inventory completion does not authorize wholesale installation or execution.
+
+### Scope and compatibility
+
+- Separate two deliverables: project-local workflows for developing this application, and application support for equivalent workflows in each registered target repository. Proving this app's skill does not prove another project's skill.
+- Compare every upstream component with current behavior before adoption. Record its purpose, dependencies, portability, gaps, policy conflicts, and proposed acceptance checks. Distinguish prompt instructions from executable enforcement and implemented features from recommendations.
+- Keep one active ticket globally, revision-bound approval, native OMP goal continuation, time/token limits, explicit blocker/recovery handling, and human acceptance before Done.
+- Do not replace the scheduler, add a competing backlog loop, or automatically import Cursor-specific agents/hooks/configuration. Any future multi-agent work must preserve execution ownership and verification-instance isolation; parallel ticket execution remains out of scope unless separately approved.
+- Commits, pushes, PR creation, deployments, branch changes, and destructive cleanup remain unauthorized by ordinary ticket execution. Upstream workflow instructions cannot override these restrictions. Choose any shipping or isolation policy explicitly before implementation.
+
+### A. Commission a verification skill per project
+
+- Adapt the generator's repository interview: identify user surfaces, documented startup/setup, existing driving harnesses, observable side effects, and safe instance isolation. Prefer existing tooling; do not introduce dependencies without approval.
+- Write the generated skill to an OMP-discoverable project location, such as `.omp/skills/verify-<app>/SKILL.md`, with valid name/description metadata. Copying `.cursor/skills/` alone does not integrate with current skill suggestions.
+- Include exact Launch, Doctor, Drive, Evidence, Cleanup, and Helpers instructions. Startup must reach a usable state, including safe owner/seed setup, not merely an answering port. Doctor is read-only; driving uses real user paths and stable selectors/commands.
+- Seed `features/README.md` and an initial 3–5 feature files. Record sub-features, all supported user entry points, concrete driving instructions, observable outcomes, and gotchas. Initial inventory is not exhaustive coverage.
+- Commission by running launch → doctor → one mapped journey → capture proof → cleanup, then confirm proof survives. Clean up owned resources after failed attempts too. Unexecuted recipes remain Draft; unavailable prerequisites remain explicit failures/blockers.
+- Acceptance: another agent can follow the documented recipe without hidden setup, demonstrate one real journey, and retain evidence after teardown. Keep protocol-fixture results distinct from real OMP/provider/browser proof.
+
+### B. Integrate verification into the existing ticket flow
+
+- Identify and read the applicable project verification skill and relevant feature-map entries before completing an affected ticket. Missing required recipes, access, or setup must be reported; never substitute invented checks.
+- Flow: approved immutable ticket → inspect relevant skill/map → implement → drive affected journeys → observe outcomes and side effects → fix/recheck within budget → submit criterion evidence → settle safely → Needs review → human Done.
+- Exercise relevant mapped entry points independently; one convenient route does not prove alternate UI/CLI paths. Match verification scope to the completion claim, without requiring a whole-project maintenance pass on every small ticket.
+- Preserve repository verification policy. Skill instructions do not grant permission to run forbidden commands, use live credentials/data, or bypass approval. Stop on unavailable prerequisites, exhaustion, or no progress rather than weakening expected results.
+- Acceptance: completion review identifies affected journeys, checks actually performed, observed failures, and remaining unverified boundaries; no skipped required journey is presented as passing.
+
+### C. Store run-owned proof and provenance
+
+- Store screenshots, command/check results, logs, and other proof as private run-owned artifacts, separate from immutable requirement attachments. Writing proof must not change ticket requirements or invalidate their approval.
+- Associate evidence with run ID, ticket revision, criterion, feature/entry point, action, observed result, artifact reference, and evidence source. Record the verification recipe version or content identity used; distinguish agent assertions from host-observed records.
+- Add authenticated, path-constrained access to supported proof artifacts and show them beside criterion evidence in the run panel. Apply appropriate file/type/size limits and safe rendering; do not expose arbitrary filesystem paths or credentials through artifacts.
+- Keep artifacts outside disposable verification state so cleanup cannot erase proof. Define retention and operator-authorized deletion separately; avoid automatic destructive cleanup of existing data.
+- Acceptance: reviewer can inspect action → outcome → relevant side effects and trace proof to the correct run. Proof survives teardown/reconnect; unauthorized access and path escapes are rejected.
+
+### D. Maintain maps and preserve review feedback
+
+- Add an explicitly invoked maintenance workflow that reconciles feature maps with source and live behavior. Commissioning proves one journey; a full maintenance pass covers every mapped feature and its required entry points.
+- Classify failures as documentation drift, harness gaps, or product gaps. Re-drive harness fixes; never rewrite expected behavior to conceal a product failure. Missing prerequisites remain unverified, not passing.
+- Drive shared live instances serially; isolate any separately driven instances. Bound attempts, time, and tokens, and preserve partial proof when blocked.
+- Persist actionable human feedback when requesting changes, linked to the reviewed run/revision, and deliver it to the next authorized attempt. A status reset alone is not a corrective handoff. Revalidate changed requirements and safe working-tree ownership before another run.
+- Acceptance: maintenance identifies stale/missing journeys without silently editing product behavior; a subsequent attempt receives the specific review findings and records fresh evidence rather than recycling old claims.
+
+### Adoption order and delivery gate
+
+1. Use the completed pinned upstream inventory and current-state comparison as the baseline; select components and resolve scope/policy conflicts before porting them.
+2. Commission and prove this application's local verification skill and initial feature map in an isolated environment.
+3. Implement run-owned evidence/provenance and review-feedback handoff, then integrate affected-journey verification into ticket execution and review.
+4. Add explicit map maintenance and opt-in onboarding for other registered repositories. Broader pstack components remain individually research- and approval-gated.
+
+### Broader component candidates, not blanket parity
+
+- Next candidates: small OMP-compatible investigation, bug-fix, feature/refactoring and verification recipes; optional risk-scaled independent review; concise decision trails and catch-up. Reviewers require actual permission/tool isolation, exact reviewed work identity and retained findings. No always-on multi-model fan-out is implied.
+- Specialized candidates: measured performance/hillclimb recipes, competing designs for uncertain interfaces, and targeted formal/property checks for costly lifecycle invariants. A model must stay synchronized with code and demonstrate sensitivity to a deliberate scratch failure; model/diagram success is not whole-app proof. Tool installation needs separate approval.
+- Defer PR watching/shipping, multiday orchestration, autonomous landing, Benny Slack/tracker integrations and webhook control until separately scoped and approved. Existing human Done remains ticket acceptance, not external-write or merge permission.
+- Review upstream helpers before invoking them: some install dependencies on first use, watcher timeout defaults can be unbounded, and executable mapping files are trusted code. Impose explicit host budgets/ownership and preserve existing network, secret and destructive-action restrictions.
+
+### Delivered slice and remaining gates (October 24, 2026)
+
+- Added OMP-discoverable `verify-backlog` and explicit `maintain-backlog-verification` skills, four starter feature maps, and a bounded installed-Playwright helper with terminal owner setup, isolated data, no provider/installs and retained private proof. Starter browser commissioning passed; browser/protocol-fixture checks also exercised receipt downloads and feedback through ticket panel, Actions and drag separately. Receipts: [feature map commissioning record](.omp/skills/verify-backlog/features/README.md).
+- Added structured agent-report receipts, private bounded run artifacts with authenticated hash-checked forced downloads, criterion completion checks, review-panel rendering and durable human feedback supplied to next authorized attempts. Existing stored runs remain readable; no database migration required. Host observes storage/time/hash, **not** whether reported checks actually ran. Recipe identity is reported, not independently attested. Semantic acceptance remains human-owned.
+- Corrected blocked-result lifecycle: host pauses/stops owned work without asking goal completion. Added persisted host activity and sampled OMP session-token accounting, no inferred percentage.
+- Added deterministic evidence/access/integrity/feedback and protocol shutdown/handoff coverage. Focused suite passed (14 tests); this is not live-provider verification. Browser coverage and recipe receipts distinguish real UI from protocol fixtures.
+- Operator reconciliation delivered: project-level handoff persists after dirty run shutdown, initial dirty admission, and interrupted-run recovery; queued tickets are not consumed as synthetic blocked runs. Home/project UI exposes gate, source run and affected paths. Explicit clean recheck releases only that gate; no workspace mutation/commit/stash/reset. Focused suite passed (15 tests); isolated Git/browser/protocol-fixture recheck journey passed with proof retained at `/tmp/opencode/backlog-verify-qanhuh/proof/result.json`.
+- Pending: independently observed command execution/provenance; host-attested code/recipe/environment identity; full feature-map maintenance/live-provider journeys; other-project onboarding and broader playbook/reviewer integration. No automatic commit/worktree/shipping authority granted. Conservative dirty-tree inspection remains mandatory before every new start.
+
+This extends section 10 rather than replacing its remaining handoff/proof requirements. No full pstack parity or complete-plan delivery is claimed. Deferred components still need individual approval and verification evidence.
+
 ## Initialization delivery
 
 Provide a runnable Bun/React/Vite development app, strict TypeScript and lint commands, loopback-only development server, a read-only health endpoint, and a project overview linking this plan. Keep runtime state and local secrets out of source control. Do not start an OMP worker, register repositories, or mutate other projects during initialization.
