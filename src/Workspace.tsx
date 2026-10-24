@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Button, Checkbox, Drawer, Input, InputNumber, Modal, Popover, Segmented, Select, Tag } from 'antd';
-import { ArrowsInIcon, ArrowsOutIcon, ColumnsIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, PlusIcon, SlidersHorizontalIcon } from '@phosphor-icons/react';
+import { Button, Drawer, Input, InputNumber, Modal, Popover, Segmented, Select, Tag } from 'antd';
+import { ArrowsInIcon, ArrowsOutIcon, FolderIcon, PlusIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
 import { attachmentReference } from './attachments';
@@ -9,6 +9,7 @@ import type { AttachmentReference, StagedAttachment } from './attachments';
 import MarkdownEditor from './MarkdownEditor';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import TicketBoard from './TicketBoard';
 
 const RichMarkdownEditor = lazy(() => import('./RichMarkdownEditor'));
 
@@ -24,10 +25,6 @@ const queueStatuses: Ticket['status'][] = ['draft', 'ready', 'running', 'stoppin
 
 function Status({ value }: { value: string }) { return <Tag className={`badge status-${value}`}>{value.replaceAll('_', ' ')}</Tag>; }
 
-function StatusLabel({ value }: { value: Ticket['status'] }) {
-  return <span className={`status-label status-dot-${value}`}><span aria-hidden="true" />{value.replaceAll('_', ' ')}</span>;
-}
-
 export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const { repoId, ticketId, runId } = useParams();
   const { pathname } = useLocation();
@@ -39,29 +36,15 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const [pending, setPending] = useState('');
   const [notice, setNotice] = useState('');
   const [modal, modalContext] = Modal.useModal();
-  const [layout, setLayout] = useState(() => localStorage.getItem('omp-ticket-layout') === 'list' ? 'list' : 'board');
-  const [showEmpty, setShowEmpty] = useState(() => localStorage.getItem('omp-ticket-empty') === 'true');
-  const [hiddenStatuses, setHiddenStatuses] = useState(() => (localStorage.getItem('omp-ticket-hidden') ?? '').split(',').filter(value => queueStatuses.includes(value as Ticket['status'])));
-  const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState(false);
   const returnFocus = useRef<HTMLAnchorElement | null>(null);
   const newTicketLink = useRef<HTMLAnchorElement | null>(null);
-  useEffect(() => {
-    localStorage.setItem('omp-ticket-layout', layout);
-    localStorage.setItem('omp-ticket-empty', String(showEmpty));
-    localStorage.setItem('omp-ticket-hidden', hiddenStatuses.join(','));
-  }, [layout, showEmpty, hiddenStatuses]);
   const repo = snapshot.repos.find(value => value.id === repoId);
   const tickets = snapshot.tickets.filter(value => value.repoId === repo?.id).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const ticket = tickets.find(value => value.id === ticketId);
   const selectedRun = snapshot.runs.find(value => value.id === runId);
   const activeRun = snapshot.runs.find(value => activeStatuses.includes(value.status));
   const busy = !!pending;
-  const matchingTickets = tickets.filter(value => `${value.id} ${value.title}`.toLowerCase().includes(search.trim().toLowerCase()));
-  const columns = queueStatuses.map(status => ({ status, tickets: matchingTickets.filter(value => value.status === status) }));
-  const visibleColumns = matchingTickets.length === 0 && search.trim() ? [] : columns.filter(column => !hiddenStatuses.includes(column.status) && (showEmpty || column.tickets.length > 0));
-  const hiddenTickets = matchingTickets.filter(value => hiddenStatuses.includes(value.status)).length;
-  const emptyStatuses = columns.filter(column => column.tickets.length === 0 && !hiddenStatuses.includes(column.status)).length;
   const queueSummaries = new Map<string, { total: number; counts: Partial<Record<Ticket['status'], number>> }>();
   for (const item of snapshot.tickets) {
     if (item.removed) continue;
@@ -123,31 +106,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
         </div>
       </header>
       <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. A current run continues.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and the global slot still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'}</p>
-      <section className="ticket-workspace" aria-label="Project tickets">
-        <div className="board-toolbar">
-          <Segmented aria-label="Ticket layout" value={layout} onChange={setLayout} options={[{ value: 'board', label: <span className="view-label"><ColumnsIcon size={16} aria-hidden="true" />Board</span> }, { value: 'list', label: <span className="view-label"><ListBulletsIcon size={16} aria-hidden="true" />List</span> }]} />
-          <Input className="ticket-search" aria-label="Search tickets" placeholder="Search by title or ID…" prefix={<MagnifyingGlassIcon size={16} aria-hidden="true" />} value={search} allowClear onChange={event => setSearch(event.target.value)} />
-          <Popover trigger="click" placement="bottomRight" title="Display" content={<div className="board-display">
-            <Checkbox checked={showEmpty} onChange={event => setShowEmpty(event.target.checked)}>Show empty statuses</Checkbox>
-            <div className="display-statuses"><strong>Visible statuses</strong>{columns.map(column => <Checkbox key={column.status} checked={!hiddenStatuses.includes(column.status)} onChange={event => setHiddenStatuses(previous => event.target.checked ? previous.filter(value => value !== column.status) : [...previous, column.status])}><StatusLabel value={column.status} /><span className="display-count">{column.tickets.length}</span></Checkbox>)}</div>
-            <Button type="link" onClick={() => { setShowEmpty(false); setHiddenStatuses([]); }}>Reset display</Button>
-          </div>}><Button className="display-button" icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />}>Display{hiddenTickets > 0 ? ` · ${hiddenTickets} hidden` : ''}</Button></Popover>
-        </div>
-        <div className={`ticket-surface ${layout === 'list' ? 'ticket-list-view' : 'kanban-board'}`} role="region" aria-label={layout === 'list' ? 'Tickets grouped by status' : 'Ticket status board'} tabIndex={0}>
-          {visibleColumns.map(column => <section className="kanban-column" key={column.status} aria-labelledby={`column-${column.status}`}>
-            <div className="kanban-heading"><h2 id={`column-${column.status}`}><StatusLabel value={column.status} /></h2><span className="kanban-count">{column.tickets.length}</span></div>
-            <ol className="ticket-list">{column.tickets.map(value => <li key={value.id}><Link className={`ticket-card ${ticket?.id === value.id ? 'selected' : ''}`} aria-current={ticket?.id === value.id ? 'page' : undefined} onClick={event => { returnFocus.current = event.currentTarget; }} to={`/projects/${encode(repo.id)}/tickets/${encode(value.id)}`}>
-              <span className="ticket-meta">{value.id}</span><strong>{value.title || value.id}</strong>
-              {(value.removed || value.dependencies.length > 0) && <small>{value.removed ? 'Ticket file removed' : `Depends on ${value.dependencies.join(', ')}`}</small>}
-              {value.error && <span className="ticket-error" title={value.error}>{value.error}</span>}
-              {value.approvedRevision === value.revision && <span className="permission-note">✓ Revision approved</span>}
-            </Link></li>)}</ol>
-            {column.tickets.length === 0 && <p className="kanban-empty">No tickets in this status</p>}
-          </section>)}
-          {visibleColumns.length === 0 && <div className="board-empty"><FolderIcon size={32} weight="duotone" aria-hidden="true" /><h2>{tickets.length === 0 ? 'A clear board. A place to start.' : matchingTickets.length === 0 ? 'No matching tickets' : 'All matching tickets are hidden'}</h2><p>{tickets.length === 0 ? 'Create a draft, describe the change, and define what done looks like.' : matchingTickets.length === 0 ? 'Try another title or ticket ID.' : 'Open Display to reveal their statuses.'}</p>{tickets.length === 0 ? <Link to={`/projects/${encode(repo.id)}/tickets/new`}>Create your first ticket</Link> : <Button onClick={() => { setSearch(''); setHiddenStatuses([]); }}>Show all tickets</Button>}</div>}
-        </div>
-        <footer className="board-footer"><span>{matchingTickets.length} of {tickets.length} tickets{hiddenTickets > 0 && <span className="warning-text"> · {hiddenTickets} hidden by Display</span>}{!showEmpty && emptyStatuses > 0 && ` · ${emptyStatuses} empty statuses hidden`}</span><span>{activeRun ? `${activeRun.repoId === repo.id ? 'Active run' : 'Global slot in use'} · ${activeRun.ticketId}` : 'No active run'}</span></footer>
-      </section>
+      <TicketBoard key={repo.id} repo={repo} tickets={tickets} snapshot={snapshot} selectedId={ticket?.id} busy={busy} api={api} execute={execute} onOpen={element => { returnFocus.current = element; }} />
       <Drawer className="ticket-drawer" title={creating ? 'New ticket' : ticket?.id ?? 'Ticket unavailable'} open={creating || !!ticketId} onClose={() => { void navigate(`/projects/${encode(repo.id)}`); }} size={expanded ? '100vw' : 'min(800px, 100vw)'} destroyOnHidden afterOpenChange={open => { if (!open) { setExpanded(false); (returnFocus.current?.isConnected ? returnFocus.current : newTicketLink.current)?.focus({ preventScroll: true }); } }} extra={<Button type="text" aria-label={expanded ? 'Restore ticket panel' : 'Expand ticket panel'} icon={expanded ? <ArrowsInIcon size={18} /> : <ArrowsOutIcon size={18} />} onClick={() => setExpanded(value => !value)} />}>
         {creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : ticketId ? <div className="empty-state"><h2>Ticket not found</h2><p>This ticket is not available in this project.</p><Link to={`/projects/${encode(repo.id)}`}>Return to board</Link></div> : null}
       </Drawer>
