@@ -151,7 +151,7 @@ export default function App() {
         colorBorder: palette.line,
         colorError: palette.danger,
         colorWarning: palette.warning,
-        borderRadius: 10,
+        borderRadius: 0,
         fontFamily: "'IBM Plex Mono', monospace",
         fontSize: 15,
         fontSizeSM: 13,
