@@ -5,6 +5,13 @@
 - `README.md`: setup and operating instructions.
 - `docs/current-agent-workflow.md`: implemented execution/review lifecycle and limitations.
 - `PLAN.md`: scope, delivered work and remaining gates. Do not describe planned work as implemented.
+- `docs/design-language.md`: required reference for frontend changes. Use the project board as the visual baseline; reuse existing Ant Design components, theme tokens, typography, control sizing and responsive patterns.
+
+## UI consistency
+
+- Preserve the shared full-width workspace, 24px bold page titles, 38px standard controls and square bordered surfaces. Do not introduce page-specific display typography or a second component system.
+- Keep manual ticket creation in its drawer and agent drafting on its separate Discuss / Review ticket page. Visual cleanup must preserve safety explanations, blocking feedback, keyboard access and unsaved-work protection.
+- Verify affected surfaces at desktop and mobile widths in a dark theme and Light. Keep `docs/design-language.md` current when intentionally changing shared conventions.
 
 ## Tickets and verification skills
 

@@ -4,6 +4,8 @@ Local, single-owner website for Markdown backlogs and OMP RPC execution. Approve
 
 See [Current agent workflow](docs/current-agent-workflow.md) for implemented changes, end-to-end ticket execution, evidence/review gates, operator reconciliation, verification status and remaining adoption work.
 
+UI conventions and consistency checks: [Workspace design language](docs/design-language.md). The project board is the reference for shared typography, controls, surfaces and responsive layout.
+
 ## Start
 
 Requires Linux (process recovery uses `/proc`), Bun 1.3+, and an installed, configured `omp` for agent execution.
@@ -54,6 +56,7 @@ Opening a ticket keeps the board in place and shows a right-side panel with read
 - `/projects/new`: authenticated local-folder picker.
 - `/projects/:repoId`: project permissions and backlog.
 - `/projects/:repoId/tickets/new`: focused new-ticket panel.
+- `/projects/:repoId/tickets/new/agent`: dedicated agent drafting page with Discuss / Review ticket views.
 - `/projects/:repoId/tickets/:ticketId`: readable ticket panel, editor, and run history.
 - `/runs/:runId`: run details.
 - `/settings`: workspace settings.
@@ -102,15 +105,15 @@ Reference: [Synthetic records](attachments/records.json)
 
 ### Create with agent (optional)
 
-**Manual Markdown** and Markdown import still create tickets directly, without connecting to an agent. **New ticket → Create with agent** adds a separate drafting conversation:
+**New ticket** opens the manual Markdown/import drawer and creates tickets directly, without an agent. The sibling **Create with agent** action opens a dedicated page; the board and manual drawer are not stacked behind the conversation.
 
-1. Choose **Connect to OMP for drafting** explicitly. Select a discovered model and its supported thinking level; an unavailable OMP default requires choosing an available model, never a silent fallback. These choices do not change execution settings.
-2. Describe the feature; use existing `@file`, quoted-space-path and `/skill:NAME` completion, or add/paste references. **Check context** shows what the host can supply. Use exact skill names; punctuation attached to a mention is part of its name.
+1. In **Discuss**, choose **Connect to OMP** explicitly. Select a discovered model and its supported thinking level near the composer; an unavailable OMP default requires choosing an available model, never a silent fallback. These choices do not change execution settings.
+2. Describe the feature in the Markdown prompt; use existing `@file`, quoted-space-path and `/skill:NAME` completion, or paste files/images directly into that editor. There is no separate attachment picker. Expand **Model context** for **Check context** and supplied references; errors and unresolved preparation expand inspection automatically. Use exact skill names; punctuation attached to a mention is part of its name.
 3. Replace unreadable references or explicitly mark them **Reference only (exclude bytes)** before Send. Complete UTF-8 text and supported PNG/JPEG/GIF images can be supplied. PDF/Office and WebP uploads are retained references, not automatically understood documents. Preparation reports transmitted bytes, not model understanding.
 4. Discuss and refine the proposal. **Cancel turn** stops only the owned drafting child and retains available text; continuing requires a new conversation. Errors never replay a turn automatically.
 
-   **Disconnect from OMP** also stops an idle or active drafting session without clearing its conversation, unsent prompt, ticket editor or staged files. Sending again requires Connect and confirmation before replacing retained messages. **Clear conversation** separately discards messages; it also works after disconnect.
-5. **Use draft** transfers the proposal into the existing Markdown/Preview editor, with confirmation before replacing unsaved human edits. Review the ID, dependencies, criteria and purpose-labeled attachment links.
+   **Disconnect** also stops an idle or active drafting session without clearing its conversation, unsent prompt, ticket editor or staged files. Sending again requires Connect and confirmation before replacing retained messages. **Clear conversation** separately discards messages; it also works after disconnect.
+5. **Review proposal** transfers the proposal into **Review ticket**, with confirmation before replacing unsaved human edits. This view shows the Markdown/Preview editor instead of chat. Review the ID, dependencies, criteria and purpose-labeled attachment links. Switch back to **Discuss** without losing your conversation, unsent prompt, files or review edits; another proposal never automatically overwrites them.
 6. **Create ticket** validates the complete Markdown and attachments before publishing them together. Confirmation binds the reviewed payload and current project mode; changes or expiry require review again. **Automatic may start implementation after creation** under standing permission. Cancel creates nothing; Approved-only still requires approval, and Paused prevents starts.
 
 Drafts/uploads remain tab-local until creation; reload discards the conversation and staged files. Changing views preserves them. Assisted publication retries within the ten-minute confirmation lifetime return the same unchanged ticket, not a duplicate. Backend restart/expiry requires renewed review; existing IDs are never overwritten. Atomic assisted publication requires Linux/glibc `renameat2(RENAME_NOREPLACE)` and filesystem support; unsupported environments fail closed while manual creation remains available.

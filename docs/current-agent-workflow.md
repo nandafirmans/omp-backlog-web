@@ -13,7 +13,7 @@ This guide describes the implemented workflow, not full pstack parity. See [PLAN
 | Correct blocked shutdown | Host pauses goal continuation and stops owned child work without asking the model to complete an unmet goal. |
 | Progress visibility | Run panel shows host-observed activity, deadline/budget and last reported session-token sample with its accounting basis. It does not infer percentage completion. |
 | Operator reconciliation | Git changes or unavailable Git inspection create a persistent project gate. Operator reviews/reconciles outside the app, then explicitly requests a clean recheck before new work can start. |
-| Optional ticket drafting | New ticket retains manual Markdown/import and adds an explicitly connected, capability-restricted OMP conversation with model/thinking controls, file/skill context and uploads. Only reviewed explicit creation publishes a ticket; drafting never implements or approves it. |
+| Optional ticket drafting | New ticket retains its manual Markdown/import drawer. The sibling Create with agent action opens a dedicated Discuss / Review ticket page with an explicitly connected, capability-restricted OMP conversation, model/thinking controls and pasted file/skill context. Only reviewed explicit creation publishes a ticket; drafting never implements or approves it. |
 
 ### Agent-assisted creation
 
@@ -26,6 +26,8 @@ Assisted creation stages the complete validated payload outside the watched tick
 Verification for this addition: full Bun suite passed (70 tests, 628 assertions), changed-file ESLint and strict TypeScript passed. Isolated real-browser/live-provider drafting passed with `openai-codex/gpt-6.1-sol`, thinking `low`, clarification/follow-up, file/skill/text/image context, unsupported-PDF exclusion, editable Markdown/Preview handoff and complete three-attachment creation. Separate protocol-child browser checks covered cancellation, partial output, sanitized provider failure and unsaved navigation; these error fixtures are not live-provider failures. Real OMP executable-discovery positive-control/restricted-startup sentinel check passed without inference; the synthetic uncredentialed restricted profile itself returned a failed metadata snapshot, not provider-success evidence.
 
 Private proof is retained under `/tmp/backlog-agent-smoke-PyWw4u/proof`. Browser smoke kept global scheduling paused and launched zero ticket implementation runs; it does not establish live implementation execution or exhaustive model/provider coverage.
+
+The dedicated drafting-page UI was separately exercised in a real browser using actual Workspace/MarkdownEditor components and styles with an in-memory synthetic API: independent manual drawer and agent page, proposal handoff, retained unsent prompt/pasted file/human review edits across views, canceled overwrite, unresolved-context blocking, disconnect and route-unmount DELETE requests, canceled navigation and publication, and confirmed synthetic publication with the staged attachment. Desktop and 390px mobile surfaces were inspected; no horizontal document overflow was observed. Changed-file ESLint passed. This frontend smoke did not run OMP, validate real backend publication, or prove provider/process behavior; the earlier live-provider evidence above predates this layout change.
 
 ## Normal ticket lifecycle
 
