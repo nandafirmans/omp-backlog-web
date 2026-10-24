@@ -36,6 +36,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const settingsView = pathname === '/settings';
   const picking = pathname === '/projects/new';
   const creating = !!repoId && pathname.endsWith('/tickets/new');
+  const assisting = !!repoId && pathname.endsWith('/tickets/new/agent');
   const [pending, setPending] = useState('');
   const [notice, setNotice] = useState('');
   const [modal, modalContext] = Modal.useModal();
@@ -101,12 +102,14 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
         })}
       </ul> : <div className="panel empty-state"><FolderIcon className="project-folder-icon" size={40} weight="duotone" aria-hidden="true" /><h2>No projects yet</h2><p>Add a local folder to get started. New projects start paused.</p></div>}
     </section> : settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : repo ? <>
+      {assisting ? <TicketEditor key={`agent-${repo.id}`} assisted repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : <>
       <header className="project-header">
         <div className="project-title"><Link to="/">Projects</Link><span aria-hidden="true">/</span><h1>{repo.name}</h1></div>
         <div className="project-controls">
           <Popover trigger="click" placement="bottomRight" title="Project settings" content={<div className="project-settings"><code className="path">{repo.path}</code>{!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}<Link to="/">Choose another project</Link></div>}><Button type="text">Project settings</Button></Popover>
           <label className="execution-control">Execution<Select aria-label="Execution permission" disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={Object.entries(modes).map(([value, label]) => ({ value: value as Mode, label }))} /></label>
           <Link className="new-ticket-link" ref={newTicketLink} onClick={event => { returnFocus.current = event.currentTarget; }} to={`/projects/${encode(repo.id)}/tickets/new`}><PlusIcon size={16} aria-hidden="true" />New ticket</Link>
+          <Link className="agent-ticket-link" to={`/projects/${encode(repo.id)}/tickets/new/agent`}>Create with agent</Link>
         </div>
       </header>
       <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. A current run continues.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and the global slot still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'}</p>
@@ -118,15 +121,16 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
       <Drawer className="ticket-drawer" title={creating ? 'New ticket' : ticket?.id ?? 'Ticket unavailable'} open={creating || !!ticketId} onClose={() => { void navigate(`/projects/${encode(repo.id)}`); }} size={expanded ? '100vw' : 'min(800px, 100vw)'} destroyOnHidden afterOpenChange={open => { if (!open) { setExpanded(false); (returnFocus.current?.isConnected ? returnFocus.current : newTicketLink.current)?.focus({ preventScroll: true }); } }} extra={<Button type="text" aria-label={expanded ? 'Restore ticket panel' : 'Expand ticket panel'} icon={expanded ? <ArrowsInIcon size={18} /> : <ArrowsOutIcon size={18} />} onClick={() => setExpanded(value => !value)} />}>
         {creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : ticketId ? <div className="empty-state"><h2>Ticket not found</h2><p>This ticket is not available in this project.</p><Link to={`/projects/${encode(repo.id)}`}>Return to board</Link></div> : null}
       </Drawer>
+      </>}
     </> : !selectedRun && <section className="panel empty-state"><h1>Page not found</h1><p>This project, run, or page is unavailable.</p><Link to="/">Return Home</Link></section>}
     {selectedRun && <RunPanel run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => { void navigate(`/projects/${encode(selectedRun.repoId)}/tickets/${encode(selectedRun.ticketId)}`); }} />}
     {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => { void navigate('/'); }} onRegistered={id => { void navigate(`/projects/${encode(id)}`); }} />}
   </>;
 }
 
-interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; api: RequestApi; execute: Execute; busy: boolean; runs: Run[]; onCreated: (id: string) => void; onRun: (id: string) => void }
+interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; api: RequestApi; execute: Execute; busy: boolean; runs: Run[]; onCreated: (id: string) => void; onRun: (id: string) => void; assisted?: boolean }
 const template = '---\nid: T001\ntitle: \ndepends_on: []\n---\n\n[What to change and where.]\n\n[Constraints or reference, if needed.]\n\nDone when:\n- [Observable result.]\n- [How to verify it.]\n';
-function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, onCreated, onRun }: EditorProps) {
+function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, onCreated, onRun, assisted = false }: EditorProps) {
   const [draft, setDraft] = useState(ticket?.markdown ?? template);
   const latestDraft = useRef(draft);
   useEffect(() => { latestDraft.current = draft; }, [draft]);
@@ -139,8 +143,8 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   const [uploadError, setUploadError] = useState('');
   const [stagedCount, setStagedCount] = useState(0);
   const [draftFiles, setDraftFiles] = useState<{ name: string; file: File }[]>([]);
-  const [agentVisible, setAgentVisible] = useState(false);
-  const [assistedUsed, setAssistedUsed] = useState(false);
+  const [agentVisible, setAgentVisible] = useState(assisted);
+  const [assistedUsed, setAssistedUsed] = useState(assisted);
   const [agentDirty, setAgentDirty] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -382,10 +386,10 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   }
 
 
-  return <div className="panel editor-panel">
+  return <div className={assisted ? 'panel editor-panel agent-creation-page' : 'panel editor-panel'}>
     {modalContext}
     <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Discard changes" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Your unsaved ticket changes, agent conversation and staged files will be discarded. An owned drafting session will be stopped.</p></Modal>
-    <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>
+    {assisted ? <header className="agent-page-heading"><Link to={`/projects/${encode(repo.id)}`}>← {repo.name} / Project board</Link><h1>Draft ticket with OMP</h1><p className="muted">Discuss the change, then review the ticket before creating it. Drafts and files live in this tab; reloading loses them.</p><Segmented aria-label="Drafting view" disabled={editorBusy || uploading || hasServerTicket} options={['Discuss', 'Review ticket']} value={agentVisible ? 'Discuss' : 'Review ticket'} onChange={value => setAgentVisible(value === 'Discuss')} /></header> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}
     {stale && <div className="notice"><div><h3>Requirements changed{working ? ' during execution' : ' outside this editor'}.</h3><p>Your editor has not been overwritten. The current run keeps its immutable revision; changed requirements require new approval.</p></div></div>}
@@ -396,15 +400,14 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
     </>}
     {ticket && <div className="requirements-heading"><h3>Requirements</h3><Button disabled={actionsBusy || (editing && unsaved)} onClick={() => setEditing(value => !value)}>{editing ? 'Reading view' : 'Edit Markdown'}</Button></div>}
     {!editing && <article className="ticket-reading" aria-label="Ticket requirements"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => url.startsWith('attachments/') ? `${attachmentBase}${url.slice('attachments/'.length)}` : defaultUrlTransform(url)} components={{ a: ({ href, children }) => <a href={href} rel="noreferrer">{children}</a> }}>{draft.replace(/^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '')}</Markdown></article>}
-    {!ticket && <>
-      <div className="ticket-creation-method"><Segmented aria-label="Ticket creation method" disabled={editorBusy || uploading || hasServerTicket} options={['Manual Markdown', 'Create with agent']} value={agentVisible ? 'Create with agent' : 'Manual Markdown'} onChange={value => { const selected = value === 'Create with agent'; setAgentVisible(selected); if (selected) setAssistedUsed(true); }} /><p className="muted">Manual editing and import remain available. Switching views preserves this tab's conversation and files.</p></div>
-      <div hidden={!agentVisible}><AgentTicketDraft repoId={repo.id} api={api} files={draftFiles} onUpload={uploadFiles} onDirtyChange={setAgentDirty} onBusyChange={setAgentBusy} disabled={busy || publishing || uploading} onUseDraft={async markdown => {
+    {assisted && <>
+      <div className="agent-discuss-view" hidden={!agentVisible}><AgentTicketDraft repoId={repo.id} api={api} files={draftFiles} onUpload={uploadFiles} onDirtyChange={setAgentDirty} onBusyChange={setAgentBusy} disabled={busy || publishing || uploading} onUseDraft={async markdown => {
         if (latestDraft.current !== base.markdown && !await modal.confirm({ title: 'Replace unsaved editor text with the agent draft?', content: 'Your Markdown editor contains unsaved changes. Copy or download them first if you want to keep both versions. The conversation and staged attachment files will remain available.', okText: 'Replace editor text', cancelText: 'Keep my editor text', okButtonProps: { danger: true } })) return;
         setDraft(markdown); setConflict(''); setAssistedUsed(true); setAgentVisible(false);
       }} /></div>
     </>}
-    {editing && <form onSubmit={event => void save(event)}>
-      {!ticket && <details className="import-options"><summary>Import existing Markdown</summary><label className="import-draft">Markdown file<input type="file" disabled={editorBusy} accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={event => { const file = event.target.files?.[0]; if (!file) return; void file.text().then(text => { setDraft(text); setConflict(''); }).catch(cause => setConflict(message(cause))); event.target.value = ''; }} /><small>Explicit import only. Existing BACKLOG.md is never rewritten. Use a unique frontmatter id/title, describe what to change, and add Done when: bullets with observable results and how to verify them.</small></label></details>}
+    {editing && (!assisted || !agentVisible) && <form onSubmit={event => void save(event)}>
+      {!ticket && !assisted && <details className="import-options"><summary>Import existing Markdown</summary><label className="import-draft">Markdown file<input type="file" disabled={editorBusy} accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={event => { const file = event.target.files?.[0]; if (!file) return; void file.text().then(text => { setDraft(text); setConflict(''); }).catch(cause => setConflict(message(cause))); event.target.value = ''; }} /><small>Explicit import only. Existing BACKLOG.md is never rewritten. Use a unique frontmatter id/title, describe what to change, and add Done when: bullets with observable results and how to verify them.</small></label></details>}
       <div className="editor-tabs"><Segmented aria-label="Ticket view" options={['Markdown', 'Preview']} value={preview ? 'Preview' : 'Markdown'} onChange={value => setPreview(value === 'Preview')} /><span className="muted">{dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></div>
       {preview ? <div className="ticket-preview"><Suspense fallback={<p role="status" aria-live="polite">Loading editable Preview… Your Markdown is preserved.</p>}><RichMarkdownEditor value={draft} onChange={setDraft} disabled={editorBusy} onUpload={uploadFiles} attachmentBase={attachmentBase} attachmentUrls={attachmentUrls} /></Suspense></div> : <MarkdownEditor label="Ticket Markdown" value={draft} onChange={setDraft} repoId={repo.id} api={api} disabled={editorBusy} onUpload={uploadFiles} />}
       <div className="attachment-paste-status" aria-live="polite">

@@ -8,6 +8,8 @@
 :root {
   --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
   --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+  --page-title-size: 24px;
+  --control-height: 38px;
   font-family: var(--font-sans);
   font-size: 15px;
   font-weight: 400;
@@ -52,7 +54,7 @@ a, button { -webkit-tap-highlight-color: transparent; }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 p { line-height: 1.75; }
 h1, h2, h3, h4 { font-family: inherit; font-weight: 700; overflow-wrap: anywhere; }
-h1 { font-size: clamp(24px, 2.4vw, 34px); line-height: 1.3; letter-spacing: -1.2px; margin: 0; }
+h1 { font-size: var(--page-title-size); line-height: 1.3; letter-spacing: -.7px; margin: 0; }
 h2 { font-size: 18px; line-height: 1.5; letter-spacing: -.45px; margin: 0; }
 h3 { font-size: 16px; line-height: 1.6; margin: 0 0 12px; }
 h4 { font-size: 15px; margin: 0 0 12px; }
@@ -88,7 +90,7 @@ main > .ant-alert { margin-bottom: 20px; flex: none; }
 .workspace-main { display: flex; flex-direction: column; overflow: hidden; scrollbar-gutter: auto; }
 .home-main { padding-top: 28px; }
 .home-view { width: 100%; min-height: 100%; }
-.home-view h1 { font-size: 26px; letter-spacing: -.65px; }
+.home-view h1 { font-size: var(--page-title-size); letter-spacing: -.7px; }
 .home-view .section-heading { margin-bottom: 24px; }
 .home-view .section-heading p { margin: 6px 0 0; }
 .home-view .execution-strip { margin-bottom: 24px; }
@@ -103,9 +105,12 @@ main > .ant-alert { margin-bottom: 20px; flex: none; }
 .project-folder-meta { grid-column: 1 / -1; display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; color: var(--muted); font-size: 14px; }
 .project-queue { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 14px; font-size: 13px; }
 .project-queue > span { display: inline-flex; align-items: center; gap: 5px; }
-.home-action { display: inline-flex; align-items: center; min-height: 38px; font-weight: 600; }
-.home-action { border: 1px solid var(--accent); padding: 9px 16px; text-decoration: none; background: linear-gradient(120deg, var(--accent), color-mix(in srgb, var(--accent) 82%, white)); color: var(--surface); border-radius: 0; white-space: nowrap; box-shadow: 0 3px 18px color-mix(in srgb, var(--accent) 16%, transparent); font: 600 13px var(--font-mono); }
-.home-action:active { transform: translateY(1px); }
+/* Route actions share button geometry without replacing router navigation. */
+.home-action, .new-ticket-link, .agent-ticket-link { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: var(--control-height); padding: 8px 15px; border: 1px solid var(--line); border-radius: 0; white-space: nowrap; text-decoration: none; color: var(--text); background: var(--surface-elevated); font: 600 13px/20px var(--font-mono); }
+.home-action, .new-ticket-link { border-color: var(--accent); color: var(--surface); background: linear-gradient(120deg, var(--accent), color-mix(in srgb, var(--accent) 82%, white)); }
+.home-action:hover, .new-ticket-link:hover { color: var(--surface); filter: brightness(1.08); }
+.agent-ticket-link:hover { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+.home-action:active, .new-ticket-link:active, .agent-ticket-link:active { transform: translateY(1px); }
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
 .toolbar a { font-size: 14px; }
 .section-heading { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 20px; }
@@ -140,13 +145,11 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .project-header { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; }
 .project-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
 .project-title > a, .project-title > span { font-size: 14px; color: var(--muted); }
-.project-title h1 { font-size: 24px; letter-spacing: -.7px; }
+.project-title h1 { font-size: var(--page-title-size); letter-spacing: -.7px; }
 .project-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .project-settings { display: grid; gap: 12px; max-width: min(360px, 80vw); }
 .execution-control { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
 .execution-control .ant-select { min-width: 190px; }
-.new-ticket-link { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 10px 15px; background: linear-gradient(120deg, var(--accent), color-mix(in srgb, var(--accent) 82%, white)); color: var(--surface); border: 1px solid var(--accent); border-radius: 0; text-decoration: none; font: 600 13px var(--font-mono); box-shadow: 0 3px 18px color-mix(in srgb, var(--accent) 18%, transparent); }
-.new-ticket-link:hover { color: var(--surface); filter: brightness(1.08); }
 .execution-context { margin: 10px 0 20px; font-size: 13px; color: var(--muted); flex: none; }
 .path { font-size: 13px; line-height: 1.8; color: var(--muted); overflow-wrap: anywhere; }
 .ticket-workspace { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 0; background: color-mix(in srgb, var(--surface-inset) 45%, transparent); overflow: hidden; }
