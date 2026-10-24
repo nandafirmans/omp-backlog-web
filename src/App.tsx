@@ -153,13 +153,11 @@ export default function App() {
         colorWarning: palette.warning,
         borderRadius: 0,
         fontFamily: "'IBM Plex Mono', monospace",
-        fontSize: 15,
-        fontSizeSM: 13,
+        fontSize: 13,
         fontWeightStrong: 700,
-        controlHeight: 38,
         motion: false,
       },
-      components: { Button: { fontWeight: 600, primaryColor: dark ? palette.surface : palette.elevated, defaultShadow: 'none', primaryShadow: 'none' } },
+      components: { Button: { fontWeight: 400, primaryColor: dark ? palette.surface : palette.elevated, defaultShadow: 'none', primaryShadow: 'none' } },
     }}>
       <div className="workspace">
         <a className="skip-link" href="#content">Skip to content</a>

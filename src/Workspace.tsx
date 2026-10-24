@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Button, Drawer, Input, InputNumber, Modal, Popover, Segmented, Select, Tag } from 'antd';
-import { ArrowsInIcon, ArrowsOutIcon, FolderIcon, PlusIcon } from '@phosphor-icons/react';
+import { Breadcrumb, Button, Drawer, Input, InputNumber, Modal, Segmented, Select, Tag } from 'antd';
+import { ArrowsInIcon, ArrowsOutIcon, FolderIcon, LightningIcon, PauseIcon, PlusIcon, ShieldCheckIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
 import type { AssistedConfirmation } from '../server/drafting-contracts';
@@ -24,6 +24,11 @@ const json = (method: string, body: unknown): RequestInit => ({ method, body: JS
 const message = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const activeStatuses = ['running', 'stopping', 'paused'];
 const modes: Record<Mode, string> = { paused: 'Paused', approved: 'Approved tickets only', automatic: 'Automatic' };
+const modeIcons = { paused: PauseIcon, approved: ShieldCheckIcon, automatic: LightningIcon };
+const modeOptions = (Object.entries(modes) as [Mode, string][]).map(([value, text]) => {
+  const Icon = modeIcons[value];
+  return { value, label: <span className="execution-mode-label"><Icon size={16} aria-hidden="true" />{text}</span> };
+});
 const queueStatuses: Ticket['status'][] = ['draft', 'ready', 'running', 'stopping', 'paused', 'blocked', 'needs_review', 'failed', 'interrupted', 'done'];
 
 function Status({ value }: { value: string }) { return <Tag className={`badge status-${value}`}>{value.replaceAll('_', ' ')}</Tag>; }
@@ -104,15 +109,15 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
     </section> : settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : repo ? <>
       {assisting ? <TicketEditor key={`agent-${repo.id}`} assisted repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : <>
       <header className="project-header">
-        <div className="project-title"><Link to="/">Projects</Link><span aria-hidden="true">/</span><h1>{repo.name}</h1></div>
+        <div className="project-title"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Home</Link> }, { title: <span aria-current="page">{repo.name}</span> }]} /><h1 title={repo.path}>{repo.name}</h1></div>
         <div className="project-controls">
-          <Popover trigger="click" placement="bottomRight" title="Project settings" content={<div className="project-settings"><code className="path">{repo.path}</code>{!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}<Link to="/">Choose another project</Link></div>}><Button type="text">Project settings</Button></Popover>
-          <label className="execution-control">Execution<Select aria-label="Execution permission" disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={Object.entries(modes).map(([value, label]) => ({ value: value as Mode, label }))} /></label>
+          <div className="execution-control" title="Execution permission"><Select aria-label="Execution permission" popupMatchSelectWidth={280} disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={modeOptions} /></div>
           <Link className="new-ticket-link" ref={newTicketLink} onClick={event => { returnFocus.current = event.currentTarget; }} to={`/projects/${encode(repo.id)}/tickets/new`}><PlusIcon size={16} aria-hidden="true" />New ticket</Link>
           <Link className="agent-ticket-link" to={`/projects/${encode(repo.id)}/tickets/new/agent`}>Create with agent</Link>
         </div>
       </header>
       <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. A current run continues.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and the global slot still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'}</p>
+      {!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}
       {repo.handoff && <section className="panel" aria-label="Workspace handoff"><h2>Operator reconciliation required</h2><p>{repo.handoff.reason}</p>{repo.handoff.runId && <Link to={`/runs/${encode(repo.handoff.runId)}`}>Review originating run</Link>}<ol><li>Review evidence and partial work. Preserve unrelated edits.</li><li>Reconcile Git changes in your terminal under your own approval policy. This app never commits, stashes, resets, or deletes them.</li><li>When Git is clean outside <code>.omp-backlog/</code>, recheck below. Eligible queued tickets may then start under existing permissions.</li></ol>{repo.handoff.files.length > 0 && <pre tabIndex={0}>{repo.handoff.files.map(file => JSON.stringify(file)).join('\n')}</pre>}<Button disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClick={async () => {
         if (!await modal.confirm({ title: 'Recheck reconciled workspace?', content: 'This only inspects Git status. A clean result releases this project gate; eligible tickets may start under existing permissions. Dirty or unavailable Git remains blocked. No files will be changed.', okText: 'Recheck workspace', cancelText: 'Keep blocked' })) return;
         await execute('Workspace reconciled. Existing execution permissions still apply.', async () => { await api(`/api/repos/${encode(repo.id)}/reconcile-workspace`, json('POST', { handoffId: repo.handoff!.id })); });
@@ -389,7 +394,7 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   return <div className={assisted ? 'panel editor-panel agent-creation-page' : 'panel editor-panel'}>
     {modalContext}
     <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Discard changes" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Your unsaved ticket changes, agent conversation and staged files will be discarded. An owned drafting session will be stopped.</p></Modal>
-    {assisted ? <header className="agent-page-heading"><Link to={`/projects/${encode(repo.id)}`}>← {repo.name} / Project board</Link><h1>Draft ticket with OMP</h1><p className="muted">Discuss the change, then review the ticket before creating it. Drafts and files live in this tab; reloading loses them.</p><Segmented aria-label="Drafting view" disabled={editorBusy || uploading || hasServerTicket} options={['Discuss', 'Review ticket']} value={agentVisible ? 'Discuss' : 'Review ticket'} onChange={value => setAgentVisible(value === 'Discuss')} /></header> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
+    {assisted ? <header className="agent-page-heading"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Home</Link> }, { title: <Link to={`/projects/${encode(repo.id)}`}>{repo.name}</Link> }, { title: <span aria-current="page">Create with agent</span> }]} /><h1>Draft ticket with OMP</h1><p className="muted">Discuss the change, then review the ticket before creating it. Drafts and files live in this tab; reloading loses them.</p><Segmented aria-label="Drafting view" disabled={editorBusy || uploading || hasServerTicket} options={['Discuss', 'Review ticket']} value={agentVisible ? 'Discuss' : 'Review ticket'} onChange={value => setAgentVisible(value === 'Discuss')} /></header> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}
     {stale && <div className="notice"><div><h3>Requirements changed{working ? ' during execution' : ' outside this editor'}.</h3><p>Your editor has not been overwritten. The current run keeps its immutable revision; changed requirements require new approval.</p></div></div>}
