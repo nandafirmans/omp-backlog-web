@@ -9,7 +9,7 @@
 
 ## UI consistency
 
-- Preserve the shared full-width workspace, 24px bold page titles, 38px standard controls and square bordered surfaces. Do not introduce page-specific display typography or a second component system.
+- Preserve the shared full-width workspace, 24px bold page titles and square bordered surfaces. Use Ant Design's default control heights with the selected compact typography: 13px regular-weight control text. Route-action links match. Do not introduce page-specific display typography or a second component system.
 - Keep manual ticket creation in its drawer and agent drafting on its separate Discuss / Review ticket page. Visual cleanup must preserve safety explanations, blocking feedback, keyboard access and unsaved-work protection.
 - Verify affected surfaces at desktop and mobile widths in a dark theme and Light. Keep `docs/design-language.md` current when intentionally changing shared conventions.
 
