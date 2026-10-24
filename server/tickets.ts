@@ -1,8 +1,9 @@
 import { constants } from 'node:fs';
-import { chmod, lstat, mkdir, open, readdir, realpath, rename, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, open, readdir, realpath, rename, rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Attachment, Repo, Store, Ticket } from './contracts';
+import { dlopen, ptr, read } from 'bun:ffi';
+import type { Attachment, Mode, Repo, Store, Ticket } from './contracts';
 import { digest, within } from './store';
 
 export const MAX_MARKDOWN = 512 * 1024;
@@ -211,6 +212,135 @@ async function saveTicket(store: Store, repo: Repo, markdown: string, revision?:
   } finally { await rm(temporary, { force: true }); }
   await reconcileTickets(store, true);
   return store.get('tickets', `${repo.id}/${parsed.id}`)!;
+}
+
+export interface CompleteTicketFile { name: string; bytes: Uint8Array }
+export interface CompleteTicketPublication {
+  mode: Mode;
+  expires: number;
+  revision?: string;
+  directory?: { dev: number; ino: number };
+}
+export function validateCompleteTicket(markdown: string, files: CompleteTicketFile[]) {
+  const parsed = parseTicket(markdown);
+  if (files.length > 100) throw new HttpError(400, 'At most 100 attachments are permitted per ticket');
+  const names = new Set<string>();
+  const attachments = files.map(file => {
+    if (!validAttachmentName(file.name) || basename(file.name) !== file.name) throw new HttpError(400, 'Unsupported or unsafe attachment filename');
+    if (names.has(file.name)) throw new HttpError(400, `Duplicate attachment filename: ${file.name}`);
+    names.add(file.name);
+    if (!file.bytes.length || file.bytes.length > MAX_ATTACHMENT) throw new HttpError(400, 'Attachment must be 1 byte–10 MiB');
+    return { name: file.name, size: file.bytes.length, hash: digest(file.bytes) };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+  if (attachments.reduce((size, file) => size + file.size, 0) > MAX_ATTACHMENTS_TOTAL) throw new HttpError(400, 'Attachments exceed the 50 MiB ticket limit');
+  validateAttachmentPurposes(markdown, attachments);
+  return { ...parsed, attachments, revision: digest(markdown + '\0' + JSON.stringify(attachments)) };
+}
+
+let publishDirectory: ((source: string, destinationFd: number, id: string) => void) | undefined;
+function atomicPublish(source: string, destinationFd: number, id: string): void {
+  if (!publishDirectory) {
+    if (process.platform !== 'linux') throw new HttpError(503, 'Assisted creation requires atomic no-overwrite directory publication on Linux; manual creation remains available');
+    try {
+      const library = dlopen('libc.so.6', {
+        renameat2: { args: ['i32', 'ptr', 'i32', 'ptr', 'u32'], returns: 'i32' },
+        __errno_location: { args: [], returns: 'ptr' },
+      });
+      publishDirectory = (from, directory, name) => {
+        const oldPath = Buffer.from(from + '\0');
+        const newPath = Buffer.from(name + '\0');
+        // Node's rename may replace an external empty directory. Never fall back to it.
+        if (library.symbols.renameat2(-100, ptr(oldPath), directory, ptr(newPath), 1) === 0) return;
+        const location = library.symbols.__errno_location();
+        const errno = location ? read.i32(location) : 0;
+        if (errno === 17 || errno === 39) throw new HttpError(409, 'Ticket ID already exists on disk; choose another ID and review again');
+        if ([22, 38, 95].includes(errno)) throw new HttpError(503, 'The filesystem does not support atomic no-overwrite ticket publication; nothing was published');
+        throw new HttpError(500, `Atomic ticket publication failed (filesystem error ${errno}); retain the draft and retry`);
+      };
+    } catch (error) {
+      if (error instanceof HttpError) throw error;
+      throw new HttpError(503, 'Atomic no-overwrite publication is unavailable; manual creation remains available');
+    }
+  }
+  publishDirectory(source, destinationFd, id);
+}
+
+/** The mutable receipt belongs to one reviewed confirmation, never to browser input. */
+export function createCompleteTicket(store: Store, repo: Repo, markdown: string, files: CompleteTicketFile[], publication: CompleteTicketPublication): Promise<Ticket> {
+  return serializeWrite(store, async () => {
+    const payload = validateCompleteTicket(markdown, files);
+    const checkMode = () => {
+      const latest = store.get('repos', repo.id);
+      if (!latest || latest.path !== repo.path || latest.mode !== publication.mode || Date.now() >= publication.expires) throw new HttpError(409, 'Creation review expired or the project mode changed; review the complete ticket again');
+    };
+    checkMode();
+    if (publication.revision) {
+      try {
+        const directory = await ticketDirectory(repo, payload.id);
+        const info = await lstat(directory);
+        const current = await readTicket(repo, payload.id);
+        if (current.revision !== publication.revision || current.revision !== payload.revision || !publication.directory || info.dev !== publication.directory.dev || info.ino !== publication.directory.ino) throw new Error('Changed publication');
+      } catch {
+        throw new HttpError(409, 'Previously created ticket changed or was removed; this confirmation cannot create or overwrite it again');
+      }
+      checkMode();
+      await reconcileTickets(store, true);
+      const ticket = store.get('tickets', `${repo.id}/${payload.id}`);
+      if (!ticket || ticket.removed || ticket.revision !== payload.revision) throw new HttpError(409, 'Created ticket changed while reconciling; retain the draft and inspect the existing ticket');
+      return ticket;
+    }
+    await reconcileTickets(store, true);
+    const previous = store.get('tickets', `${repo.id}/${payload.id}`);
+    if (previous && !previous.removed) throw new HttpError(409, 'Ticket ID already exists; choose another ID and review again');
+    const base = join(repo.path, '.omp-backlog');
+    const tickets = join(base, 'tickets');
+    await safePath(repo.path, tickets, true);
+    await mkdir(tickets, { recursive: true, mode: 0o700 });
+    await safePath(repo.path, tickets);
+    const parent = await open(tickets, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    let staging: string | undefined;
+    let identity: { dev: number; ino: number } | undefined;
+    try {
+      // Same filesystem, private, and outside the scheduler's valid ticket-ID namespace.
+      staging = await mkdtemp(join(base, '.assisted-stage-'));
+      const info = await lstat(staging);
+      identity = { dev: info.dev, ino: info.ino };
+      const write = async (path: string, bytes: string | Uint8Array) => {
+        const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+        try { await file.writeFile(bytes); await file.sync(); } finally { await file.close(); }
+      };
+      await write(join(staging, 'ticket.md'), markdown);
+      if (files.length) {
+        await mkdir(join(staging, 'attachments'), { mode: 0o700 });
+        for (const file of files) await write(join(staging, 'attachments', file.name), file.bytes);
+      }
+      const staged = await open(staging, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await staged.sync(); } finally { await staged.close(); }
+      await safePath(repo.path, tickets);
+      const destination = await lstat(tickets);
+      const opened = await parent.stat();
+      if (destination.dev !== opened.dev || destination.ino !== opened.ino) throw new HttpError(409, 'Ticket directory changed during creation; review and retry');
+      const ready = await lstat(staging);
+      if (ready.dev !== identity.dev || ready.ino !== identity.ino || !ready.isDirectory()) throw new HttpError(409, 'Ticket staging directory changed during creation');
+      // No await between the final current-mode check, atomic publication, and receipt.
+      checkMode();
+      atomicPublish(staging, parent.fd, payload.id);
+      publication.revision = payload.revision;
+      publication.directory = identity;
+      staging = undefined;
+      await parent.sync();
+      await reconcileTickets(store, true);
+      const ticket = store.get('tickets', `${repo.id}/${payload.id}`);
+      if (!ticket || ticket.removed || ticket.revision !== payload.revision) throw new HttpError(409, 'Created ticket changed while reconciling; retain the draft and inspect the existing ticket');
+      return ticket;
+    } finally {
+      await parent.close();
+      if (staging) {
+        const owned = await lstat(staging).catch(() => null);
+        if (owned && owned.dev === identity?.dev && owned.ino === identity?.ino) await rm(staging, { recursive: true, force: true });
+      }
+    }
+  });
 }
 export async function snapshotTicket(store: Store, ticket: Ticket, runId: string): Promise<string> {
   const repo = store.get('repos', ticket.repoId);

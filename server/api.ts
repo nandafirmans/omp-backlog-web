@@ -9,6 +9,8 @@ import { completions } from './completions';
 import { requestOrigin, parseRemoteOrigin } from './access';
 import { proofDownload } from './evidence';
 import { inspectWorkspaceHandoff } from './runtime';
+import { handleDraftRequest } from './drafting';
+import { handleAssistedCreation } from './assisted-creation';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
 interface Owner { username: string; hash: string }
@@ -160,6 +162,16 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (segments.some(part => part.includes('/') || part.includes('\\') || part === '..' || part.includes('\0'))) throw new HttpError(400, 'Unsafe route path');
       if (segments[1] === 'repos' && segments[2]) {
         const repo = store.get('repos', segments[2]); if (!repo) throw new HttpError(404, 'Repository not found');
+        if (segments[3] === 'drafts') {
+          await permittedPath(store, repo.path);
+          return await handleDraftRequest(store, repo, request, segments);
+        }
+        if (segments.length === 4 && (segments[3] === 'assisted-prepare' || segments[3] === 'assisted-create') && request.method === 'POST') {
+          await permittedPath(store, repo.path);
+          const response = await handleAssistedCreation(store, repo, request, segments[3]);
+          if (segments[3] === 'assisted-create' && response.ok) runtime.wake();
+          return response;
+        }
         if (segments[3] === 'completions' && segments.length === 4 && request.method === 'GET') {
           const path = await permittedPath(store, repo.path);
           return json(await completions(path, repo.git, store.dataDir, url.searchParams.get('kind'), url.searchParams.get('q') || ''));

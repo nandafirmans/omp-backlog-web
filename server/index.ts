@@ -5,6 +5,7 @@ import { createApi } from './api';
 import { createRuntime } from './runtime';
 import { closeStore, createStore, within } from './store';
 import { requestOrigin, parseRemoteOrigin } from './access';
+import { closeDrafts } from './drafting';
 
 const appRoot = resolve(import.meta.dir, '..');
 const remoteOrigin = parseRemoteOrigin(process.env.OMP_BACKLOG_ORIGIN);
@@ -64,6 +65,7 @@ let closing = false;
 async function shutdown() {
   if (closing) return;
   closing = true;
+  await closeDrafts(store);
   await runtime.close();
   await server.close();
   closeStore(store);

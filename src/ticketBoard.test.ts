@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { Ticket } from '../server/contracts';
-import { boardGroups, canMoveTicket, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard';
+import { boardGroups, canMoveTicket, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
 
 function ticket(id: string, status: Ticket['status'], order = 1): Ticket {
   return { id, status, order, repoId: 'repo', revision: 'revision', title: id, markdown: '', approvedRevision: null, dependencies: [], criteria: [], attachments: [], error: null, removed: false, runId: null };

@@ -13,6 +13,19 @@ This guide describes the implemented workflow, not full pstack parity. See [PLAN
 | Correct blocked shutdown | Host pauses goal continuation and stops owned child work without asking the model to complete an unmet goal. |
 | Progress visibility | Run panel shows host-observed activity, deadline/budget and last reported session-token sample with its accounting basis. It does not infer percentage completion. |
 | Operator reconciliation | Git changes or unavailable Git inspection create a persistent project gate. Operator reviews/reconciles outside the app, then explicitly requests a clean recheck before new work can start. |
+| Optional ticket drafting | New ticket retains manual Markdown/import and adds an explicitly connected, capability-restricted OMP conversation with model/thinking controls, file/skill context and uploads. Only reviewed explicit creation publishes a ticket; drafting never implements or approves it. |
+
+### Agent-assisted creation
+
+See [Create with agent](../README.md#create-with-agent-optional) for controls and limits. Conversation state is separate from ticket/run storage. Drafting uses a private startup namespace for audited OMP v18.12.6, disables executable discovery and model tools, resolves bounded selected context in host code, and escapes OMP's implicit file/model mention dispatch. Skills supply text only; their scripts cannot run. Normal execution retains its existing permissions and tools.
+
+Model/thinking changes affect drafting only. PDF/Office and WebP remain explicitly reference-only unless replaced with readable input; unsupported context cannot silently disappear. Cancellation/errors preserve available output without replay. Drafting has no goal continuation, implementation evidence tools, approval or scheduler mutation.
+
+Assisted creation stages the complete validated payload outside the watched ticket namespace and publishes atomically without overwriting an existing ID. Ten-minute confirmations bind payload hashes and current project mode; retries require the same unchanged publication. Automatic mode can admit a valid ticket after explicit creation, so its confirmation warns about implementation. Approved-only and Paused gates are unchanged. Manual creation/import remains available without OMP.
+
+Verification for this addition: full Bun suite passed (70 tests, 628 assertions), changed-file ESLint and strict TypeScript passed. Isolated real-browser/live-provider drafting passed with `openai-codex/gpt-6.1-sol`, thinking `low`, clarification/follow-up, file/skill/text/image context, unsupported-PDF exclusion, editable Markdown/Preview handoff and complete three-attachment creation. Separate protocol-child browser checks covered cancellation, partial output, sanitized provider failure and unsaved navigation; these error fixtures are not live-provider failures. Real OMP executable-discovery positive-control/restricted-startup sentinel check passed without inference; the synthetic uncredentialed restricted profile itself returned a failed metadata snapshot, not provider-success evidence.
+
+Private proof is retained under `/tmp/backlog-agent-smoke-PyWw4u/proof`. Browser smoke kept global scheduling paused and launched zero ticket implementation runs; it does not establish live implementation execution or exhaustive model/provider coverage.
 
 ## Normal ticket lifecycle
 
@@ -121,7 +134,7 @@ Implementation verification passed:
 
 See [commissioning receipts](../.omp/skills/verify-backlog/features/README.md#commissioning-receipts) for paths and scope. Fixture reconciliation preserved generated files outside its disposable repository; no commits, stashes or resets were used, even in fixtures.
 
-**Not established:** live OMP/model/provider behavior, exhaustive feature-map coverage, independently observed agent checks, or permanent correctness after later edits. Strict typecheck and production build were not run for these delivery checks. Passing a protocol-speaking child is not provider availability proof.
+**Not established by the earlier execution/review checks:** live OMP ticket implementation, exhaustive feature-map coverage, independently observed agent checks, or permanent correctness after later edits. Those earlier delivery checks did not run strict typecheck or production build. The later optional-drafting addition above did pass strict TypeScript and live-provider drafting; that does not verify implementation execution. Passing a protocol-speaking child is not provider availability proof.
 
 ## Next adoption stages
 

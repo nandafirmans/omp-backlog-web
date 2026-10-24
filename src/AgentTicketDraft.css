@@ -1,0 +1,47 @@
+.ticket-creation-method { display: grid; gap: 10px; margin-bottom: 20px; }
+.ticket-creation-method .ant-segmented { width: fit-content; max-width: 100%; }
+.ticket-creation-method p { margin: 0; }
+.agent-ticket-draft { margin-bottom: 24px; padding: 18px; border: 1px solid var(--line); border-top: 2px solid var(--accent); background: var(--surface-elevated); min-width: 0; }
+.agent-draft-heading, .agent-context-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; flex-wrap: wrap; }
+.agent-draft-heading h3 { margin: 4px 0 0; }
+.agent-draft-heading .eyebrow { font-family: var(--font-mono); color: var(--accent); }
+.agent-draft-heading > .ant-tag { white-space: normal; max-width: 100%; }
+.agent-model-controls { display: grid; grid-template-columns: minmax(0, 2fr) minmax(130px, 1fr); gap: 12px; margin-top: 18px; }
+.agent-effective-model { font: 12px/1.8 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
+.agent-conversation { max-height: min(55dvh, 600px); overflow: auto; overscroll-behavior: contain; scrollbar-color: var(--line) transparent; margin-block: 18px; border-block: 1px solid var(--line); }
+.agent-conversation > .muted { padding-inline: 12px; }
+.agent-message { padding: 16px 12px; border-bottom: 1px solid var(--line); min-width: 0; }
+.agent-message:last-child { border-bottom: 0; }
+.agent-message-assistant { border-left: 2px solid var(--accent); background: color-mix(in srgb, var(--accent) 4%, var(--surface-elevated)); }
+.agent-message-user { border-left: 2px solid var(--line); }
+.agent-message header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px 16px; font: 12px/1.7 var(--font-mono); }
+.agent-message header strong { color: var(--accent); }
+.agent-message header small { color: var(--muted); overflow-wrap: anywhere; }
+.agent-message pre { white-space: pre-wrap; overflow-wrap: anywhere; background: transparent; border: 0; margin: 10px 0 12px; padding: 0; font-size: 13px; line-height: 1.8; }
+.agent-composer { display: grid; gap: 16px; margin-top: 20px; min-width: 0; }
+.agent-composer .markdown-editor .cm-editor { min-height: 160px; }
+.agent-composer .markdown-editor .cm-scroller { min-height: 160px; max-height: 340px; }
+.agent-upload small { font-weight: 400; }
+.agent-context { border: 1px solid var(--line); padding: 14px; min-width: 0; }
+.agent-context h4 { margin: 0; font: 600 12px/1.8 var(--font-mono); }
+.agent-context > p { margin-bottom: 0; font-size: 13px; }
+.agent-context ul { list-style: none; margin: 14px 0 0; padding: 0; }
+.agent-context li { display: grid; gap: 10px; padding: 12px 0; border-top: 1px solid var(--line); min-width: 0; }
+.agent-context li strong { font: 600 12px/1.8 var(--font-mono); margin-right: 10px; overflow-wrap: anywhere; }
+.agent-context li p { margin: 5px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.agent-context .ant-checkbox-wrapper { font-size: 13px; align-items: start; }
+.agent-send-actions { align-items: start; }
+.agent-send-actions small { flex-basis: 100%; color: var(--muted); }
+.agent-ticket-draft .error-banner { margin-block: 16px; }
+.agent-ticket-draft .error-banner p { margin-block: 4px; overflow-wrap: anywhere; }
+.assisted-publication-note { border-left: 2px solid var(--warning); padding: 10px 14px; margin-block: 16px; background: var(--surface-elevated); font-size: 13px; }
+.assisted-publication-note p { margin: 0; }
+@media (max-width: 600px) {
+  .agent-ticket-draft { padding: 12px; }
+  .agent-model-controls { grid-template-columns: minmax(0, 1fr); }
+  .agent-message { padding: 12px 8px; }
+  .agent-context { padding: 10px; }
+  .agent-send-actions > .ant-btn { width: 100%; white-space: normal; height: auto; min-height: 38px; }
+  .ticket-creation-method .ant-segmented { width: 100%; }
+  .ticket-creation-method .ant-segmented-item-label { padding-inline: 10px; }
+}

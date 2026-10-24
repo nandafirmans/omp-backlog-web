@@ -5,7 +5,7 @@ import { ColumnsIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBullet
 import { Link } from 'react-router';
 import type { Repo, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
-import { boardGroups, canMoveTicket, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard';
+import { boardGroups, canMoveTicket, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
 import './TicketBoard.css';
 import { requestReviewFeedback } from './reviewFeedback';
 

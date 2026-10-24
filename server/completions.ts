@@ -100,7 +100,7 @@ async function fileCompletions(root: string, git: boolean, query: string, privat
 
 // These are native OMP and Agent Dirs provider defaults from the installed CLI.
 // Only SKILL.md frontmatter is returned, never the skill body or arbitrary config.
-async function skillCompletions(root: string, query: string, privateDir: string, home: string): Promise<Result> {
+async function skillCompletions(root: string, query: string, privateDir: string, home: string, resolved?: Map<string, Uint8Array>): Promise<Result> {
   const agent = process.env.PI_CODING_AGENT_DIR ? resolve(process.env.PI_CODING_AGENT_DIR.replace(/^~\//, `${home}/`)) : join(home, '.omp', 'agent');
   const roots = [
     { path: join(root, '.omp', 'skills'), boundary: root, required: true },
@@ -123,19 +123,33 @@ async function skillCompletions(root: string, query: string, privateDir: string,
         if (++visited > MAX_ENTRIES || metadata >= MAX_SKILLS) { truncated = true; break; }
         if (entry.name.startsWith('.') || (!entry.isDirectory() && !entry.isSymbolicLink())) continue;
         try {
+          const original = join(source.path, entry.name, 'SKILL.md');
+          if (resolved && !await safeFile(boundary, relative(boundary, original), privateDir)) continue;
           const skill = await realpath(join(directory, entry.name, 'SKILL.md'));
           if (!within(boundary, skill) || within(privateDir, skill) || !safeName(relative(boundary, skill))) continue;
-          const file = await open(skill, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
           let text: string;
-          try {
-            const info = await file.stat();
-            if (!info.isFile() || info.size > MAX_METADATA) { truncated = true; continue; }
-            metadata++;
-            const bytes = Buffer.alloc(MAX_METADATA + 1);
-            const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-            if (bytesRead > MAX_METADATA) { truncated = true; continue; }
-            text = bytes.subarray(0, bytesRead).toString('utf8');
-          } finally { await file.close(); }
+          let prepared: Uint8Array | undefined;
+          if (resolved) {
+            try {
+              prepared = await readDraftFile(boundary, relative(boundary, original), privateDir, MAX_METADATA);
+              text = new TextDecoder('utf-8', { fatal: true }).decode(prepared);
+              metadata++;
+            } catch (error) {
+              if (error instanceof HttpError || error instanceof TypeError) { truncated = true; continue; }
+              throw error;
+            }
+          } else {
+            const file = await open(skill, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+            try {
+              const info = await file.stat();
+              if (!info.isFile() || info.size > MAX_METADATA) { truncated = true; continue; }
+              metadata++;
+              const bytes = Buffer.alloc(MAX_METADATA + 1);
+              const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
+              if (bytesRead > MAX_METADATA) { truncated = true; continue; }
+              text = bytes.subarray(0, bytesRead).toString('utf8');
+            } finally { await file.close(); }
+          }
           const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
           let fields: Record<string, unknown>;
           try { fields = match ? Bun.YAML.parse(match[1]) as Record<string, unknown> : {}; } catch (error) { if (error instanceof SyntaxError) continue; throw error; }
@@ -144,6 +158,7 @@ async function skillCompletions(root: string, query: string, privateDir: string,
           const description = typeof fields.description === 'string' ? fields.description.trim().replace(/\s+/g, ' ').slice(0, 400) : '';
           if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(name) || (source.required && !description) || !`${name} ${description}`.toLowerCase().includes(query) || items.has(name)) continue;
           items.set(name, { label: name, value: `/skill:${name}`, ...(description ? { description } : {}) });
+          if (resolved && prepared) resolved.set(name, prepared);
         } catch (error) { if (!unavailable(error)) throw error; }
       }
     } catch (error) { if (!unavailable(error)) throw error; }
@@ -157,4 +172,43 @@ export async function completions(root: string, git: boolean, privateDir: string
   if (kind !== 'skill' && kind !== 'file') throw new HttpError(400, 'Completion kind must be skill or file');
   if (query.length > 200 || /\p{Cc}/u.test(query)) throw new HttpError(400, 'Invalid completion query');
   return kind === 'skill' ? skillCompletions(root, query.toLowerCase(), privateDir, home) : fileCompletions(root, git, query.toLowerCase(), privateDir);
+}
+
+/** Completion discovery is not authorization: every actual context read is checked again. */
+async function readDraftFile(root: string, name: string, privateDir: string, limit: number): Promise<Uint8Array> {
+  const canonical = await realpath(root);
+  if (canonical !== resolve(root) || !safeName(name) || !await safeFile(canonical, name, privateDir)) throw new HttpError(400, 'Reference is unavailable, private, sensitive, or a symlink');
+  const path = join(canonical, name);
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = await file.stat();
+    if (!info.isFile() || info.size > limit) throw new HttpError(400, `Reference must be a regular file no larger than ${limit} bytes; no partial extraction is sent`);
+    const currentBeforeRead = await lstat(path);
+    if (currentBeforeRead.dev !== info.dev || currentBeforeRead.ino !== info.ino || !await safeFile(canonical, name, privateDir)
+      || process.platform === 'linux' && await realpath(`/proc/self/fd/${file.fd}`) !== path) throw new HttpError(400, 'Reference changed or traversed a symlink before reading');
+    const bytes = Buffer.alloc(limit + 1);
+    let bytesRead = 0;
+    while (bytesRead < bytes.length) {
+      const next = await file.read(bytes, bytesRead, bytes.length - bytesRead, bytesRead);
+      if (!next.bytesRead) break;
+      bytesRead += next.bytesRead;
+    }
+    const current = await lstat(path);
+    if (bytesRead > limit || bytesRead !== info.size || current.size !== info.size || current.mtimeMs !== info.mtimeMs || current.dev !== info.dev || current.ino !== info.ino || !await safeFile(canonical, name, privateDir)) throw new HttpError(400, 'Reference changed while preparing; select it again');
+    return bytes.subarray(0, bytesRead);
+  } finally { await file.close(); }
+}
+
+export async function resolveDraftReference(root: string, privateDir: string, kind: 'file' | 'skill', name: string, home = homedir()): Promise<Uint8Array> {
+  if (kind === 'file') {
+    if (name.split('/').some(part => /^(?:\.omp|\.agents?|\.claude|\.codex|\.config|\.cache|\.local|\.kube|\.docker|agent\.db)$/i.test(part)
+      || /(?:^|[._-])(?:auth|cookies?|sessions?|tokens?|kubeconfig)(?:$|[._-](?:json|ya?ml|db|sqlite|txt|log|bak)$)/i.test(part))) throw new HttpError(400, 'Private authentication, cookie, session, token or configuration paths cannot be included as repository context');
+    return readDraftFile(root, name, privateDir, 128 * 1024);
+  }
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(name)) throw new HttpError(400, 'Invalid skill reference');
+  const bodies = new Map<string, Uint8Array>();
+  await skillCompletions(root, name.toLowerCase(), privateDir, home, bodies);
+  const body = bodies.get(name);
+  if (!body) throw new HttpError(400, 'Installed skill text is unavailable, oversized, disabled, private, or a symlink; skill scripts are never executed');
+  return body;
 }

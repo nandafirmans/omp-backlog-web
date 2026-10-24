@@ -60,6 +60,7 @@ interface Options {
   executable: string;
   args: string[];
   cwd: string;
+  env?: NodeJS.ProcessEnv;
   onSpawn(pid: number): Promise<void>;
   onFrame(frame: Frame): void;
   onStderr(text: string): void;
@@ -86,7 +87,7 @@ export class RpcProcess {
     this.readyReject = ready.reject;
     this.child = spawn(options.executable, options.args, {
       cwd: options.cwd, stdio: ['pipe', 'pipe', 'pipe'], detached: true,
-      env: { ...process.env, PI_NO_PTY: '1', PI_NO_TITLE: '1' },
+      env: options.env ?? { ...process.env, PI_NO_PTY: '1', PI_NO_TITLE: '1' },
     });
     const exited = Promise.withResolvers<number | null>();
     this.exited = exited.promise;
