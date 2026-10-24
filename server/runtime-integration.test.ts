@@ -2,13 +2,14 @@ import { expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { watch } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Repo, Run, Runtime, Settings, Store } from './contracts';
-import { createRuntime } from './runtime';
-import { closeStore, createStore, subscribe } from './store';
+import { createRuntime, inspectWorkspaceHandoff } from './runtime';
+import { closeStore, createStore, database, subscribe } from './store';
 import { writeTicket } from './tickets';
+import { createApi } from './api';
 
 // These are process/protocol acceptance tests. The child verifies a disposable
 // proof file; it does not exercise a real OMP installation, model, or credentials.
@@ -112,6 +113,70 @@ test('actual child transport enforces the global slot and rotates fairly between
   });
 }, 20_000);
 
+test('operator reconciliation gates one Git project without consuming tickets; clean recheck never changes files or approval', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'git-handoff');
+    const init = Bun.spawn(['git', 'init', '--quiet', repo.path], { stdout: 'ignore', stderr: 'ignore' });
+    expect(await init.exited).toBe(0);
+    // No commits/reset/stash, even in fixture. Preserve operator files by moving to owned archive.
+    await writeFile(join(repo.path, '.git/info/exclude'), 'fixture.json\nfixture-events.jsonl\n');
+    repo.git = true; harness.store.save('repos', repo);
+    const first = await ticket(harness, repo);
+    await ticket(harness, repo, 'T002');
+    await writeFile(join(repo.path, 'operator.txt'), 'unrelated operator work\n');
+    await start(harness);
+    const gate = await waitFor('project-level dirty-workspace gate', () => harness.store.get('repos', repo.id)?.handoff);
+    expect(gate.files).toContain('operator.txt');
+    expect(harness.store.list('runs')).toHaveLength(0);
+    expect(harness.store.list('tickets').every(value => value.status === 'ready')).toBe(true);
+    expect(harness.store.get('tickets', `${repo.id}/T001`)!.approvedRevision).toBe(first.revision);
+
+    const password = crypto.randomUUID() + crypto.randomUUID();
+    database(harness.store).query('INSERT INTO owner VALUES(1,?,?)').run('fixture', await Bun.password.hash(password));
+    const api = createApi(harness.store, harness.runtime!);
+    const origin = 'http://127.0.0.1:4310';
+    const login = await api(new Request(origin + '/api/login', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'fixture', password }) }));
+    const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+    const { csrf } = await login.json() as { csrf: string };
+    const headers = { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf };
+    const recheck = (handoffId: string, authenticated = true) => api(new Request(`${origin}/api/repos/${repo.id}/reconcile-workspace`, { method: 'POST', headers: authenticated ? headers : { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ handoffId }) }));
+    expect((await recheck(gate.id, false)).status).toBe(401);
+    expect((await recheck('stale')).status).toBe(409);
+    expect((await recheck(gate.id)).status).toBe(409);
+    expect(await readFile(join(repo.path, 'operator.txt'), 'utf8')).toBe('unrelated operator work\n');
+    await rename(join(repo.path, 'operator.txt'), join(harness.root, 'preserved-operator.txt'));
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(0); // Merely becoming clean cannot clear gate.
+    expect((await recheck(gate.id)).status).toBe(200);
+    const run = await running(harness);
+    await finish(harness, run);
+    const after = harness.store.get('repos', repo.id)!.handoff!;
+    expect(after.runId).toBe(run.id);
+    expect(after.files).toContain('proof.txt');
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(1);
+    const done = await api(new Request(`${origin}/api/tickets/${repo.id}/T001/action`, { method: 'POST', headers, body: JSON.stringify({ action: 'done', revision: first.revision }) }));
+    expect(done.status).toBe(200);
+    expect(harness.store.get('repos', repo.id)!.handoff!.id).toBe(after.id);
+    expect((await recheck(after.id)).status).toBe(409);
+    await rename(join(repo.path, 'proof.txt'), join(harness.root, 'preserved-proof.txt'));
+    const reviewed = harness.store.get('runs', run.id)!;
+    harness.store.save('runs', { ...reviewed, status: 'paused' });
+    expect((await recheck(after.id)).status).toBe(409); // Even clean work cannot bypass an owned slot.
+    expect(harness.store.get('repos', repo.id)!.handoff!.id).toBe(after.id);
+    harness.store.save('runs', reviewed);
+    const unavailable = await inspectWorkspaceHandoff({ ...repo, path: join(harness.root, 'missing-repository') });
+    expect(unavailable?.reason).toContain('inspection unavailable');
+    harness.store.setSettings({ ...harness.store.settings(), paused: true });
+    expect((await recheck(after.id)).status).toBe(200);
+    expect(harness.store.get('repos', repo.id)!.handoff).toBeUndefined();
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(1); // Global pause still applies.
+    expect(await readFile(join(harness.root, 'preserved-operator.txt'), 'utf8')).toBe('unrelated operator work\n');
+    expect(await readFile(join(harness.root, 'preserved-proof.txt'), 'utf8')).toBe('verified\n');
+  });
+}, 15_000);
+
 test('duplicate real fs.watch events launch once without manual scheduler wakes', async () => {
   await withHarness(async harness => {
     const repo = await repository(harness, 'watched');
@@ -170,6 +235,7 @@ test('pause retains the claim and resume uses the same durable session and immut
     expect(paused.status).toBe('paused');
     expect(paused.pid).toBeNull();
     expect(paused.finished).toBeNull();
+    expect(paused.progress?.phase).toBe('Paused; execution slot retained');
     await harness.runtime!.reconcile();
     expect(harness.store.list('runs')).toHaveLength(1);
     await harness.runtime!.control(before.id, 'resume');
@@ -200,7 +266,7 @@ test('editing active requirements cannot apply old evidence to the new revision 
     const updated = await writeTicket(harness.store, repo, original.markdown.replace('Write a disposable proof file.', 'Write an updated disposable proof file.'), original.revision, original.id);
     expect(updated.revision).not.toBe(run.revision);
     expect(updated.status).toBe('running');
-    const completed = await finish(harness, run);
+      const completed = await finish(harness, run);
     expect(completed.revision).toBe(original.revision);
     expect(completed.evidence).toHaveLength(1);
     expect(await readFile(join(completed.snapshot, 'ticket.md'), 'utf8')).toBe(original.markdown);
@@ -210,6 +276,42 @@ test('editing active requirements cannot apply old evidence to the new revision 
     expect(current.approvedRevision).toBeNull();
     await harness.runtime!.reconcile();
     expect(harness.store.list('runs')).toHaveLength(1);
+  });
+}, 15_000);
+
+test('blocked result stops an unsettled goal without completing it or rerunning; proof and feedback survive fresh attempts', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'blocked', 0, 'blocked');
+    await ticket(harness, repo);
+    await start(harness);
+    const run = await running(harness);
+    await harness.runtime!.answer(run.id, { id: 'finish', value: 'finish' });
+    const blocked = await waitFor('host-owned blocked shutdown', () => {
+      const value = harness.store.get('runs', run.id);
+      return value?.status === 'blocked' && value.pid === null ? value : undefined;
+    });
+    expect(blocked.blocker).toContain('Operator supplies prerequisite');
+    expect(blocked.progress?.phase).toBe('Owned child work stopped');
+    const log = await events(repo);
+    expect(log.some(event => event.command === 'goal' && event.op === 'pause')).toBe(true);
+    expect(log.some(event => event.op === 'complete')).toBe(false);
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(1);
+
+    // Simulate an operator-authorized next attempt; API feedback validation has separate coverage.
+    const message = 'Check the alternate user entry point.';
+    harness.store.save('runs', { ...blocked, reviewFeedback: { message, recorded: Date.now() } });
+    await writeFile(join(repo.path, 'fixture.json'), JSON.stringify({ scenario: 'hold', expectedFeedback: message }));
+    const selected = harness.store.get('tickets', `${repo.id}/T001`)!;
+    harness.store.save('tickets', { ...selected, status: 'ready' });
+    harness.runtime!.wake();
+    const next = await running(harness);
+    expect(next.id).not.toBe(blocked.id);
+    const completed = await finish(harness, next);
+    expect(completed.verification).toHaveLength(1);
+    const artifact = completed.verification![0]!.artifact!;
+    expect(await readFile(join(harness.store.dataDir, 'proof', completed.id, artifact.id), 'utf8')).toBe('verified\n');
+    expect(harness.store.get('runs', blocked.id)!.reviewFeedback!.message).toBe(message);
   });
 }, 15_000);
 
@@ -279,6 +381,10 @@ for (const limit of ['time', 'tokens'] as const) {
       const log = await events(repo);
       expect(log.some(event => event.event === 'exit')).toBe(true);
       if (limit === 'tokens') expect(log.some(event => event.command === 'get_session_stats')).toBe(true);
+      if (limit === 'tokens') {
+        expect(failed.progress?.tokens?.total).toBe(7);
+        expect(failed.progress?.tokens?.basis).toContain('session total');
+      }
       await harness.runtime!.reconcile();
       expect(harness.store.list('runs')).toHaveLength(1);
     }, limit === 'time' ? { timeLimitMinutes: 0.05 } : { tokenBudget: 7 });

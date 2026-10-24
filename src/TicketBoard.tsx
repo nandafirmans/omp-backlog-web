@@ -7,6 +7,7 @@ import type { Repo, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
 import { boardGroups, canMoveTicket, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard';
 import './TicketBoard.css';
+import { requestReviewFeedback } from './reviewFeedback';
 
 interface Props {
   repo: Repo;
@@ -83,6 +84,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
     setConfirming(action !== 'reorder');
     setAnnouncement('');
     try {
+      let feedback: string | null = null;
       if (action !== 'reorder') {
         const run = latest.current.snapshot.runs.find(run => run.id === current.runId && run.revision === current.revision);
         if (((action === 'done' || action === 'changes') && !run) || (action === 'done' && !run?.evidence.length)) {
@@ -96,13 +98,13 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
           changes: 'Requests another run for this revision. Execution may start when permissions, dependencies, and the execution slot allow.',
           done: 'Confirm every acceptance criterion has current-revision evidence and any visual or subjective requirements have been reviewed. Dependent tickets may become eligible to run.',
         };
-        const confirmed = await modal.confirm({
+        const confirmed = action === 'changes' ? !!(feedback = await requestReviewFeedback(modal, <p>{current.id} · {current.title}. {consequences.changes}</p>, () => focusCard(source.id))) : await modal.confirm({
           title: titles[action],
           width: 560,
           autoFocusButton: 'cancel',
           afterClose: () => focusCard(source.id),
           mask: { closable: false },
-          okText: action === 'done' ? 'Yes, mark Done' : action === 'approve' ? 'Yes, approve revision' : action === 'changes' ? 'Yes, request changes' : 'Yes, retry reviewed ticket',
+          okText: action === 'done' ? 'Yes, mark Done' : action === 'approve' ? 'Yes, approve revision' : 'Yes, retry reviewed ticket',
           cancelText: `No, keep ${label(current.status)}`,
           content: <div className="board-confirmation">
             <strong>{current.id} · {current.title}</strong>
@@ -120,7 +122,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
       const success = await execute(action === 'reorder' ? `${current.id} queue position saved.` : `${current.id}: ${action === 'done' ? 'reviewed revision marked Done' : 'Ready requested; execution permissions still apply'}.`, async () => {
         const latestTicket = latest.current.tickets.find(ticket => ticket.id === source.id);
         if (!sameBoardRevision(latestTicket, source) || !latestTicket || !canMoveTicket(latestTicket)) throw new Error('Ticket changed during confirmation. Review the current revision and try again.');
-        await api(`/api/tickets/${encode(repo.id)}/${encode(current.id)}/action`, { method: 'POST', body: JSON.stringify({ action, revision: current.revision, ...(order !== null ? { order } : {}) }) });
+        await api(`/api/tickets/${encode(repo.id)}/${encode(current.id)}/action`, { method: 'POST', body: JSON.stringify({ action, revision: current.revision, ...(order !== null ? { order } : {}), ...(feedback ? { feedback } : {}) }) });
       });
       if (!success) setAnnouncement(`${current.id} move was not confirmed saved. Review the error and current board before retrying.`);
     } finally {

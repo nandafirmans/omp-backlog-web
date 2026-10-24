@@ -7,6 +7,8 @@ import { database, digest, subscribe, token, within } from './store';
 import { HttpError, MAX_ATTACHMENT, MAX_MARKDOWN, readSafe, reconcileTickets, ticketDirectory, uploadAttachment, validAttachmentName, writeTicket } from './tickets';
 import { completions } from './completions';
 import { requestOrigin, parseRemoteOrigin } from './access';
+import { proofDownload } from './evidence';
+import { inspectWorkspaceHandoff } from './runtime';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
 interface Owner { username: string; hash: string }
@@ -162,7 +164,23 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           const path = await permittedPath(store, repo.path);
           return json(await completions(path, repo.git, store.dataDir, url.searchParams.get('kind'), url.searchParams.get('q') || ''));
         }
-        if (segments.length === 3 && request.method === 'PATCH') { const input = await body(request); if (!['paused', 'approved', 'automatic'].includes(String(input.mode))) throw new HttpError(400, 'Invalid execution mode'); const mode = input.mode as Repo['mode']; const updated = { ...repo, mode }; store.save('repos', updated); runtime.wake(); return json(updated); }
+        if (segments.length === 3 && request.method === 'PATCH') { const input = await body(request); if (!['paused', 'approved', 'automatic'].includes(String(input.mode))) throw new HttpError(400, 'Invalid execution mode'); const mode = input.mode as Repo['mode']; const updated = { ...(store.get('repos', repo.id) ?? repo), mode }; store.save('repos', updated); runtime.wake(); return json(updated); }
+        if (segments.length === 4 && segments[3] === 'reconcile-workspace' && request.method === 'POST') {
+          const input = await body(request);
+          if (!repo.handoff || input.handoffId !== repo.handoff.id) throw new HttpError(409, 'Workspace handoff changed; review the current gate');
+          const claimed = () => store.list('runs').some(run => run.repoId === repo.id && ['running', 'stopping', 'paused'].includes(run.status));
+          if (claimed()) throw new HttpError(409, 'Stop or finish owned work before reconciling the workspace');
+          await permittedPath(store, repo.path);
+          const handoff = await inspectWorkspaceHandoff(repo, repo.handoff.runId);
+          const current = store.get('repos', repo.id);
+          if (!current?.handoff || current.handoff.id !== input.handoffId || claimed()) throw new HttpError(409, 'Workspace state changed during inspection; review again');
+          if (handoff) {
+            store.save('repos', { ...current, handoff: { ...handoff, id: current.handoff.id } });
+            throw new HttpError(409, 'Workspace still needs operator reconciliation. No files changed by this check.');
+          }
+          const updated: Repo = { ...current, handoff: undefined };
+          store.save('repos', updated); runtime.wake(); return json(updated);
+        }
         if (segments[3] === 'tickets' && segments.length === 4 && request.method === 'POST') { const input = await body(request); const ticket = await writeTicket(store, repo, string(input.markdown, 'markdown', MAX_MARKDOWN)); runtime.wake(); return json(ticket, 201); }
         if (segments[3] === 'tickets' && segments[4]) {
           const id = segments[4];
@@ -198,7 +216,12 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           const run = ticket.runId ? store.get('runs', ticket.runId) : undefined;
           if (ticket.status !== 'needs_review' || !run || run.revision !== ticket.revision) throw new HttpError(409, 'Only evidence for this revision may be reviewed');
           if (action === 'done') { if (!run.evidence.length) throw new HttpError(409, 'Review requires recorded acceptance evidence'); ticket.status = 'done'; run.status = 'done'; }
-          else { ticket.status = 'ready'; ticket.approvedRevision = ticket.revision; }
+          else {
+            const feedback = string(input.feedback, 'review feedback', 4000).trim();
+            if (!feedback) throw new HttpError(400, 'Describe the required changes before queuing another attempt');
+            run.reviewFeedback = { message: feedback, recorded: Date.now() };
+            ticket.status = 'ready'; ticket.approvedRevision = ticket.revision;
+          }
           store.save('runs', run);
         } else throw new HttpError(400, 'Unknown ticket action');
         store.save('tickets', ticket); runtime.wake(); return json(ticket);
@@ -206,6 +229,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (segments[1] === 'runs' && segments[2]) {
         const run = store.get('runs', segments[2]); if (!run) throw new HttpError(404, 'Run not found');
         if (segments.length === 3 && request.method === 'GET') return json(run);
+        if (segments.length === 5 && segments[3] === 'proof' && request.method === 'GET') return await proofDownload(store, run, segments[4]!);
         if (segments.length === 4 && request.method === 'POST') {
           const input = await body(request);
           if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }

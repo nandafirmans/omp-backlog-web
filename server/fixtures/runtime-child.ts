@@ -17,7 +17,7 @@ const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
 }
-const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens'; tokens?: number };
+const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked'; tokens?: number; expectedFeedback?: string };
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 await mkdir(dirname(sessionFile), { recursive: true });
 const session = args.includes('--resume')
@@ -28,6 +28,7 @@ const log = (event: Record<string, unknown>) => appendFile(join(process.cwd(), '
 const send = (frame: Frame) => process.stdout.write(JSON.stringify(frame) + '\n');
 let settled = false;
 let resultId: string | null = null;
+let evidenceId: string | null = null;
 let negotiated = false;
 let toolsRegistered = false;
 const decoder = new FrameDecoder();
@@ -54,6 +55,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     respond();
   } else if (frame.type === 'prompt') {
     if (!toolsRegistered || typeof frame.message !== 'string' || !frame.message.includes(ticket.revision)) throw new Error('Prompt lacks registered tool or immutable revision');
+    if (configuration.expectedFeedback && !frame.message.includes(configuration.expectedFeedback)) throw new Error('Prompt lost human review feedback');
     await log({ event: 'prompt-admitted', revision: ticket.revision });
     respond();
   } else if (frame.type === 'goal') {
@@ -70,16 +72,32 @@ for await (const line of createInterface({ input: process.stdin })) {
     respond({ tokens: { total: configuration.scenario === 'tokens' ? configuration.tokens : 0 } });
   } else if (frame.type === 'extension_ui_response' && frame.id === 'finish') {
     if (frame.value !== 'finish' || frame.cancelled === true) continue;
+    if (configuration.scenario === 'blocked') {
+      resultId = crypto.randomUUID();
+      send({ type: 'host_tool_call', id: resultId, toolName: 'backlog_result', arguments: {
+        revision: ticket.revision, status: 'blocked', evidence: [], prerequisite: 'Disposable prerequisite is absent', unblock: 'Operator supplies prerequisite',
+      } });
+      continue;
+    }
     await writeFile(join(process.cwd(), 'proof.txt'), 'verified\n');
     const proof = await readFile(join(process.cwd(), 'proof.txt'), 'utf8');
     if (proof !== 'verified\n') throw new Error('Fixture proof verification failed');
     resultId = crypto.randomUUID();
+    evidenceId = crypto.randomUUID();
+    send({ type: 'host_tool_call', id: evidenceId, toolName: 'backlog_evidence', arguments: {
+      revision: ticket.revision, criterion: ticket.criteria[0], feature: 'fixture proof', entryPoint: 'protocol child',
+      method: 'write/read proof.txt', outcome: 'passed', details: 'Read back verified; protocol fixture, not live provider.',
+      recipe: 'server/fixtures/runtime-child.ts (protocol fixture)', artifact: { name: 'proof.txt', base64: Buffer.from(proof).toString('base64') },
+    } });
+  } else if (frame.type === 'host_tool_result' && frame.id === evidenceId) {
+    if (frame.isError === true) throw new Error('Runtime rejected fixture evidence');
     send({ type: 'host_tool_call', id: resultId, toolName: 'backlog_result', arguments: {
       revision: ticket.revision, status: 'complete',
-      evidence: ticket.criteria.map((criterion) => ({ criterion, evidence: `Protocol fixture wrote and read proof.txt: ${proof.trim()}; no real provider was exercised.` })),
+      evidence: ticket.criteria.map((criterion) => ({ criterion, evidence: 'Protocol fixture wrote and read proof.txt: verified; no real provider was exercised.' })),
     } });
   } else if (frame.type === 'host_tool_result' && frame.id === resultId) {
     if (frame.isError === true) throw new Error('Runtime rejected fixture result');
+    if (configuration.scenario === 'blocked') continue; // Host must stop an unmet goal; fixture never settles itself.
     settled = true;
     await log({ event: 'result-accepted', revision: ticket.revision });
     send({ type: 'session_settled' });

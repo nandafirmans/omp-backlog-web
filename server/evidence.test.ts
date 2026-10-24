@@ -1,0 +1,70 @@
+import { expect, test } from 'bun:test';
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { Run, Runtime } from './contracts';
+import { createStore, closeStore, database } from './store';
+import { assertVerifiedCriteria, proofDownload, recordEvidence } from './evidence';
+import { writeTicket } from './tickets';
+import { createApi } from './api';
+
+test('run proof is revision-bound, bounded, immutable, authenticated and separate from requirements; feedback persists', async () => {
+  const root = await mkdtemp('/tmp/opencode/backlog-evidence-test-');
+  const store = createStore(join(root, 'private'));
+  try {
+    const workspace = join(root, 'repo');
+    await mkdir(workspace);
+    const repo = { id: 'repo', path: workspace, name: 'Fixture', git: false, mode: 'paused' as const, lastStarted: 0 };
+    store.save('repos', repo);
+    const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Proof\ndepends_on: []\n---\n\nVerify the synthetic result.\n\nDone when:\n- Check result.\n');
+    const run: Run = { id: crypto.randomUUID(), repoId: repo.id, ticketId: ticket.id, revision: ticket.revision, status: 'needs_review', started: Date.now(), finished: Date.now(), pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: ['Agent claim'], blocker: null, changedFiles: '', dialog: null, error: null };
+    const input = { revision: ticket.revision, criterion: ticket.criteria[0], feature: 'result', entryPoint: 'UI', method: 'drive result', outcome: 'passed', details: 'Observed expected side effect', recipe: 'fixture:sha256', artifact: { name: 'result.txt', base64: Buffer.from('synthetic proof').toString('base64') } };
+    await expect(recordEvidence(store, run, ticket, { ...input, revision: 'old' })).rejects.toThrow('revision');
+    await expect(recordEvidence(store, run, ticket, { ...input, artifact: { ...input.artifact, name: '../escape.txt' } })).rejects.toThrow('filename');
+    await expect(recordEvidence(store, run, ticket, { ...input, artifact: { name: 'huge.txt', base64: 'A'.repeat(800000) } })).rejects.toThrow('size');
+    await expect(recordEvidence(store, run, ticket, { ...input, artifact: { name: 'empty.txt', base64: '' } })).rejects.toThrow('Empty');
+    const receipt = await recordEvidence(store, run, ticket, input);
+    run.verification = [receipt];
+    expect(receipt.source).toBe('agent_report');
+    expect(receipt.artifact!.sha256).toHaveLength(64);
+    expect(store.get('tickets', 'repo/T001')!.revision).toBe(ticket.revision);
+    expect(store.get('tickets', 'repo/T001')!.attachments).toHaveLength(0);
+    expect(() => assertVerifiedCriteria(ticket, [])).toThrow('every criterion');
+    expect(() => assertVerifiedCriteria(ticket, [{ ...receipt, outcome: 'not_run' }])).toThrow('unperformed');
+    expect(() => assertVerifiedCriteria(ticket, [receipt, { ...receipt, outcome: 'failed' }])).toThrow('failed');
+    expect(() => assertVerifiedCriteria(ticket, [{ ...receipt, outcome: 'failed' }, receipt])).not.toThrow();
+    expect(() => assertVerifiedCriteria(ticket, [receipt, { ...receipt, entryPoint: 'alternate', outcome: 'blocked' }])).toThrow('blocked');
+    expect(await (await proofDownload(store, run, receipt.artifact!.id)).text()).toBe('synthetic proof');
+    await expect(proofDownload(store, run, '../anything')).rejects.toThrow('not found');
+    const path = join(store.dataDir, 'proof', run.id, receipt.artifact!.id);
+    await writeFile(path, 'tampered');
+    await expect(proofDownload(store, run, receipt.artifact!.id)).rejects.toThrow('changed');
+    await symlink(workspace, join(store.dataDir, 'proof', 'symlink-run'));
+    await expect(recordEvidence(store, { ...run, id: 'symlink-run' }, ticket, input)).rejects.toThrow('Symlinks');
+
+    store.save('runs', run);
+    store.save('tickets', { ...ticket, status: 'needs_review', runId: run.id, approvedRevision: ticket.revision });
+    const runtime: Runtime = { wake() {}, async reconcile() {}, async control() {}, async answer() {}, async close() {} };
+    const api = createApi(store, runtime);
+    const origin = 'http://127.0.0.1:4310';
+    const download = `/api/runs/${run.id}/proof/${receipt.artifact!.id}`;
+    expect((await api(new Request(origin + download))).status).toBe(401);
+    const password = crypto.randomUUID() + crypto.randomUUID();
+    database(store).query('INSERT INTO owner VALUES(1,?,?)').run('fixture', await Bun.password.hash(password));
+    const login = await api(new Request(origin + '/api/login', { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'fixture', password }) }));
+    const cookie = login.headers.get('set-cookie')!.split(';')[0]!;
+    const { csrf } = await login.json() as { csrf: string };
+    const headers = { Cookie: cookie, Origin: origin, 'Content-Type': 'application/json', 'X-CSRF-Token': csrf };
+    expect((await api(new Request(origin + download, { headers }))).status).toBe(409);
+    await writeFile(path, 'synthetic proof');
+    const response = await api(new Request(origin + download, { headers }));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-disposition')).toStartWith('attachment;');
+    const action = (feedback: string) => api(new Request(`${origin}/api/tickets/repo/T001/action`, { method: 'POST', headers, body: JSON.stringify({ action: 'changes', revision: ticket.revision, feedback }) }));
+    expect((await action('  ')).status).toBe(400);
+    expect(store.get('tickets', 'repo/T001')!.status).toBe('needs_review');
+    expect((await action('Show the alternate path.')).status).toBe(200);
+    expect(store.get('runs', run.id)!.reviewFeedback!.message).toBe('Show the alternate path.');
+    expect(store.get('tickets', 'repo/T001')!.status).toBe('ready');
+  } finally { closeStore(store); }
+  // Private disposable state/proof retained; no recursive cleanup of operator data.
+});
