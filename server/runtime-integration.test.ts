@@ -87,6 +87,53 @@ async function finish(harness: Harness, run: Run) {
   });
 }
 
+test('Run Live persists sanitized structured tool snapshots, settlement and same-session history', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'transcript', 0, 'transcript');
+    await ticket(harness, repo);
+    await start(harness);
+    const first = await running(harness);
+    expect(first.conversation?.[0]?.kind).toBe('user');
+    expect(first.conversation?.[0]?.text).toContain('Disposable proof');
+    expect(first.conversation?.[0]?.text).not.toContain('The web scheduler');
+    expect(first.conversation?.filter(entry => entry.kind === 'agent')).toHaveLength(2);
+    const tool = first.conversation?.find(entry => entry.toolName === 'bash');
+    expect(tool?.state).toBe('running');
+    expect(tool?.input).toContain('read proof.txt');
+    expect(tool?.output).toContain('Reading proof.txt');
+    expect(tool?.output?.match(/Reading/g)).toHaveLength(1);
+    expect(JSON.stringify(first.conversation)).not.toContain('fixture-secret');
+    expect(JSON.stringify(first.conversation)).not.toContain('fixture-nested-secret');
+    await harness.runtime!.control(first.id, 'pause');
+    const paused = harness.store.get('runs', first.id)!;
+    expect(paused.conversation?.some(entry => entry.state === 'running')).toBe(false);
+    expect(paused.conversation?.find(entry => entry.id === tool?.id)?.text).toContain('Stopped before completion');
+    const prior = structuredClone(paused.conversation!);
+    await harness.runtime!.control(first.id, 'resume');
+    const resumed = await running(harness);
+    expect(resumed.conversation?.slice(0, prior.length)).toEqual(prior);
+    expect(resumed.conversation?.filter(entry => entry.kind === 'agent')).toHaveLength(4);
+    const completed = await finish(harness, resumed);
+    expect(completed.conversation?.some(entry => entry.state === 'running')).toBe(false);
+    const bash = completed.conversation?.filter(entry => entry.toolName === 'bash');
+    expect(bash?.map(entry => entry.state)).toEqual(['error', 'complete']);
+    expect(bash?.at(-1)?.output).toContain('Proof checked; exit 0');
+    const receipt = completed.conversation?.find(entry => entry.toolName === 'backlog_evidence');
+    expect(receipt?.input).toContain('base64 bytes omitted');
+    expect(receipt?.input).not.toContain('dmVyaWZpZWQK');
+    expect(receipt?.state).toBe('complete');
+    const reloaded = createStore(harness.store.dataDir);
+    try {
+      expect(reloaded.get('runs', completed.id)?.conversation).toEqual(completed.conversation);
+      expect(reloaded.get('runs', completed.id)?.transcript).toBe(completed.transcript);
+    } finally { closeStore(reloaded); }
+    const log = await readFile(join(harness.store.dataDir, 'runtime', completed.id, 'transcript.log'), 'utf8');
+    expect(log).toContain('Checking the **proof**');
+    expect(log).not.toContain('fixture-secret');
+    expect(log).not.toContain('fixture-nested-secret');
+  });
+}, 15_000);
+
 test('fresh execution applies exact thinking before prompting and resume preserves session thinking', async () => {
   await withHarness(async harness => {
     const repo = await repository(harness, 'thinking');
@@ -266,6 +313,9 @@ test('provider failure after successful prompt admission fails the run and never
     expect(log.some(event => event.event === 'result-accepted')).toBe(false);
     expect(run.error).toContain('Deterministic provider failure after admission');
     expect(run.evidence).toEqual([]);
+    expect(run.conversation?.some(entry => entry.text.includes('Partial investigation before provider failure.'))).toBe(true);
+    expect(run.conversation?.some(entry => entry.state === 'running')).toBe(false);
+    expect(run.conversation?.find(entry => entry.toolName === 'read')?.state).toBe('error');
     expect(harness.store.get('tickets', `${repo.id}/T001`)?.status).toBe('failed');
     await harness.runtime!.reconcile();
     expect(harness.store.list('runs')).toHaveLength(1);

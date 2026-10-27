@@ -14,6 +14,7 @@ import remarkGfm from 'remark-gfm';
 import TicketBoard from './TicketBoard';
 import { requestReviewFeedback } from './reviewFeedback';
 import WorkspaceCommit from './WorkspaceCommit';
+import RunTranscript from './RunTranscript';
 
 const RichMarkdownEditor = lazy(() => import('./RichMarkdownEditor'));
 
@@ -606,7 +607,8 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
     <section className="detail-section"><h3>Acceptance evidence</h3><p className="muted">An agent's success claim is not independent verification. Review evidence against every criterion before accepting this revision.</p>{ticket && !old && ticket.criteria.length > 0 && <ol className="criteria-list">{ticket.criteria.map((criterion, i) => <li key={`${i}-${criterion}`}>{criterion}</li>)}</ol>}{run.evidence.length ? <ol className="evidence-list">{run.evidence.map((item, i) => <li key={i}><pre tabIndex={0}>{item}</pre></li>)}</ol> : <p className="muted">No verification evidence recorded.</p>}</section>
     <section className="detail-section"><h3>Verification receipts</h3><p className="muted">Outcomes, commands and recipe identities below are agent-reported. Host records receipt time and artifact bytes/hash, not whether a check really ran or its conclusion is correct.</p>{run.verification?.length ? <ol className="evidence-list">{run.verification.map(receipt => <li key={receipt.id}><strong>{receipt.outcome} · {receipt.criterion}</strong><p>{receipt.feature} → {receipt.entryPoint}</p><pre tabIndex={0}>{receipt.method}{'\n'}{receipt.details}</pre><p>Recipe (reported): {receipt.recipe}</p><small>Run {receipt.runId} · revision {receipt.revision} · recorded {new Date(receipt.recorded).toLocaleString()}</small>{receipt.artifact && <p><a href={`/api/runs/${encode(run.id)}/proof/${encode(receipt.artifact.id)}`} download>{receipt.artifact.name}</a> · {receipt.artifact.size} bytes · SHA-256 <code>{receipt.artifact.sha256}</code></p>}</li>)}</ol> : <p className="muted">No structured receipts. Legacy text evidence is unverified.</p>}</section>
     {run.reviewFeedback && <section className="detail-section"><h3>Human change request</h3><p>Linked to this run and revision; supplied to the next authorized attempt.</p><pre tabIndex={0}>{run.reviewFeedback.message}</pre></section>}
-    <section className="detail-section"><h3>Changed files</h3><pre className="transcript" tabIndex={0}>{run.changedFiles || (repo?.git ? 'No changed-file summary recorded.' : 'Git change tracking unavailable for this workspace.')}</pre></section><section className="detail-section"><h3>Live transcript</h3><p className="muted">Persisted output, including errors and partial work. Browser closure does not stop this process.</p><pre className="transcript" tabIndex={0}>{run.transcript || 'Waiting for recorded output…'}</pre></section>
+    <section className="detail-section"><h3>Changed files</h3><pre className="transcript" tabIndex={0}>{run.changedFiles || (repo?.git ? 'No changed-file summary recorded.' : 'Git change tracking unavailable for this workspace.')}</pre></section>
+    <RunTranscript key={run.id} run={run} />
   </section>;
 }
 

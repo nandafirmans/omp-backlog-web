@@ -1,0 +1,52 @@
+.run-transcript { min-width: 0; }
+.run-transcript > .muted { margin-bottom: 12px; }
+.run-transcript-surface { border: 1px solid var(--line); background: var(--surface-elevated); min-width: 0; }
+.run-transcript-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 49px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface-inset); font: 13px/1.7 var(--font-mono); }
+.run-transcript-viewport { min-height: 160px; max-height: min(65dvh, 640px); overflow: auto; overflow-anchor: none; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; scroll-behavior: auto; }
+.run-transcript-viewport:focus-visible { outline-offset: -3px; }
+.run-transcript-message { padding: 18px 20px; min-width: 0; overflow-wrap: anywhere; }
+.run-transcript-message + *, .run-transcript-tool + * { border-top: 1px solid var(--line); }
+.run-transcript-message > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; font: 13px/1.7 var(--font-mono); color: var(--muted); }
+.run-transcript-message-agent > header strong { color: var(--accent); }
+.run-transcript-message-user { background: var(--surface-inset); border-inline-start: 2px solid var(--accent); }
+.run-transcript-message-system { background: color-mix(in srgb, var(--surface-inset) 50%, var(--surface-elevated)); }
+.run-transcript-plain { margin: 0; white-space: pre-wrap; font-size: 14px; }
+.run-transcript-status.ant-tag { margin: 0; background: var(--surface-inset); border-color: var(--line); color: var(--muted); }
+.run-transcript-status-running.ant-tag { color: var(--accent); border-color: var(--accent); }
+.run-transcript-status-error.ant-tag { color: var(--danger); border-color: var(--danger); }
+.run-transcript-error { border-inline-start: 2px solid var(--danger); }
+.run-transcript-markdown { font-size: 15px; line-height: 1.8; min-width: 0; }
+.run-transcript-markdown > :first-child { margin-top: 0; }
+.run-transcript-markdown > :last-child { margin-bottom: 0; }
+.run-transcript-markdown h1, .run-transcript-markdown h2 { font-size: 18px; line-height: 1.5; margin-block: 18px 10px; }
+.run-transcript-markdown h3, .run-transcript-markdown h4, .run-transcript-markdown h5, .run-transcript-markdown h6 { font-size: 16px; line-height: 1.6; margin-block: 16px 8px; }
+.run-transcript-markdown p { margin-block: 10px; }
+.run-transcript-markdown blockquote { margin-inline: 0; padding-left: 16px; border-left: 2px solid var(--accent); color: var(--muted); }
+.run-transcript-markdown :not(pre) > code { padding: 2px 4px; background: var(--surface-inset); font-size: .9em; }
+.run-transcript-markdown pre { max-width: 100%; max-height: 360px; margin-block: 12px; font-size: 13px; white-space: pre; }
+.run-transcript-markdown .markdown-table { margin-block: 12px; }
+.run-transcript-markdown li { margin-block: 4px; }
+.run-transcript-image { color: var(--muted); }
+.run-transcript-tool { min-width: 0; background: var(--surface-inset); }
+.run-transcript-tool > summary { padding: 12px 20px; overflow-wrap: anywhere; font: 13px/1.7 var(--font-mono); }
+.run-transcript-tool > summary:focus-visible { outline-offset: -3px; }
+.run-transcript-tool-heading { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; max-width: 100%; vertical-align: middle; }
+.run-transcript-tool-heading strong { font-weight: 600; }
+.run-transcript-action { display: block; margin-top: 6px; white-space: pre-wrap; font: 14px/1.7 var(--font-sans); }
+.run-transcript-disclosure-hint { display: block; margin-top: 4px; color: var(--muted); }
+.run-transcript-tool-body { padding: 0 20px 16px; display: grid; gap: 16px; }
+.run-transcript-tool-body h4 { font: 13px/1.7 var(--font-mono); color: var(--muted); margin: 0 0 6px; }
+.run-transcript-tool-body pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; margin: 0; padding: 12px; font-size: 13px; background: var(--surface-elevated); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.run-transcript-error .run-transcript-tool-body > :last-child h4 { color: var(--danger); }
+.run-transcript-empty { padding: 24px 20px; margin: 0; color: var(--muted); font-size: 14px; }
+.run-transcript-legacy { margin: 0; border: 0; background: transparent; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+.run-transcript-legacy-note { color: var(--muted); font-size: 13px; }
+.run-transcript-raw { margin-top: 12px; font-size: 13px; min-width: 0; }
+.run-transcript-raw > summary { width: fit-content; font-family: var(--font-mono); }
+.run-transcript-raw .transcript { font-size: 13px; }
+@media (max-width: 600px) {
+  .run-transcript-message { padding: 16px 12px; }
+  .run-transcript-tool > summary { padding: 12px; }
+  .run-transcript-tool-body { padding-inline: 12px; }
+  .run-transcript-toolbar { align-items: flex-start; }
+}

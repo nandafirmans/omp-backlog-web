@@ -55,6 +55,12 @@ Final operator-commit UI re-drive, including regular-weight file-selection contr
 | Operator commit | Handoff-panel action opens an Ant Design modal with framed file selections, bounded diff readers and labeled message. Keep warnings, explicit final confirmation, back/cancel and unsaved-draft close protection. Body scrolls on short/mobile viewports; no new typography or palette. |
 | Login | Deliberate public-entry composition; its larger introductory headline is not a workspace page-title pattern. |
 
+### Live run transcript
+
+Run evidence uses a square, bordered conversation surface with IBM Plex Sans for agent Markdown and IBM Plex Mono for tool names, status, arguments and output. Tool calls are native keyboard-accessible disclosures keyed by persisted entry ID, so streaming updates preserve their expanded state. Running, Complete and Error are explicit text states; Complete means the call returned, not independent verification or acceptance.
+
+The bounded conversation follows latest output only while the reader is at the bottom. Scrolling up pauses following and exposes **Jump to latest**; output updates never move the surrounding page. Agent Markdown skips raw HTML, uses the existing safe URL transform, and exposes image references without automatically fetching images. User/system messages remain distinct plain text. Structured runs keep the legacy/raw log in a separate disclosure; older runs show only their recorded plain log and an honest unavailable-details notice. The view is read-only and does not change execution, approval or process lifetime.
+
 ## Responsive and accessibility contract
 
 Operator commit verification: actual authenticated app in a disposable instance was exercised at 1440px and 390px in Dark and Light. Modal/body had no horizontal overflow, file selection worked with Space, message/confirmation controls were reachable by scrolling, and back/cancel/unsaved-close protection retained their distinct effects. Screenshots were inspected; no browser runtime errors were observed. Evidence: `/tmp/opencode/backlog-verify-25VZZZ/proof`. This is not exhaustive accessibility certification or live-provider verification.
@@ -105,3 +111,7 @@ Settings retains IBM Plex, square surfaces and existing theme tokens. Helpers us
 
 Changed TSX passed ESLint. Real-browser checks with synthetic APIs covered equal desktop control widths/top edges, save/restore, comma-formatted token persistence, blank-budget rejection, incompatible-thinking reset and discovery failure/retry. Dark/Light desktop and 390px mobile were visually inspected without horizontal document overflow or recorded browser errors. Enabled primary text contrast measured 5.28:1 in Light and 7.26:1 in Tokyo Night; checked labels, helpers, input text and unsaved-state text exceeded 4.5:1. These are scoped UI observations, not exhaustive accessibility, Lighthouse or live-provider verification.
 
+
+### Live transcript verification
+
+Changed-code ESLint, strict TypeScript and the focused transcript/runtime protocol suite passed (20 tests, 193 assertions). A real browser rendered the actual App/run detail with synthetic session/state/events, exercising streaming Markdown, running-to-error updates, retained expanded tool details, keyboard disclosure, bottom-follow, scroll-up preservation, Jump to latest, raw log access and legacy fallback. Dark and Light were visually inspected at 1440px and 390px without horizontal document overflow. This is UI/protocol-fixture coverage, not live OMP/provider execution.

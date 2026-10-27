@@ -8,6 +8,7 @@ import { reconcileTickets, snapshotTicket } from './tickets';
 import { object, RpcProcess } from './rpc';
 import type { Frame } from './rpc';
 import { assertVerifiedCriteria, recordEvidence } from './evidence';
+import { redactTranscript, RunConversation, settleConversation, transcriptValue } from './transcript';
 
 const CLAIMED: Status[] = ['running', 'stopping', 'paused'];
 const QUIET_MS = 1_000;
@@ -27,7 +28,7 @@ interface Execution {
   stopping: Promise<void> | null;
   settling: boolean;
   failed: string | null;
-  streamed: Set<string>;
+  conversation: RunConversation;
   poll: NodeJS.Timeout | undefined;
   polling: boolean;
   deadline: NodeJS.Timeout | undefined;
@@ -37,10 +38,7 @@ interface Execution {
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function key(ticket: Pick<Ticket, 'repoId' | 'id'>) { return `${ticket.repoId}/${ticket.id}`; }
 function privateDir(store: Store, runId: string) { return join(store.dataDir, 'runtime', runId); }
-function redact(text: string) {
-  return text.replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|Bearer\s+\S+)/gi, '[redacted]')
-    .replace(/((?:api[_-]?key|access[_-]?token|authorization|password)\s*[=:]\s*)[^\s,;]+/gi, '$1[redacted]');
-}
+const redact = redactTranscript;
 
 async function processInfo(pid: number): Promise<ProcessInfo | null> {
   try {
@@ -177,7 +175,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   }
 
   function transcript(execution: Execution, text: string) {
-    const safe = redact(text);
+    const safe = transcriptValue(text);
     execution.run.transcript = (execution.run.transcript + safe).slice(-TRANSCRIPT_LIMIT);
     persist(execution);
     void appendFile(join(privateDir(store, execution.run.id), 'transcript.log'), safe, { mode: 0o600 }).catch((error: unknown) => {
@@ -208,6 +206,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
 
   async function stop(execution: Execution, status: Status, error: string | null = null): Promise<void> {
     if (execution.stopping) return execution.stopping;
+    if (error) error = redact(error);
     execution.stopping = (async () => {
       clearInterval(execution.poll);
       clearTimeout(execution.deadline);
@@ -238,9 +237,14 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           if (current?.git) store.save('repos', { ...current, handoff: { id: crypto.randomUUID(), runId: execution.run.id, detected: Date.now(), files: [], reason: 'Final Git inspection failed. Restore Git/repository access and explicitly recheck workspace before new work.' } });
           if (status === 'needs_review') { status = 'failed'; error = execution.run.changedFiles; }
         });
+        for (const entry of execution.run.conversation ?? []) if (entry.kind === 'agent' && entry.state === 'running') transcript(execution, `\nAgent: ${entry.text}\n`);
+        const stderr = execution.conversation.text('system', 'stderr');
+        if (stderr) transcript(execution, stderr);
+        settleConversation(execution.run);
+        if (error) execution.conversation.add('system', error, 'error');
         execution.run.status = status;
         if (execution.run.progress) execution.run.progress.phase = status === 'paused' ? 'Paused; execution slot retained' : 'Owned child work stopped';
-        execution.run.error = error;
+        execution.run.error = error ? redact(error) : null;
         execution.run.pid = null;
         execution.run.finished = status === 'paused' ? null : Date.now();
         store.transaction(() => { store.save('runs', execution.run); updateTicket(execution.run, status); });
@@ -248,7 +252,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         store.notify();
         wake();
       } catch (cause) {
-        execution.run.error = `${error ? `${error}; ` : ''}${message(cause)}`;
+        execution.run.error = redact(`${error ? `${error}; ` : ''}${message(cause)}`);
         persist(execution);
         execution.stopping = null;
         // Keep the claim in Stopping. Unknown child liveness must never release a slot.
@@ -258,6 +262,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   }
 
   function fail(execution: Execution, error: string) {
+    if (!execution.failed) execution.conversation.add('system', error, 'error');
     execution.failed ??= redact(error);
     if (!execution.setup && !execution.stopping) void stop(execution, 'failed', execution.failed);
   }
@@ -279,26 +284,16 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   }
 
   function onFrame(execution: Execution, frame: Frame) {
+    if (execution.conversation.frame(frame)) persist(execution);
     if (frame.type === 'prompt_result' && frame.status === 'error') fail(execution, String(object(frame.error).message ?? 'Provider turn failed'));
     if (frame.type === 'rpc_frame_error' || (frame.type === 'notice' && frame.level === 'error')) fail(execution, String(frame.message ?? frame.error ?? 'OMP transport or persistence error'));
-    if (frame.type === 'message_update' && typeof frame.messageId === 'string') {
-      const event = object(frame.assistantMessageEvent);
-      if (event.type === 'text_delta' && typeof event.delta === 'string') {
-        const prefix = execution.streamed.has(frame.messageId) ? '' : '\nAgent: ';
-        execution.streamed.add(frame.messageId);
-        transcript(execution, prefix + event.delta);
-      }
-    }
     if (frame.type === 'message_end') {
       const entry = object(frame.message);
       if (entry.role === 'assistant') {
         if (entry.stopReason === 'error') fail(execution, String(entry.errorMessage ?? 'Provider turn failed'));
-        if (!execution.streamed.has(String(frame.messageId)) && Array.isArray(entry.content)) for (const content of entry.content) {
-          const part = object(content);
-          if (part.type === 'text' && typeof part.text === 'string') transcript(execution, `\nAgent: ${part.text}\n`);
-        }
+        const text = execution.conversation.text('agent', String(frame.messageId));
+        if (text) transcript(execution, `\nAgent: ${text}\n`);
       }
-      if (typeof frame.messageId === 'string' && execution.streamed.delete(frame.messageId)) transcript(execution, '\n');
     }
     if (frame.type === 'tool_execution_start') {
       if (execution.run.progress) {
@@ -307,7 +302,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       }
       transcript(execution, `\nTool: ${String(frame.toolName ?? 'unknown')}\n`);
     }
-    if (frame.type === 'tool_execution_end' && frame.isError === true) transcript(execution, `Tool reported an error: ${JSON.stringify(frame.result ?? '').slice(0, 16_000)}\n`);
+    if (frame.type === 'tool_execution_end' && frame.isError === true) transcript(execution, `Tool reported an error: ${transcriptValue(frame.result ?? '')}\n`);
     if (frame.type === 'extension_ui_request') {
       const method = String(frame.method);
       if (method === 'cancel') {
@@ -319,6 +314,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         if (execution.run.progress) execution.run.progress.phase = 'Waiting for explicit answer';
         persist(execution);
       } else if (['notify', 'setStatus', 'setWidget', 'setTitle', 'set_editor_text'].includes(method)) {
+        execution.conversation.add('system', `${method}: ${String(frame.message ?? frame.text ?? frame.title ?? '')}`);
         transcript(execution, `${method}: ${String(frame.message ?? frame.text ?? frame.title ?? '')}\n`);
       } else {
         if (typeof frame.id === 'string' && execution.rpc) execution.rpc.send({ type: 'extension_ui_response', id: frame.id, cancelled: true });
@@ -344,6 +340,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             execution.run.blocker = result.blocker;
             response = result.status === 'blocked' ? 'Blocker recorded. Host will pause and stop goal continuation; do not complete an unmet goal.' : 'Result recorded for human review, not marked Done. Complete your achieved goal and settle; do not start another ticket.';
           } else throw new Error('Unknown host tool');
+          execution.conversation.hostResult(frame, response);
           persist(execution);
           execution.rpc?.send({ type: 'host_tool_result', id: frame.id, result: { content: [{ type: 'text', text: response }] } });
           if (execution.result?.status === 'blocked') {
@@ -351,6 +348,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             void stop(execution, 'blocked');
           }
         } catch (error) {
+          execution.conversation.hostResult(frame, message(error), true);
+          persist(execution);
           execution.rpc?.send({ type: 'host_tool_result', id: frame.id, isError: true, result: { content: [{ type: 'text', text: redact(message(error)) }] } });
         }
       }).catch(error => fail(execution, message(error)));
@@ -364,8 +363,13 @@ export async function createRuntime(store: Store): Promise<Runtime> {
 
   async function launch(run: Run, repo: Repo, ticket: Ticket, resume = false) {
     const initialized = Promise.withResolvers<void>();
-    const execution: Execution = { run, repo, ticket, rpc: null, result: null, setup: true, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: false, failed: null, streamed: new Set(), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve() };
+    const execution: Execution = { run, repo, ticket, rpc: null, result: null, setup: true, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: false, failed: null, conversation: new RunConversation(run), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve() };
     active = execution;
+    if (!resume) execution.conversation.add('user', `Execute ticket ${ticket.id}: ${ticket.title}\n\n${ticket.markdown}`);
+    else {
+      if (!run.conversation) execution.conversation.add('system', `Earlier activity was recorded only as a legacy transcript; no structured details were recovered.\n\n${run.transcript}`);
+      execution.conversation.add('user', 'Resume this same ticket and session. Previously canceled questions remain unanswered.');
+    }
     const settings = store.settings();
     run.progress = { phase: resume ? 'Resuming same session' : 'Starting selected ticket', latestAction: 'Host launching OMP', tokenBudget: settings.tokenBudget, deadline: run.started + settings.timeLimitMinutes * 60_000, ...(run.progress?.tokens ? { tokens: run.progress.tokens } : {}) };
     const remaining = settings.timeLimitMinutes * 60_000 - (Date.now() - run.started);
@@ -395,7 +399,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           await writeFile(join(directory, 'identity.json'), JSON.stringify(await identity(pid)), { mode: 0o600 });
         },
         onFrame: (frame) => onFrame(execution, frame),
-        onStderr: (text) => transcript(execution, `OMP stderr: ${text}`),
+        onStderr: (text) => { execution.conversation.stderr(text); persist(execution); },
         onFailure: (error) => fail(execution, message(error)),
       });
       execution.rpc = rpc;
@@ -553,6 +557,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         store.save('runs', run); updateTicket(run, 'stopping');
       } else {
         run.status = 'interrupted'; run.error = 'Backend or process interrupted this run. Review partial changes and explicitly retry; no actions were replayed.';
+        settleConversation(run);
         run.pid = null; run.finished = Date.now(); run.dialog = null;
         const repo = store.get('repos', run.repoId);
         if (repo && !repo.handoff) {

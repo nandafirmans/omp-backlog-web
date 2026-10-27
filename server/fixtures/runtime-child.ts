@@ -17,7 +17,7 @@ const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
 }
-const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking'; tokens?: number; expectedFeedback?: string };
+const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript'; tokens?: number; expectedFeedback?: string };
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
@@ -69,7 +69,23 @@ for await (const line of createInterface({ input: process.stdin })) {
     respond();
     if (frame.op === 'create' || frame.op === 'resume') {
       await log({ event: 'executing' });
+      if (configuration.scenario === 'transcript') {
+        // Matches installed OMP AgentEvent/RPC projection: updates carry cumulative
+        // partialResult snapshots; start/update use args, and end uses result/isError.
+        const messageId = 'fixture-agent';
+        send({ type: 'message_update', messageId, assistantMessageEvent: { type: 'text_delta', delta: '## Working\\nChecking ' } });
+        send({ type: 'message_update', messageId, assistantMessageEvent: { type: 'text_delta', delta: 'the **proof**. password="fixture-secret"' } });
+        send({ type: 'message_end', messageId, message: { role: 'assistant', content: [{ type: 'text', text: '## Working\\nChecking the **proof**. password="fixture-secret"' }] } });
+        send({ type: 'message_end', messageId: 'fixture-fallback', message: { role: 'assistant', content: [{ type: 'text', text: 'Final-only assistant fallback.' }] } });
+        const call = { toolCallId: 'fixture-tool', toolName: 'bash', args: { command: 'read proof.txt', nested: JSON.stringify({ api_key: 'fixture-nested-secret' }) } };
+        send({ type: 'tool_execution_start', ...call });
+        send({ type: 'tool_execution_update', ...call, partialResult: { content: [{ type: 'text', text: 'Reading' }] } });
+        send({ type: 'tool_execution_update', ...call, partialResult: { content: [{ type: 'text', text: 'Reading proof.txt' }] } });
+        send({ type: 'tool_execution_start', toolCallId: 'unfinished-tool', toolName: 'read', args: { path: 'unavailable.txt' } });
+      }
       if (configuration.scenario === 'provider-failure') {
+        send({ type: 'message_update', messageId: 'failed-partial', assistantMessageEvent: { type: 'text_delta', delta: 'Partial investigation before provider failure.' } });
+        send({ type: 'tool_execution_start', toolCallId: 'failed-tool', toolName: 'read', args: { path: 'proof.txt' } });
         send({ type: 'prompt_result', status: 'error', error: { message: 'Deterministic provider failure after admission' } });
       } else {
         send({ type: 'extension_ui_request', id: 'finish', method: 'input', title: 'Fixture completion barrier' });
@@ -79,6 +95,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     respond({ tokens: { total: configuration.scenario === 'tokens' ? configuration.tokens : 0 } });
   } else if (frame.type === 'extension_ui_response' && frame.id === 'finish') {
     if (frame.value !== 'finish' || frame.cancelled === true) continue;
+    if (configuration.scenario === 'transcript') send({ type: 'tool_execution_end', toolCallId: 'fixture-tool', toolName: 'bash', result: { content: [{ type: 'text', text: 'Proof checked; exit 0' }] }, isError: false });
     if (configuration.scenario === 'blocked') {
       resultId = crypto.randomUUID();
       send({ type: 'host_tool_call', id: resultId, toolName: 'backlog_result', arguments: {
