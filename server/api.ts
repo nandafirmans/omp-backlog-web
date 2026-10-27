@@ -11,6 +11,7 @@ import { proofDownload } from './evidence';
 import { inspectWorkspaceHandoff } from './runtime';
 import { handleDraftRequest } from './drafting';
 import { handleAssistedCreation } from './assisted-creation';
+import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
 interface Owner { username: string; hash: string }
@@ -177,7 +178,15 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           return json(await completions(path, repo.git, store.dataDir, url.searchParams.get('kind'), url.searchParams.get('q') || ''));
         }
         if (segments.length === 3 && request.method === 'PATCH') { const input = await body(request); if (!['paused', 'approved', 'automatic'].includes(String(input.mode))) throw new HttpError(400, 'Invalid execution mode'); const mode = input.mode as Repo['mode']; const updated = { ...(store.get('repos', repo.id) ?? repo), mode }; store.save('repos', updated); runtime.wake(); return json(updated); }
+        if (segments.length === 4 && ['workspace-review', 'workspace-commit'].includes(segments[3]) && request.method === 'POST') {
+          const input = await body(request);
+          await permittedPath(store, repo.path);
+          return await workspaceOperation(store, repo.id, async () => json(segments[3] === 'workspace-review'
+            ? await reviewWorkspace(store, repo, input.handoffId)
+            : await commitWorkspace(store, repo, input)));
+        }
         if (segments.length === 4 && segments[3] === 'reconcile-workspace' && request.method === 'POST') {
+          return await workspaceOperation(store, repo.id, async () => {
           const input = await body(request);
           if (!repo.handoff || input.handoffId !== repo.handoff.id) throw new HttpError(409, 'Workspace handoff changed; review the current gate');
           const claimed = () => store.list('runs').some(run => run.repoId === repo.id && ['running', 'stopping', 'paused'].includes(run.status));
@@ -192,6 +201,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           }
           const updated: Repo = { ...current, handoff: undefined };
           store.save('repos', updated); runtime.wake(); return json(updated);
+          });
         }
         if (segments[3] === 'tickets' && segments.length === 4 && request.method === 'POST') { const input = await body(request); const ticket = await writeTicket(store, repo, string(input.markdown, 'markdown', MAX_MARKDOWN)); runtime.wake(); return json(ticket, 201); }
         if (segments[3] === 'tickets' && segments[4]) {

@@ -110,7 +110,7 @@ export async function inspectWorkspaceHandoff(repo: Repo, runId: string | null =
   try {
     files = changedPaths(await command(repo.path, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all']));
     if (!files.length) return;
-    reason = 'Git changes require operator review and reconciliation outside this app. Preserve the work; commit only if separately authorized. Done does not clean the working tree.';
+    reason = 'Git changes require operator review. Preserve the work; use an explicitly confirmed Review & commit action or reconcile in your terminal. Done does not clean the working tree.';
   } catch (error) {
     reason = `Git safety inspection unavailable: ${redact(message(error))}. Restore repository access and Git before rechecking.`;
   }
@@ -194,7 +194,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     const paths = changedPaths(status);
     if (requireHandoff && paths.length) {
       const current = store.get('repos', execution.repo.id);
-      if (current) store.save('repos', { ...current, handoff: { id: crypto.randomUUID(), runId: execution.run.id, detected: Date.now(), files: paths, reason: 'Run left Git changes. Review evidence and reconcile this workspace outside the app before starting another ticket. Human Done does not clear this gate.' } });
+      if (current) store.save('repos', { ...current, handoff: { id: crypto.randomUUID(), runId: execution.run.id, detected: Date.now(), files: paths, reason: 'Run left Git changes. Review evidence and use an explicitly confirmed operator commit or terminal reconciliation before starting another ticket. Human Done does not clear this gate.' } });
     }
     const stat = await command(execution.repo.path, ['diff', '--stat', '--', '.', ':!.omp-backlog']);
     const staged = await command(execution.repo.path, ['diff', '--cached', '--stat', '--', '.', ':!.omp-backlog']);

@@ -21,6 +21,8 @@ Append `--review-fixture` to exercise receipt rendering/download and change-requ
 
 Append `--handoff-fixture` instead to include those review paths in a disposable Git repository and exercise operator reconciliation: canceled recheck, dirty rejection preserving work, external preservation of the synthetic file, persistent gate after reload, then explicit clean recheck. No commits/stashes/resets: helper simulates operator action by moving only its generated fixture file into its private scratch archive. No real repository is reconciled by the helper.
 
+With explicit operator permission for disposable Git commits, use `--commit-fixture` alone to exercise Review & commit instead: initial dirty admission without implementation, dark/Light desktop/mobile review, keyboard selection, cancel/back/unsaved close, stale-content rejection, selected-file commits, preserved unselected work and separate clean Recheck. It creates commits only inside the helper-owned disposable Git repository, never this source tree or an existing project. Ends with global scheduling paused and zero implementation runs; no OMP/provider, push/reset/stash or hook invocation. Git/API regression coverage is in `server/workspace-commit.test.ts` (also creates disposable commits; request permission before running).
+
 For exploratory work: use a new private data directory outside source and a free port; run `OMP_BACKLOG_DATA=<new-directory> bun server/setup.ts` interactively, then start `OMP_BACKLOG_DATA=<same-directory> OMP_BACKLOG_PORT=<port> bun run dev` with `OMP_BACKLOG_ORIGIN` unset. Keep password entry hidden. Do not read existing auth/environment files. Keep repositories and global scheduler paused unless a separately authorized execution journey requires otherwise.
 
 ## Doctor (read-only)
@@ -50,7 +52,7 @@ Helper closes its browser and sends SIGTERM only to its owned server/setup proce
 
 ## Helpers
 
-- `helpers/smoke.mjs`: bounded starter browser journey, optional `--review-fixture` review paths or `--handoff-fixture` Git handoff paths, no dependency installation or provider invocation.
+- `helpers/smoke.mjs`: bounded starter browser journey, optional `--review-fixture` review paths, `--handoff-fixture` Git handoff paths or explicitly authorized `--commit-fixture` operator commits, no dependency installation or provider invocation.
 - Existing `bun run lint` is default code verification. Run tests/typecheck only when requested or required by an authorized verification journey; no build needed.
 - `server/runtime-integration.test.ts`: protocol fixture, not live provider. Real OMP runs require explicit disposable-project execution permission and configured provider access. Do not inspect credentials to establish it.
 - Maintenance: invoke `/skill:maintain-backlog-verification` explicitly; do not silently broaden ticket scope.

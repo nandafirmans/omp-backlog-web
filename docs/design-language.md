@@ -41,6 +41,8 @@ Self-hosted IBM Plex fonts and existing theme palettes remain authoritative. Do 
 
 ## Screen-specific rules
 
+Final operator-commit UI re-drive, including regular-weight file-selection controls: `/tmp/opencode/backlog-verify-52IQpg/proof/result.json`. Dark/Light desktop/mobile checks passed without horizontal modal/page overflow or browser runtime errors.
+
 | Surface | Preserve |
 | --- | --- |
 | Home | Project-first navigation, reusable route action, familiar folder cards and contextual scheduler controls. |
@@ -50,9 +52,12 @@ Self-hosted IBM Plex fonts and existing theme palettes remain authoritative. Do 
 | Settings | Shared route title, bordered form, native component sizing and visible safety explanations. |
 | Plan | Shared route title and framed reading document. Document headings retain their own reading hierarchy. |
 | Run evidence | Existing framed panel, metadata, readable transcript, explicit evidence provenance and contextual controls. |
+| Operator commit | Handoff-panel action opens an Ant Design modal with framed file selections, bounded diff readers and labeled message. Keep warnings, explicit final confirmation, back/cancel and unsaved-draft close protection. Body scrolls on short/mobile viewports; no new typography or palette. |
 | Login | Deliberate public-entry composition; its larger introductory headline is not a workspace page-title pattern. |
 
 ## Responsive and accessibility contract
+
+Operator commit verification: actual authenticated app in a disposable instance was exercised at 1440px and 390px in Dark and Light. Modal/body had no horizontal overflow, file selection worked with Space, message/confirmation controls were reachable by scrolling, and back/cancel/unsaved-close protection retained their distinct effects. Screenshots were inspected; no browser runtime errors were observed. Evidence: `/tmp/opencode/backlog-verify-25VZZZ/proof`. This is not exhaustive accessibility certification or live-provider verification.
 
 At narrow widths, headers and controls wrap into a single-column flow. Keep horizontal scrolling inside editors, tables and the board rather than the document. Do not shrink text or controls to force desktop layouts onto mobile. Keep all actions reachable on short viewports.
 

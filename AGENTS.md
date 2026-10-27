@@ -34,7 +34,7 @@
 
 - Structured receipts are agent claims. Host-recorded storage/time/artifact hashes do not independently prove command execution, recipe identity or correctness. Keep host observations distinct from agent reports.
 - Store sanitized verification artifacts as private run proof, never requirement attachments that change the approved revision. Never include credentials or sessions.
-- Selected handoff policy: operator reconciliation outside the app, not automatic commits or per-ticket worktrees. Preserve partial and unrelated edits.
+- Selected handoff policy: operator-controlled reconciliation, not automatic commits or per-ticket worktrees. Preserve partial and unrelated edits. The explicit Review & commit action is a human-authorized exception: selected reviewed working-tree versions only, unselected staging preserved, no hooks/signing/push/reset/stash, and no automatic gate release. Ticket agents still have no commit authority.
 - Dirty Git or unavailable inspection gates new starts for that project. Done, mode changes and merely becoming clean do not clear a recorded gate; explicit clean Recheck workspace is required, with no active/paused work owning that workspace. Other execution gates still apply.
 - Never commit, stash, reset, push, deploy or delete work merely to advance the queue. These require separate authorization.
 - Registered projects are not sandboxes: agent processes run with backend OS-user permissions. Skill references never grant credential access or permission to escape project scope.

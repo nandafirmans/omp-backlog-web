@@ -12,7 +12,7 @@ This guide describes the implemented workflow, not full pstack parity. See [PLAN
 | Durable review feedback | Request changes requires an explanation through ticket panel, board Actions or drag confirmation. Feedback remains linked to the reviewed run/revision and is included in subsequent authorized attempts. |
 | Correct blocked shutdown | Host pauses goal continuation and stops owned child work without asking the model to complete an unmet goal. |
 | Progress visibility | Run panel shows host-observed activity, deadline/budget and last reported session-token sample with its accounting basis. It does not infer percentage completion. |
-| Operator reconciliation | Git changes or unavailable Git inspection create a persistent project gate. Operator reviews/reconciles outside the app, then explicitly requests a clean recheck before new work can start. |
+| Operator reconciliation | Git changes or unavailable Git inspection create a persistent project gate. Operator reviews/reconciles through an explicitly confirmed local commit or in a terminal, then separately requests a clean recheck before new work can start. |
 | Optional ticket drafting | New ticket retains its manual Markdown/import drawer. The sibling Create with agent action opens a dedicated Discuss / Review ticket page with an explicitly connected, capability-restricted OMP conversation, model/thinking controls and pasted file/skill context. Only reviewed explicit creation publishes a ticket; drafting never implements or approves it. |
 
 ### Agent-assisted creation
@@ -91,21 +91,21 @@ A new attempt still needs safe workspace handoff, execution permission, satisfie
 
 ## Operator reconciliation
 
-Selected policy: **operator review and reconciliation outside the app**, not automatic commits or per-ticket worktrees.
+Selected policy: **operator-controlled reconciliation**, not automatic commits or per-ticket worktrees. The app now offers an explicitly confirmed local commit; terminal reconciliation remains available.
 
 A project-level gate is recorded when initial admission finds Git changes, a stopped run leaves changes, interrupted-run recovery finds changes, or required Git inspection is unavailable. It blocks that project's new starts without consuming every queued ticket as a synthetic blocked run. Other projects can still use the global slot.
 
 Home displays a warning. The project page shows the gate, affected files, originating run when available, and recovery instructions.
 
 1. Review evidence, partial work and unrelated edits. Preserve them.
-2. Reconcile in your terminal under your own authorization. Commit only if separately authorized; the app never commits, stashes, resets or deletes work to advance the queue.
+2. Reconcile in your terminal, or choose **Review & commit**: inspect HEAD-to-working-tree diffs/modes, select files, enter a message, review the exact selection, then explicitly Confirm commit. Selected working-tree versions replace any staged versions for those files; unselected staged/unstaged work is preserved. No push/reset/stash/worktree deletion or automatic agent commits. See [operator commit limits](../README.md#operator-controlled-local-commits).
 3. Choose **Recheck workspace** and confirm. This performs authenticated, CSRF-protected Git inspection with optional locks disabled.
 4. Only a clean observed workspace outside `.omp-backlog/`, with no running/stopping/paused work owning that workspace, can release the current gate. Stale gate IDs, dirty state and unavailable inspection are rejected.
 5. Existing project/global permissions, dependencies and retry rules still apply. Clearing the gate may allow eligible queued work to start.
 
 **Done, switching execution modes, and merely becoming clean do not clear a recorded gate.** Previously blocked tickets still require explicit retry. The scheduler checks Git again before each new start.
 
-Git ignore rules still apply: this is not proof about ignored files or a security sandbox. Non-Git projects have no Git handoff/changed-file guarantee. No manual reconciliation of this repository or other real projects was performed as part of implementing the feature.
+Git ignore rules still apply: this is not proof about ignored files or a security sandbox. Non-Git projects have no Git handoff/changed-file guarantee. Operator commits remain behind authentication/CSRF, revision-bound review, exclusive workspace-operation/index locks, and no owned run. Successful commit leaves the gate intact and does not wake the scheduler. No reconciliation of this repository or expense-tracker was performed while implementing this action; authorized commit checks use disposable repositories only.
 
 ## Blocked, failed, paused and interrupted work
 

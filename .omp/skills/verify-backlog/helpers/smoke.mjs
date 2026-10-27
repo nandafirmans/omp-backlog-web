@@ -1,4 +1,4 @@
-/* global process, console, setTimeout, clearTimeout, fetch, AbortSignal */
+/* global process, console, setTimeout, clearTimeout, fetch, AbortSignal, localStorage, document, innerWidth */
 import assert from 'node:assert/strict';
 import { randomBytes, createHash } from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
@@ -12,9 +12,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 // No downloads or dependency resolution on behalf of the operator.
 assert(process.env.PLAYWRIGHT_MODULE, 'Set PLAYWRIGHT_MODULE to an existing Playwright index.mjs');
 const { chromium } = await import(pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href);
-const handoffFixture = process.argv.includes('--handoff-fixture');
-const reviewFixture = process.argv.includes('--review-fixture') || handoffFixture;
-assert(process.argv.slice(2).every(argument => ['--review-fixture', '--handoff-fixture'].includes(argument)), 'Supported arguments: --review-fixture, --handoff-fixture');
+const commitFixture = process.argv.includes('--commit-fixture');
+const handoffFixture = process.argv.includes('--handoff-fixture') || commitFixture;
+const reviewFixture = process.argv.includes('--review-fixture') || (handoffFixture && !commitFixture);
+assert(process.argv.slice(2).every(argument => ['--review-fixture', '--handoff-fixture', '--commit-fixture'].includes(argument)), 'Supported arguments: --review-fixture, --handoff-fixture, --commit-fixture');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const scratch = await mkdtemp('/tmp/opencode/backlog-verify-');
 const proof = join(scratch, 'proof');
@@ -23,7 +24,13 @@ await mkdir(proof, { mode: 0o700 });
 await mkdir(repository, { recursive: true, mode: 0o700 });
 if (handoffFixture) {
   execFileSync('git', ['init', '--quiet', repository], { stdio: 'ignore' });
-  await writeFile(join(repository, '.git/info/exclude'), 'fixture.json\nfixture-events.jsonl\n', { mode: 0o600 });
+  await writeFile(join(repository, '.git/info/exclude'), '.omp-backlog/\nfixture.json\nfixture-events.jsonl\n', { mode: 0o600 });
+  if (commitFixture) {
+    execFileSync('git', ['-C', repository, 'config', 'user.name', 'Browser fixture'], { stdio: 'ignore' });
+    execFileSync('git', ['-C', repository, 'config', 'user.email', 'fixture@example.invalid'], { stdio: 'ignore' });
+    await writeFile(join(repository, 'starter.txt'), 'initial starter\n', { mode: 0o600 });
+    await writeFile(join(repository, 'keep.txt'), 'preserve this file\n', { mode: 0o600 });
+  }
 }
 const env = { ...process.env, OMP_BACKLOG_DATA: join(scratch, 'data') };
 delete env.OMP_BACKLOG_ORIGIN;
@@ -31,7 +38,7 @@ const password = randomBytes(32).toString('hex');
 const username = 'verification-owner';
 const hash = value => createHash('sha256').update(value).digest('hex');
 const receipt = {
-  tier: handoffFixture ? 'real-browser-git-handoff-protocol-fixture-not-provider' : reviewFixture ? 'real-browser-protocol-fixture-not-provider' : 'real-browser-no-provider', status: 'failed', stage: 'setup', checks: [],
+  tier: commitFixture ? 'real-browser-operator-commit-no-provider' : handoffFixture ? 'real-browser-git-handoff-protocol-fixture-not-provider' : reviewFixture ? 'real-browser-protocol-fixture-not-provider' : 'real-browser-no-provider', status: 'failed', stage: 'setup', checks: [],
   recipeHash: hash(await readFile(resolve(root, '.omp/skills/verify-backlog/SKILL.md'))),
   helperHash: hash(await readFile(fileURLToPath(import.meta.url))),
   head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
@@ -42,6 +49,7 @@ const receipt = {
 };
 let setup, server, browser, page;
 let authenticated = false;
+let browserErrors = 0;
 const check = (feature, action, outcome) => receipt.checks.push({ feature, action, outcome });
 const alive = child => child && child.exitCode === null && child.signalCode === null;
 async function stop(child) {
@@ -92,6 +100,7 @@ try {
   check('access', 'Read-only Doctor', 'Owned server healthy; unauthenticated state rejected (401)');
   browser = await chromium.launch({ headless: true });
   page = await browser.newPage({ viewport: receipt.viewport });
+  page.on('pageerror', () => { browserErrors++; });
   page.setDefaultTimeout(15000);
   receipt.stage = 'browser login';
   await page.goto(origin);
@@ -115,7 +124,7 @@ try {
   await page.getByLabel('Permitted folder roots').fill(join(scratch, 'workspace'));
   await page.getByRole('button', { name: 'Save settings', exact: true }).click();
   await page.getByText('Settings saved. Existing runs are not restarted.', { exact: true }).waitFor();
-  await page.getByRole('link', { name: 'Home', exact: true }).click();
+  await page.getByRole('link', { name: 'OMP Backlog projects', exact: true }).click();
   receipt.stage = 'folder picker';
   await page.getByRole('link', { name: 'Add project +', exact: true }).click();
   await page.getByRole('button', { name: 'workspace', exact: true }).click();
@@ -165,6 +174,94 @@ try {
   receipt.revision = ticket.revision;
   await page.screenshot({ path: join(proof, 'invalidated.png'), fullPage: true });
   check('tickets', 'Edit → save → reload → read persisted state/file', 'Revision changed, approval cleared, exact Markdown persisted, zero runs');
+  if (commitFixture) {
+    receipt.stage = 'create dirty admission gate without implementation';
+    await page.getByRole('button', { name: 'Approve this revision', exact: true }).click();
+    const projectUrl = `${origin}/projects/${registered.repos[0].id}`;
+    await page.goto(projectUrl);
+    await page.getByRole('combobox', { name: 'Execution permission', exact: true }).click();
+    await page.locator('.ant-select-dropdown').getByText('Approved tickets only', { exact: true }).click();
+    await page.goto(origin);
+    await page.getByRole('button', { name: 'Allow new starts', exact: true }).click();
+    await page.goto(projectUrl);
+    await page.getByRole('heading', { name: 'Operator reconciliation required', exact: true }).waitFor();
+    assert.equal((await state()).runs.length, 0);
+    await page.goto(origin);
+    await page.getByRole('button', { name: 'Pause all new starts', exact: true }).click();
+    await page.goto(projectUrl);
+    const gateId = (await state()).repos[0].handoff.id;
+    const dialog = () => page.getByRole('dialog', { name: 'Review workspace changes', exact: true });
+    const openReview = async () => {
+      await page.getByRole('button', { name: 'Review & commit', exact: true }).click();
+      await dialog().getByRole('checkbox').first().waitFor();
+    };
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate(theme => localStorage.setItem('omp-color-mode', theme), theme);
+      await page.reload();
+      for (const width of [1440, 390]) {
+        receipt.stage = `operator commit review ${theme} ${width}`;
+        await page.setViewportSize({ width, height: 1000 });
+        await openReview();
+        assert.equal(await dialog().getByRole('button', { name: 'Review commit', exact: true }).isDisabled(), true);
+        await dialog().getByRole('checkbox', { name: /starter\.txt/ }).focus();
+        await page.keyboard.press('Space');
+        await dialog().getByLabel('Commit message', { exact: true }).fill('chore: browser starter');
+        await dialog().getByRole('button', { name: 'Review commit', exact: true }).click();
+        await dialog().getByRole('button', { name: 'Back to review', exact: true }).click();
+        assert.equal(await dialog().getByRole('checkbox', { name: /starter\.txt/ }).isChecked(), true);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+        assert.equal(await dialog().locator('.ant-modal-body').evaluate(body => body.scrollWidth <= body.clientWidth), true);
+        await page.screenshot({ path: join(proof, `commit-${theme}-${width}.png`), fullPage: true });
+        await dialog().getByRole('button', { name: 'Close', exact: true }).click();
+        const discard = page.getByRole('dialog', { name: 'Discard commit draft?', exact: true });
+        await discard.getByRole('button', { name: 'Keep reviewing', exact: true }).click();
+        await discard.waitFor({ state: 'hidden' });
+        await dialog().getByRole('button', { name: 'Close', exact: true }).click();
+        await discard.getByRole('button', { name: 'Discard draft', exact: true }).click();
+        await dialog().waitFor({ state: 'hidden' });
+      }
+    }
+    assert.equal(execFileSync('git', ['-C', repository, 'ls-files'], { encoding: 'utf8' }), '');
+    check('projects', 'Dark/Light desktop/mobile → keyboard select → confirm/back → canceled close → discard draft', 'Controls reachable; no horizontal page overflow; no staged changes or commit from cancellation');
+    receipt.stage = 'reject changed content after browser review';
+    await openReview();
+    await dialog().getByRole('checkbox', { name: /starter\.txt/ }).check();
+    await dialog().getByLabel('Commit message', { exact: true }).fill('chore: browser starter');
+    await dialog().getByRole('button', { name: 'Review commit', exact: true }).click();
+    await writeFile(join(repository, 'starter.txt'), 'changed after review\n', { mode: 0o600 });
+    await dialog().getByRole('button', { name: 'Confirm commit', exact: true }).click();
+    await dialog().getByRole('alert').waitFor();
+    assert.equal(execFileSync('git', ['-C', repository, 'ls-files'], { encoding: 'utf8' }), '');
+    await dialog().getByRole('button', { name: 'Reload changes', exact: true }).click();
+    await dialog().getByRole('checkbox', { name: /starter\.txt/ }).check();
+    await dialog().getByLabel('Commit message', { exact: true }).fill('chore: browser starter');
+    await dialog().getByRole('button', { name: 'Review commit', exact: true }).click();
+    await dialog().getByRole('button', { name: 'Confirm commit', exact: true }).click();
+    await dialog().getByRole('status').filter({ hasText: 'Created commit' }).waitFor();
+    assert.equal(execFileSync('git', ['-C', repository, 'show', 'HEAD:starter.txt'], { encoding: 'utf8' }), 'changed after review\n');
+    assert.equal(execFileSync('git', ['-C', repository, 'ls-tree', '--name-only', 'HEAD'], { encoding: 'utf8' }), 'starter.txt\n');
+    assert.equal(await readFile(join(repository, 'keep.txt'), 'utf8'), 'preserve this file\n');
+    assert.equal((await state()).repos[0].handoff.id, gateId);
+    assert.equal((await state()).runs.length, 0);
+    await dialog().getByRole('button', { name: 'Close', exact: true }).click();
+    receipt.stage = 'commit remaining file then explicitly recheck';
+    await openReview();
+    await dialog().getByRole('checkbox', { name: /keep\.txt/ }).check();
+    await dialog().getByLabel('Commit message', { exact: true }).fill('chore: retain remaining fixture');
+    await dialog().getByRole('button', { name: 'Review commit', exact: true }).click();
+    await dialog().getByRole('button', { name: 'Confirm commit', exact: true }).click();
+    await dialog().getByRole('status').filter({ hasText: 'Created commit' }).waitFor();
+    await dialog().getByRole('button', { name: 'Close', exact: true }).click();
+    await page.reload();
+    assert.equal((await state()).repos[0].handoff.id, gateId);
+    await page.getByRole('button', { name: 'Recheck workspace', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Recheck reconciled workspace?', exact: true }).getByRole('button', { name: 'Recheck workspace', exact: true }).click();
+    await page.getByRole('heading', { name: 'Operator reconciliation required', exact: true }).waitFor({ state: 'hidden' });
+    assert.equal((await state()).settings.paused, true);
+    assert.equal((await state()).runs.length, 0);
+    assert.equal(execFileSync('git', ['-C', repository, 'status', '--porcelain'], { encoding: 'utf8' }), '');
+    check('projects', 'Stale rejection → explicit selected commit → remaining-file commit → reload → separate clean Recheck', 'Only reviewed selections committed; unselected work preserved; gate persisted until recheck; global pause retained; zero ticket runs');
+  }
   if (reviewFixture) {
     receipt.stage = 'configure protocol fixture';
     const executable = join(scratch, 'protocol-child');
@@ -293,6 +390,8 @@ try {
     }
   }
   assert(alive(server), 'Owned server died during browser journey');
+  assert.equal(browserErrors, 0, 'Unexpected browser runtime errors');
+  receipt.browserRuntimeErrors = browserErrors;
   receipt.status = 'passed';
   receipt.stage = 'complete';
 } catch (error) {

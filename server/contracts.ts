@@ -2,6 +2,7 @@ export type Mode = 'paused' | 'approved' | 'automatic';
 export type Status = 'draft' | 'ready' | 'running' | 'stopping' | 'paused' | 'blocked' | 'failed' | 'interrupted' | 'needs_review' | 'done';
 export interface Repo { id: string; name: string; path: string; git: boolean; mode: Mode; lastStarted: number; handoff?: { id: string; runId: string | null; detected: number; files: string[]; reason: string } }
 export interface Attachment { name: string; size: number; hash: string }
+export interface WorkspaceReview { id: string; head: string | null; files: { path: string; status: string; before?: string; after?: string; mode?: string; diff?: string; blocked?: string }[] }
 export interface Ticket { id: string; repoId: string; title: string; markdown: string; revision: string; approvedRevision: string | null; status: Status; dependencies: string[]; criteria: string[]; attachments: Attachment[]; error: string | null; order: number; removed: boolean; runId: string | null }
 export interface Dialog { id: string; method: string; title?: string; message?: string; options?: unknown[]; [key: string]: unknown }
 export interface ProofArtifact { id: string; name: string; size: number; sha256: string }
