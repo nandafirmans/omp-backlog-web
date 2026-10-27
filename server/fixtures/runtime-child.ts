@@ -17,12 +17,13 @@ const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
 }
-const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked'; tokens?: number; expectedFeedback?: string };
+const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking'; tokens?: number; expectedFeedback?: string };
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
+if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
 const session = args.includes('--resume')
-  ? JSON.parse(await readFile(sessionFile, 'utf8')) as { id: string }
-  : { id: crypto.randomUUID() };
+  ? JSON.parse(await readFile(sessionFile, 'utf8')) as { id: string; thinking?: string }
+  : { id: crypto.randomUUID(), thinking: 'medium' };
 await writeFile(sessionFile, JSON.stringify(session));
 const log = (event: Record<string, unknown>) => appendFile(join(process.cwd(), 'fixture-events.jsonl'), JSON.stringify({ ...event, pid: process.pid, sessionId: session.id }) + '\n');
 const send = (frame: Frame) => process.stdout.write(JSON.stringify(frame) + '\n');
@@ -38,7 +39,7 @@ send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2], max
 for await (const line of createInterface({ input: process.stdin })) {
   const frame = decoder.decode(Buffer.from(line));
   if (!frame) continue;
-  await log({ event: 'command', command: frame.type, op: frame.op });
+  await log({ event: 'command', command: frame.type, op: frame.op, level: frame.level });
   const respond = (data: Record<string, unknown> = {}) => send({ type: 'response', id: frame.id, success: true, data });
   if (frame.type === 'negotiate_protocol' && frame.protocolVersion === 2) {
     negotiated = true;
@@ -46,7 +47,13 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (!negotiated) {
     throw new Error('Fixture requires protocol v2 negotiation');
   } else if (frame.type === 'get_state') {
-    respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false });
+    respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, thinkingLevel: session.thinking ?? 'medium' });
+  } else if (frame.type === 'get_available_thinking_levels') {
+    respond({ levels: ['off', 'medium', 'high'] });
+  } else if (frame.type === 'set_thinking_level') {
+    session.thinking = configuration.scenario === 'clamp-thinking' ? 'medium' : String(frame.level);
+    await writeFile(sessionFile, JSON.stringify(session));
+    respond();
   } else if (frame.type === 'set_host_tools') {
     if (!Array.isArray(frame.tools) || !frame.tools.some((tool) => tool.name === 'backlog_result')) throw new Error('Missing backlog_result registration');
     toolsRegistered = true;
@@ -56,7 +63,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'prompt') {
     if (!toolsRegistered || typeof frame.message !== 'string' || !frame.message.includes(ticket.revision)) throw new Error('Prompt lacks registered tool or immutable revision');
     if (configuration.expectedFeedback && !frame.message.includes(configuration.expectedFeedback)) throw new Error('Prompt lost human review feedback');
-    await log({ event: 'prompt-admitted', revision: ticket.revision });
+    await log({ event: 'prompt-admitted', revision: ticket.revision, thinking: session.thinking ?? 'medium' });
     respond();
   } else if (frame.type === 'goal') {
     respond();

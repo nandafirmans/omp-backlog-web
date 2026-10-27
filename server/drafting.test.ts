@@ -1,15 +1,15 @@
 import { expect, test } from 'bun:test';
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Repo } from './contracts';
 import type { DraftPreparation, DraftSnapshot } from './drafting-contracts';
-import { closeDrafts, handleDraftRequest } from './drafting';
+import { closeDrafts, discoverExecutionModels, handleDraftRequest } from './drafting';
 import { resolveDraftReference } from './completions';
 import { closeStore, createStore } from './store';
 import { HttpError } from './tickets';
 
-async function fixture(run: (context: { repo: Repo; call(path?: string, method?: string, value?: unknown): Promise<Response>; root: string }) => Promise<void>, mode = '') {
+async function fixture(run: (context: { repo: Repo; call(path?: string, method?: string, value?: unknown): Promise<Response>; root: string; executable: string }) => Promise<void>, mode = '') {
   const root = await mkdtemp(join(tmpdir(), 'omp-drafting-test-'));
   const store = createStore(join(root, 'private'));
   const previous = { agent: process.env.PI_CODING_AGENT_DIR, profile: process.env.OMP_PROFILE, node: process.env.NODE_OPTIONS, bun: process.env.BUN_OPTIONS, config: process.env.PI_CONFIG_FILES };
@@ -20,7 +20,7 @@ async function fixture(run: (context: { repo: Repo; call(path?: string, method?:
     process.env.NODE_OPTIONS = '--require /must-not-be-loaded.js'; process.env.BUN_OPTIONS = '--preload /must-not-be-loaded.js'; process.env.PI_CONFIG_FILES = '/must-not-be-read.yml';
     const executable = join(root, 'omp-fixture');
     const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
-    await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/drafting-child.ts'))} ${quote(mode)} "$@"\n`);
+    await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/drafting-child.ts'))} ${quote(mode)} --fixture-log ${quote(join(root, 'child.jsonl'))} "$@"\n`);
     await chmod(executable, 0o700);
     store.setSettings({ ...store.settings(), executable, roots: [repo.path] }); store.save('repos', repo);
     const call = async (path = '', method = 'GET', value?: unknown) => {
@@ -29,7 +29,7 @@ async function fixture(run: (context: { repo: Repo; call(path?: string, method?:
       try { return await handleDraftRequest(store, repo, request, new URL(url).pathname.split('/').filter(Boolean)); }
       catch (error) { if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status }); throw error; }
     };
-    await run({ repo, call, root });
+    await run({ repo, call, root, executable });
     expect(store.list('tickets')).toEqual([]); expect(store.list('runs')).toEqual([]);
     expect(store.get('repos', repo.id)?.mode).toBe('automatic');
   } finally {
@@ -57,6 +57,52 @@ async function settled(call: (path?: string, method?: string, value?: unknown) =
   throw new Error('Draft protocol fixture did not settle');
 }
 const png = () => new File([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')], 'reference.png');
+
+test('execution model discovery uses isolated metadata-only RPC and cleans up success and failure children', async () => {
+  await fixture(async ({ root, executable }) => {
+    const initial = await discoverExecutionModels(executable, '');
+    expect(initial.model).toBe('fixture/vision');
+    expect(initial.thinkingLevels).toEqual(['off', 'medium']);
+    expect(initial.models.map(model => `${model.provider}/${model.id}`)).toEqual(['fixture/vision', 'fixture/text']);
+    const selected = await discoverExecutionModels(executable, 'fixture/text');
+    expect(selected.model).toBe('fixture/text');
+    expect(selected.thinkingLevels).toEqual(['off']);
+    await expect(discoverExecutionModels(executable, 'other/text')).rejects.toThrow('not available');
+    const log = (await readFile(join(root, 'child.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(log.filter(event => event.event === 'exit')).toHaveLength(3);
+    expect(log.some(event => ['prompt', 'goal', 'set_thinking_level'].includes(event.command))).toBe(false);
+    for (const child of log.filter(event => event.event === 'spawn')) {
+      expect(() => process.kill(child.pid, 0)).toThrow();
+      expect(await stat(child.cwd).catch(() => null)).toBeNull();
+    }
+  }, 'discovery');
+}, 15000);
+
+test('execution model discovery has no invented default and rejects unsafe or stalled peers', async () => {
+  await fixture(async ({ executable }) => {
+    const result = await discoverExecutionModels(executable, '');
+    expect(result.model).toBe('');
+    expect(result.thinkingLevels).toEqual([]);
+  }, 'unselected');
+  await fixture(async ({ executable }) => {
+    await expect(discoverExecutionModels(executable, '')).rejects.toThrow('discovery failed');
+  }, 'unsafe');
+  await fixture(async ({ root, executable }) => {
+    await expect(discoverExecutionModels(executable, '')).rejects.toThrow('discovery failed');
+    const log = (await readFile(join(root, 'child.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    expect(log.some(event => event.event === 'exit')).toBe(true);
+    for (const child of log.filter(event => event.event === 'spawn')) expect(await stat(child.cwd).catch(() => null)).toBeNull();
+  }, 'discovery-stall');
+}, 20000);
+
+test('execution discovery permits the audited newer release but rejects unknown isolation profiles', async () => {
+  await fixture(async ({ executable }) => {
+    expect((await discoverExecutionModels(executable, '')).model).toBe('fixture/vision');
+  }, 'release-18.13.1');
+  await fixture(async ({ executable }) => {
+    await expect(discoverExecutionModels(executable, '')).rejects.toThrow('require audited OMP');
+  }, 'unaudited-release');
+}, 15000);
 
 test('draft protocol supports exact models, clamped thinking, safe host context and follow-up without ticket side effects', async () => {
   await fixture(async ({ call, repo }) => {

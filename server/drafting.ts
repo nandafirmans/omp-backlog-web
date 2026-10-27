@@ -29,7 +29,7 @@ interface Draft {
 }
 interface Prepared extends DraftPreparation { message: string; images: { type: 'image'; mimeType: string; data: string }[]; bytes: number; prompt: string }
 
-// Audited against official v18.12.6 CLI/main, SDK, discovery and plugin loaders.
+// Audited against official v18.12.6 and v18.13.1 CLI/main, SDK, discovery and plugin loaders.
 // Empty namespaces are established BEFORE loading OMP; --no-tools alone is unsafe.
 // Local provider auth stays inside OMP through its existing DB, not application code.
 // This reduces capabilities, not OS permissions; it is deliberately not a sandbox.
@@ -97,13 +97,78 @@ async function checkVersion(executable: string, cwd: string, env: NodeJS.Process
   let output = ''; let exceeded = false;
   const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new HttpError(503, 'OMP version discovery timed out')); }, 10000);
   child.stdout.on('data', (data: Buffer) => { if (output.length + data.length > 4096) { exceeded = true; child.kill('SIGKILL'); } else output += data.toString('utf8'); });
-  child.once('error', () => { clearTimeout(timeout); reject(new HttpError(503, 'Cannot launch the configured OMP executable; install audited OMP v18.12.6')); });
+  child.once('error', () => { clearTimeout(timeout); reject(new HttpError(503, 'Cannot launch the configured OMP executable; install audited OMP v18.12.6 or v18.13.1')); });
   child.once('close', code => {
     clearTimeout(timeout);
-    if (code !== 0 || exceeded || !/^(?:omp\/)?18\.12\.6$/.test(output.trim())) reject(new HttpError(503, 'Drafting requires audited OMP v18.12.6; other CLI isolation profiles have not been verified'));
+    if (code !== 0 || exceeded || !/^(?:omp\/)?18\.(?:12\.6|13\.1)$/.test(output.trim())) reject(new HttpError(503, 'Model discovery and drafting require audited OMP v18.12.6 or v18.13.1; other CLI isolation profiles have not been verified'));
     else resolveVersion();
   });
   await promise;
+}
+
+const privateArgs = (directory: string) => ['--mode', 'rpc', '--no-ui', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir', join(directory, 'sessions')];
+let discoveries = 0;
+
+export async function discoverExecutionModels(executable: string, requested: string): Promise<{ models: { provider: string; id: string; name: string }[]; model: string; thinkingLevels: string[] }> {
+  if (discoveries >= MAX_SESSIONS) throw new HttpError(429, 'Too many model discovery requests; wait for an existing request to finish');
+  discoveries++;
+  let directory = ''; let rpc: RpcProcess | undefined; let pid: number | undefined; let expired = false;
+  const deadline = setTimeout(() => {
+    expired = true;
+    if (pid) { try { process.kill(-pid, 'SIGKILL'); } catch { /* Child may already have exited. */ } }
+  }, 45000);
+  try {
+    directory = await mkdtemp(join(tmpdir(), 'omp-model-discovery-'));
+    const env = await installProfile(directory);
+    const cwd = join(directory, 'work');
+    await checkVersion(executable, cwd, env);
+    if (expired) throw new Error('Discovery deadline exceeded');
+    rpc = await RpcProcess.launch({ executable, env, cwd, args: privateArgs(directory),
+      onSpawn: async childPid => { pid = childPid; },
+      onStderr: () => {}, onFailure: () => {},
+      onFrame: frame => {
+        if (['tool_execution_start', 'host_tool_call', 'host_uri_request', 'extension_ui_request', 'prompt_result', 'message_start', 'message_update'].includes(String(frame.type))
+          || frame.type === 'notice' && frame.level === 'error') throw new Error('Unexpected work during model discovery');
+      },
+    });
+    rpc.decoder.maxReassembledFrameBytes = Math.min(rpc.decoder.maxReassembledFrameBytes, 1024 * 1024);
+    await rpc.command('set_auto_retry', { enabled: false }, 5000);
+    await rpc.command('set_cache_warming', { mode: 'off' }, 5000);
+    await rpc.command('set_host_tools', { tools: [] }, 5000);
+    const data = await rpc.command('get_available_models', {}, 5000);
+    if (!Array.isArray(data.models) || !data.models.length || data.models.length > 2000) throw new Error('Model discovery unavailable');
+    const models = data.models.map(value => {
+      const item = object(value);
+      if (typeof item.provider !== 'string' || !item.provider || item.provider.length > 128 || item.provider.includes('/')
+        || typeof item.id !== 'string' || !item.id || item.id.length > 256
+        || /\p{Cc}/u.test(item.provider + item.id)) throw new Error('Invalid model metadata');
+      return { provider: item.provider, id: item.id, name: typeof item.name === 'string' ? item.name.slice(0, 200) : item.id };
+    });
+    if (requested) {
+      const selected = models.find(item => `${item.provider}/${item.id}` === requested);
+      if (!selected) throw new HttpError(400, 'Selected model is not available from OMP; choose an enumerated provider/model');
+      await rpc.command('set_model', { provider: selected.provider, modelId: selected.id }, 5000);
+    }
+    const state = await rpc.command('get_state', {}, 5000);
+    if (!Array.isArray(state.dumpTools) || state.dumpTools.length || state.goal) throw new Error('Unexpected discovery capabilities');
+    const current = object(state.model);
+    const selected = models.find(item => item.provider === current.provider && item.id === current.id);
+    const model = selected ? `${selected.provider}/${selected.id}` : '';
+    if (requested && model !== requested) throw new Error('OMP did not activate the exact requested model');
+    if (!model) return { models, model: '', thinkingLevels: [] };
+    const supported = await rpc.command('get_available_thinking_levels', {}, 5000);
+    if (!Array.isArray(supported.levels) || !supported.levels.length || supported.levels.some(level => typeof level !== 'string' || !level || level.length > 32)) throw new Error('Thinking discovery unavailable');
+    if (expired) throw new Error('Discovery deadline exceeded');
+    return { models, model, thinkingLevels: [...new Set(supported.levels as string[])] };
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(503, 'OMP model discovery failed. Check audited OMP v18.12.6 or v18.13.1 and local provider authentication outside this application; no unrestricted fallback was attempted.');
+  } finally {
+    try {
+      if (rpc) await rpc.shutdown();
+      if (directory) await rm(directory, { recursive: true, force: true });
+    } finally { clearTimeout(deadline); discoveries--; }
+  }
 }
 
 function fail(draft: Draft, reason: string): void {
@@ -225,7 +290,7 @@ async function create(store: Store, repo: Repo): Promise<Draft> {
     await checkVersion(executable, cwd, env);
     stage = 'negotiating the headless RPC connection';
     const rpc = await RpcProcess.launch({ executable, env, cwd,
-      args: ['--mode', 'rpc', '--no-ui', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir', join(draft.directory, 'sessions')],
+      args: privateArgs(draft.directory),
       onSpawn: async () => {}, onFrame: frame => frames(draft, frame), onStderr: () => {},
       onFailure: () => fail(draft, 'OMP startup, provider or transport failed. Check the installed CLI and provider authentication outside drafting; no credentials or private configuration are shown here.'),
     });
@@ -255,7 +320,7 @@ async function create(store: Store, repo: Repo): Promise<Draft> {
     draft.timer = setInterval(() => { void poll(draft); }, 1000); draft.timer.unref();
   } catch (error) {
     draft.snapshot.status = 'failed';
-    draft.snapshot.error ||= error instanceof HttpError ? error.message : `OMP failed while ${stage}. Configure audited OMP v18.12.6 and provider authentication outside drafting; unrestricted fallback is prohibited.`;
+    draft.snapshot.error ||= error instanceof HttpError ? error.message : `OMP failed while ${stage}. Configure audited OMP v18.12.6 or v18.13.1 and provider authentication outside drafting; unrestricted fallback is prohibited.`;
   } finally { draft.locked = false; draft.initialize(); }
   if (draft.snapshot.status === 'failed') await stop(draft);
   return draft;

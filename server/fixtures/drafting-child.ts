@@ -1,9 +1,13 @@
 // Protocol fixture only: no provider, filesystem tools, credentials or network.
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
+import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-if (process.argv.includes('--version')) { console.log('omp/18.12.6'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log(process.argv.includes('release-18.13.1') ? 'omp/18.13.1' : process.argv.includes('unaudited-release') ? 'omp/99.0.0' : 'omp/18.12.6'); process.exit(0); }
+const logIndex = process.argv.indexOf('--fixture-log');
+const log = (value: unknown) => { if (logIndex >= 0) appendFileSync(process.argv[logIndex + 1]!, JSON.stringify(value) + '\n'); };
+log({ event: 'spawn', pid: process.pid, cwd: process.cwd() });
 const startupUnsafe = process.argv.includes('unsafe');
 const send = (value: unknown) => console.log(JSON.stringify(value));
 const required = ['--mode', '--no-ui', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir'];
@@ -20,6 +24,9 @@ send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2], max
 const input = createInterface({ input: process.stdin });
 input.on('line', line => {
   const frame = JSON.parse(line);
+  log({ event: 'command', command: frame.type });
+  if (process.argv.includes('discovery') && ['prompt', 'goal', 'set_thinking_level'].includes(frame.type)) process.exit(15);
+  if (process.argv.includes('discovery-stall') && frame.type === 'get_available_models') return;
   const response = (data: unknown = {}) => send({ type: 'response', id: frame.id, command: frame.type, success: true, data });
   switch (frame.type) {
     case 'negotiate_protocol': response({ protocolVersion: 2 }); break;
@@ -53,4 +60,4 @@ input.on('line', line => {
     default: send({ type: 'response', id: frame.id, command: frame.type, success: false, error: 'Fixture rejected unexpected RPC' });
   }
 });
-input.on('close', () => process.exit(0));
+input.on('close', () => { log({ event: 'exit', pid: process.pid }); process.exit(0); });

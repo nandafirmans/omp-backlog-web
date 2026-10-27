@@ -381,7 +381,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       const overlay = join(directory, 'config.yml');
       await writeFile(overlay, 'goal:\n  enabled: true\n  continuationModes:\n    - rpc\n', { mode: 0o600 });
       const args = ['--mode', 'rpc-ui', '--config', overlay, '--session-dir', join(directory, 'sessions'), '--no-pty'];
-      if (settings.model) args.push('--model', settings.model);
+      if (!resume && settings.model) args.push('--model', settings.model);
       if (resume) {
         if (!run.sessionFile || !run.sessionId) throw new Error('No persisted session identity is available to resume');
         args.push('--resume', run.sessionFile);
@@ -406,9 +406,20 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       const state = await rpc.command('get_state');
       if (typeof state.sessionId !== 'string' || typeof state.sessionFile !== 'string') throw new Error('OMP did not expose a durable session identity');
       if (resume && state.sessionId !== run.sessionId) throw new Error('OMP resumed a different session; refusing continuation');
+      if (!resume && settings.model.includes('/')) {
+        const selected = object(state.model);
+        if (`${selected.provider}/${selected.id}` !== settings.model) throw new Error('OMP did not activate the exact configured provider/model; refusing execution');
+      }
       run.sessionId = state.sessionId;
       run.sessionFile = state.sessionFile;
       persist(execution);
+      if (!resume && settings.thinking) {
+        const supported = await rpc.command('get_available_thinking_levels');
+        if (!Array.isArray(supported.levels) || !supported.levels.includes(settings.thinking)) throw new Error(`Configured thinking level "${settings.thinking}" is not supported by the selected OMP model`);
+        await rpc.command('set_thinking_level', { level: settings.thinking });
+        const effective = await rpc.command('get_state');
+        if (effective.thinkingLevel !== settings.thinking) throw new Error('OMP did not apply the exact configured thinking level; refusing execution');
+      }
       // Reattached goals cache their pre-goal tool list before RPC host tools exist.
       // Explicit pause clears that cached presentation before registration/resume.
       if (resume) await rpc.command('goal', { op: 'pause' });

@@ -49,7 +49,7 @@ Final operator-commit UI re-drive, including regular-weight file-selection contr
 | Project board/list | Full-width viewport workspace; scrolling contained in the board; established cards, toolbar and footer. |
 | Manual ticket/detail | Existing drawer, expandable width, Markdown/Preview, attachments, revision and review safeguards. |
 | Agent creation | Separate full-width page; main page owns vertical scrolling, not an inset editor-panel scroller. Framed session toolbar/conversation/composer and Discuss/Review ticket switch. Review uses the same framed form language as settings/manual editing. |
-| Settings | Shared route title, bordered form, native component sizing and visible safety explanations. |
+| Settings | Shared route title and one bordered form, divided into OMP & model, Run limits, and Folder access. Desktop uses a narrow section-introduction column and full-width fields; model/thinking and time/tokens use matching equal columns, top-aligned independently of helper-text wrapping. Below 768px, stack sections, controls and full-width action buttons. Keep native component sizing, visible safety explanations and discovery errors; put detailed discovery/default/pause guidance in keyboard-accessible disclosures. |
 | Plan | Shared route title and framed reading document. Document headings retain their own reading hierarchy. |
 | Run evidence | Existing framed panel, metadata, readable transcript, explicit evidence provenance and contextual controls. |
 | Operator commit | Handoff-panel action opens an Ant Design modal with framed file selections, bounded diff readers and labeled message. Keep warnings, explicit final confirmation, back/cancel and unsaved-draft close protection. Body scrolls on short/mobile viewports; no new typography or palette. |
@@ -98,3 +98,10 @@ Added mode-specific icons to every option and the selected value, removed the re
 ### Drafting page scroll ownership
 
 Removed overflow and flex viewport constraints from the drafting root, and routed agent creation to the normal scrolling main container instead of the board's overflow-hidden workspace layout. ESLint passed. Synthetic-API browser assertions confirmed main owns drafting scrolling, the drafting root has visible overflow/no scroll range, and main uses the thin theme-colored scrollbar. Expanded context and mobile Review creation controls were reachable by scrolling main; Kanagawa/Light mobile Review was visually inspected without horizontal page overflow. Board main remains overflow-hidden while its surface retains auto/thin scrolling. No runtime errors were recorded; no backend/provider was attached.
+
+### Settings form usability
+
+Settings retains IBM Plex, square surfaces and existing theme tokens. Helpers use regular weight; token budgets display thousands separators. The footer reports unsaved changes, disables unchanged saves, and restores saved values without writing. Its enabled primary action uses a flat existing accent rather than a lighter gradient to preserve text contrast.
+
+Changed TSX passed ESLint. Real-browser checks with synthetic APIs covered equal desktop control widths/top edges, save/restore, comma-formatted token persistence, blank-budget rejection, incompatible-thinking reset and discovery failure/retry. Dark/Light desktop and 390px mobile were visually inspected without horizontal document overflow or recorded browser errors. Enabled primary text contrast measured 5.28:1 in Light and 7.26:1 in Tokyo Night; checked labels, helpers, input text and unsaved-state text exceeded 4.5:1. These are scoped UI observations, not exhaustive accessibility, Lighthouse or live-provider verification.
+

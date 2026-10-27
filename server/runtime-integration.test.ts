@@ -13,7 +13,7 @@ import { createApi } from './api';
 
 // These are process/protocol acceptance tests. The child verifies a disposable
 // proof file; it does not exercise a real OMP installation, model, or credentials.
-interface Event { event: string; pid: number; sessionId: string; command?: string; op?: string; resumed?: boolean; revision?: string; sessionFile?: string }
+interface Event { event: string; pid: number; sessionId: string; command?: string; op?: string; resumed?: boolean; revision?: string; sessionFile?: string; level?: string; thinking?: string }
 interface Harness { root: string; store: Store; executable: string; runtime: Runtime | null }
 
 // Real timers are intentional: detached children and fs.watch run outside the
@@ -86,6 +86,56 @@ async function finish(harness: Harness, run: Run) {
     return current?.status === 'needs_review' && current.pid === null ? current : undefined;
   });
 }
+
+test('fresh execution applies exact thinking before prompting and resume preserves session thinking', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'thinking');
+    await ticket(harness, repo);
+    await start(harness);
+    const first = await running(harness);
+    const log = await events(repo);
+    expect(log.find(event => event.event === 'prompt-admitted')?.thinking).toBe('high');
+    expect(log.findIndex(event => event.command === 'set_thinking_level' && event.level === 'high')).toBeLessThan(log.findIndex(event => event.command === 'prompt'));
+    await harness.runtime!.control(first.id, 'pause');
+    harness.store.setSettings({ ...harness.store.settings(), thinking: 'off', model: 'other/model' });
+    await harness.runtime!.control(first.id, 'resume');
+    const resumed = await running(harness);
+    const resumedEvents = (await events(repo)).filter(event => event.pid === resumed.pid);
+    expect(resumedEvents.some(event => event.command === 'set_thinking_level' || event.command === 'get_available_thinking_levels')).toBe(false);
+    expect(resumedEvents.find(event => event.event === 'prompt-admitted')?.thinking).toBe('high');
+    await finish(harness, resumed);
+  }, { thinking: 'high' });
+}, 15000);
+
+test('absent and empty thinking retain the OMP default without override RPC', async () => {
+  for (const settings of [{}, { thinking: '' }]) {
+    await withHarness(async harness => {
+      const repo = await repository(harness, 'default-thinking');
+      await ticket(harness, repo);
+      await start(harness);
+      const run = await running(harness);
+      const log = await events(repo);
+      expect(log.some(event => event.command === 'set_thinking_level' || event.command === 'get_available_thinking_levels')).toBe(false);
+      expect(log.find(event => event.event === 'prompt-admitted')?.thinking).toBe('medium');
+      await finish(harness, run);
+    }, settings);
+  }
+}, 15000);
+
+test('unsupported or silently clamped thinking fails before prompting or starting a goal', async () => {
+  for (const [thinking, scenario, error] of [['xhigh', 'hold', 'not supported'], ['high', 'clamp-thinking', 'exact configured thinking']] as const) {
+    await withHarness(async harness => {
+      const repo = await repository(harness, 'unsupported-thinking', 0, scenario);
+      await ticket(harness, repo);
+      await start(harness);
+      const failed = await waitFor('thinking rejection and observed child exit', () => harness.store.list('runs').find(run => run.status === 'failed' && run.pid === null));
+      expect(failed.error).toContain(error);
+      const log = await events(repo);
+      expect(log.some(event => event.command === 'prompt' || (event.command === 'goal' && ['create', 'resume'].includes(String(event.op))))).toBe(false);
+      if (thinking === 'xhigh') expect(log.some(event => event.command === 'set_thinking_level')).toBe(false);
+    }, { thinking });
+  }
+}, 15000);
 
 test('actual child transport enforces the global slot and rotates fairly between repositories', async () => {
   await withHarness(async harness => {

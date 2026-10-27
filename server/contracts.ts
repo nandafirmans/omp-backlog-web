@@ -8,7 +8,8 @@ export interface Dialog { id: string; method: string; title?: string; message?: 
 export interface ProofArtifact { id: string; name: string; size: number; sha256: string }
 export interface VerificationReceipt { id: string; runId: string; revision: string; criterion: string; feature: string; entryPoint: string; method: string; outcome: 'passed' | 'failed' | 'blocked' | 'not_run'; details: string; recipe: string; source: 'agent_report'; recorded: number; artifact?: ProofArtifact }
 export interface Run { id: string; repoId: string; ticketId: string; revision: string; status: Status; started: number; finished: number | null; pid: number | null; sessionId: string | null; sessionFile: string | null; snapshot: string; transcript: string; evidence: string[]; blocker: string | null; changedFiles: string; dialog: Dialog | null; error: string | null; verification?: VerificationReceipt[]; reviewFeedback?: { message: string; recorded: number }; progress?: { phase: string; latestAction: string; tokenBudget: number; deadline: number; tokens?: { total: number; sampled: number; basis: string } } }
-export interface Settings { executable: string; model: string; roots: string[]; timeLimitMinutes: number; tokenBudget: number; paused: boolean }
+export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export interface Settings { executable: string; model: string; thinking?: string; roots: string[]; timeLimitMinutes: number; tokenBudget: number; paused: boolean }
 export interface Snapshot { repos: Repo[]; tickets: Ticket[]; runs: Run[]; settings: Settings }
 export interface Store {
   list<K extends keyof Entities>(kind: K): Entities[K][];

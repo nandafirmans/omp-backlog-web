@@ -479,11 +479,121 @@ function FolderPicker({ api, execute, busy, onClose, onRegistered }: { api: Requ
   return <Modal open className="folder-dialog" title="Choose a repository" width={720} onCancel={onClose} mask={{ closable: false }} footer={<div className="dialog-actions"><Button onClick={onClose}>Cancel</Button><Button type="primary" className="primary" disabled={busy || loading || !listing?.path} onClick={() => void register()}>Register this directory</Button></div>}><p className="muted">Only permitted roots are browsable. The backend resolves the real execution directory and detects its Git root. New repositories are paused.</p>{error && <p role="alert" className="error-banner">{error}</p>}<p className="path folder-path">{listing?.path || 'Permitted roots'}</p><div className="toolbar"><Button disabled={loading} onClick={() => void browse()}>Permitted roots</Button>{listing?.parent && <Button disabled={loading} onClick={() => void browse(listing.parent ?? '')}>Parent folder ↑</Button>}</div>{loading ? <p role="status">Reading directories...</p> : <ul className="folder-list">{listing?.directories.map(path => <li key={path}><Button onClick={() => void browse(path)}>{path.split('/').filter(Boolean).at(-1) || path}<span aria-hidden="true">→</span></Button></li>)}{listing?.directories.length === 0 && <li className="muted">No child directories.</li>}</ul>}</Modal>;
 }
 
+interface ExecutionModels {
+  models: { provider: string; id: string; name: string }[];
+  model: string;
+  thinkingLevels: string[];
+}
+
 function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; api: RequestApi; execute: Execute; busy: boolean }) {
   const [draft, setDraft] = useState(settings);
   const [roots, setRoots] = useState(settings.roots.join('\n'));
-  async function save(event: FormEvent) { event.preventDefault(); await execute('Settings saved. Existing runs are not restarted.', async () => { await api('/api/settings', json('PATCH', { executable: draft.executable, model: draft.model, roots: roots.split('\n').map(value => value.trim()).filter(Boolean), timeLimitMinutes: draft.timeLimitMinutes, tokenBudget: draft.tokenBudget })); }); }
-  return <section className="settings-view"><h1>Execution settings</h1><p className="lead">These settings govern new runs. Saving does not restart interrupted work or change your global OMP configuration.</p><form className="panel settings-form" onSubmit={event => void save(event)}><label>OMP executable<Input value={draft.executable} onChange={event => setDraft({ ...draft, executable: event.target.value })} required /><small>Executable name on PATH or an absolute executable path on this backend.</small></label><label>Model<Input value={draft.model} onChange={event => setDraft({ ...draft, model: event.target.value })} placeholder="Use OMP configured default" /><small>Leave blank to use OMP's configured model. Credentials remain outside this website.</small></label><div className="form-columns"><label>Time limit (minutes)<InputNumber type="number" min={1} step={1} required value={Number.isNaN(draft.timeLimitMinutes) ? null : draft.timeLimitMinutes} onChange={value => setDraft({ ...draft, timeLimitMinutes: value ?? NaN })} /></label><label>Token budget<InputNumber type="number" min={1} step={1} required value={Number.isNaN(draft.tokenBudget) ? null : draft.tokenBudget} onChange={value => setDraft({ ...draft, tokenBudget: value ?? NaN })} /></label></div><label>Permitted folder roots<Input.TextArea rows={5} value={roots} onChange={event => setRoots(event.target.value)} required spellCheck={false} /><small>One absolute directory per line. Folder browsing cannot escape these roots, including through symlinks. Roots are organizational access controls, not an execution sandbox.</small></label><div className="notice"><div><h3>Limits stop work; they do not cause automatic restarts.</h3><p>Pauses do not roll back side effects. Use Pause all new starts above to prevent new sessions, and Pause current run separately to interrupt execution. Human evidence review remains required before Done.</p></div></div><div className="toolbar"><Button type="primary" htmlType="submit" className="primary" disabled={busy}>Save settings</Button><Button disabled={busy} onClick={() => { setDraft(settings); setRoots(settings.roots.join('\n')); }}>Load saved settings</Button></div></form></section>;
+  const [discovery, setDiscovery] = useState<(ExecutionModels & { executable: string; requestedModel: string })>();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const sequence = useRef(0);
+  const initialSettings = useRef(settings);
+  const discover = useCallback(async (executable: string, model: string, resetIncompatible = false) => {
+    const next = ++sequence.current;
+    setLoading(true); setError('');
+    try {
+      const result = await api<ExecutionModels>('/api/settings/models', json('POST', { executable, model }));
+      if (next !== sequence.current) return;
+      setDiscovery({ ...result, executable, requestedModel: model });
+      if (resetIncompatible) setDraft(current => current.executable === executable && current.model === model && current.thinking && !result.thinkingLevels.includes(current.thinking) ? { ...current, thinking: '' } : current);
+    } catch (cause) {
+      if (next === sequence.current) setError(message(cause));
+    } finally {
+      if (next === sequence.current) setLoading(false);
+    }
+  }, [api]);
+  useEffect(() => {
+    const requests = sequence;
+    void discover(initialSettings.current.executable, initialSettings.current.model);
+    return () => { ++requests.current; };
+  }, [discover]);
+
+  const catalogue = discovery?.executable === draft.executable ? discovery : undefined;
+  const currentDiscovery = catalogue?.requestedModel === draft.model && !loading && !error ? catalogue : undefined;
+  const modelOptions = [
+    { value: '', label: 'OMP configured default' },
+    ...(catalogue?.models ?? []).map(model => ({ value: `${model.provider}/${model.id}`, label: `${model.name} · ${model.provider}/${model.id}` })),
+  ];
+  if (draft.model && !modelOptions.some(option => option.value === draft.model)) modelOptions.push({ value: draft.model, label: `${draft.model} · ${currentDiscovery ? 'unavailable' : 'not verified'}` });
+  const thinkingOptions = [
+    { value: '', label: 'OMP default' },
+    ...(currentDiscovery?.thinkingLevels ?? []).map(level => ({ value: level, label: level })),
+  ];
+  if (draft.thinking && !thinkingOptions.some(option => option.value === draft.thinking)) thinkingOptions.push({ value: draft.thinking, label: `${draft.thinking} · ${currentDiscovery ? 'unsupported' : 'not verified'}` });
+  const executionChanged = draft.executable !== settings.executable || draft.model !== settings.model;
+  const thinkingNeedsDiscovery = !!draft.thinking && !currentDiscovery?.thinkingLevels.includes(draft.thinking) && (executionChanged || draft.thinking !== (settings.thinking ?? ''));
+  const dirty = draft.executable !== settings.executable || draft.model !== settings.model || (draft.thinking ?? '') !== (settings.thinking ?? '') || draft.timeLimitMinutes !== settings.timeLimitMinutes || draft.tokenBudget !== settings.tokenBudget || roots !== settings.roots.join('\n');
+  const timeInvalid = !Number.isInteger(draft.timeLimitMinutes) || draft.timeLimitMinutes < 1 || draft.timeLimitMinutes > 1440;
+  const tokensInvalid = !Number.isInteger(draft.tokenBudget) || draft.tokenBudget < 1 || draft.tokenBudget > 10000000;
+
+  function changeModel(model: string) {
+    setDraft(current => ({ ...current, model }));
+    void discover(draft.executable, model, true);
+  }
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (!dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid) return;
+    await execute('Settings saved. Existing runs are not restarted.', async () => {
+      const saved = await api<Settings>('/api/settings', json('PATCH', { executable: draft.executable, model: draft.model, thinking: draft.thinking ?? '', roots: roots.split('\n').map(value => value.trim()).filter(Boolean), timeLimitMinutes: draft.timeLimitMinutes, tokenBudget: draft.tokenBudget }));
+      setDraft(saved); setRoots(saved.roots.join('\n'));
+    });
+  }
+  return <section className="settings-view">
+    <h1>Execution settings</h1>
+    <p className="lead">Defaults for new ticket runs. Existing sessions and your global OMP configuration stay unchanged.</p>
+    <form className="panel settings-form" onSubmit={event => void save(event)}>
+      <section className="settings-section" aria-labelledby="settings-agent-heading">
+        <div className="settings-section-intro"><h2 id="settings-agent-heading">OMP &amp; model</h2><p>Choose the agent and reasoning settings used across projects.</p></div>
+        <div className="settings-fields">
+          <label htmlFor="settings-executable">OMP executable<Input id="settings-executable" value={draft.executable} disabled={busy} onChange={event => {
+            const executable = event.target.value;
+            ++sequence.current;
+            setLoading(false); setError('');
+            setDraft(current => ({ ...current, executable }));
+          }} required /><small>Command on PATH or absolute path. Refresh models after changing it.</small></label>
+          <div className="settings-model-grid">
+            <label htmlFor="settings-model">Model<Select id="settings-model" aria-label="Execution model" showSearch optionFilterProp="label" value={draft.model} options={modelOptions} loading={loading} disabled={busy} onChange={changeModel} aria-describedby="execution-model-help" /><small id="execution-model-help">Search by name or provider. OMP configured default resolves when a run starts.</small></label>
+            <label htmlFor="settings-thinking">Thinking level<Select id="settings-thinking" aria-label="Execution thinking level" showSearch optionFilterProp="label" value={draft.thinking ?? ''} options={thinkingOptions.map(option => ({ ...option, disabled: !!option.value && !currentDiscovery?.thinkingLevels.includes(option.value) }))} disabled={busy} loading={loading} onChange={thinking => setDraft(current => ({ ...current, thinking }))} aria-describedby="execution-thinking-help" /><small id="execution-thinking-help">Supported levels depend on the model. OMP default uses its configuration.</small></label>
+          </div>
+          <div className="settings-discovery">
+            <Button htmlType="button" disabled={busy || loading || !draft.executable.trim()} onClick={() => void discover(draft.executable, draft.model, executionChanged)}>{error ? 'Retry model discovery' : 'Refresh models'}</Button>
+            <span role="status">{loading ? 'Discovering models and thinking levels…' : currentDiscovery ? `${currentDiscovery.models.length} models available${currentDiscovery.model ? '' : '. Choose a model to discover thinking levels.'}` : 'Refresh models to verify this executable and selection.'}</span>
+          </div>
+          {error && <p role="alert" className="error-banner">Model discovery failed: {error}. Saved settings are unchanged. Retry discovery, or keep saved execution choices while editing other settings.</p>}
+          {thinkingNeedsDiscovery && <p role="alert" className="warning-text">Refresh models to validate this thinking level before saving, or select OMP default.</p>}
+          {currentDiscovery && draft.thinking && !currentDiscovery.thinkingLevels.includes(draft.thinking) && !thinkingNeedsDiscovery && <p className="warning-text">The saved thinking level is unsupported by this model. Choose OMP default or a supported level before starting a new run.</p>}
+          <details className="settings-details"><summary>Model discovery &amp; defaults</summary><p>The catalogue uses a restricted profile; custom models and global configuration are not inherited. Credentials stay outside this website. Discovery does not start a ticket run.</p><p>Changing models resets incompatible thinking to OMP default. Explicit thinking applies only to new sessions, not resumed work.</p>{currentDiscovery?.model && <p>Discovery model: <code>{currentDiscovery.model}</code>. The configured execution default can differ.</p>}</details>
+        </div>
+      </section>
+      <section className="settings-section" aria-labelledby="settings-limits-heading">
+        <div className="settings-section-intro"><h2 id="settings-limits-heading">Run limits</h2><p>Per-run guardrails, not spending limits. Exhaustion requires review and explicit retry.</p></div>
+        <div className="settings-fields">
+          <div className="form-columns">
+            <label htmlFor="settings-time">Time limit (minutes)<InputNumber id="settings-time" type="number" min={1} max={1440} step={1} required disabled={busy} status={timeInvalid ? 'error' : undefined} aria-invalid={timeInvalid} aria-describedby="settings-time-help" value={Number.isNaN(draft.timeLimitMinutes) ? null : draft.timeLimitMinutes} onChange={value => setDraft({ ...draft, timeLimitMinutes: value ?? NaN })} /><small id="settings-time-help" className={timeInvalid ? 'warning-text' : undefined}>{timeInvalid ? 'Enter a whole number from 1 to 1,440.' : '1-1,440 minutes per run.'}</small></label>
+            <label htmlFor="settings-tokens">Token budget<InputNumber<number> id="settings-tokens" min={1} max={10000000} step={10000} required disabled={busy} status={tokensInvalid ? 'error' : undefined} aria-invalid={tokensInvalid} aria-describedby="settings-tokens-help" formatter={(value, info) => info.userTyping ? info.input : value === undefined ? '' : Number(value).toLocaleString('en-US')} value={Number.isNaN(draft.tokenBudget) ? null : draft.tokenBudget} onChange={value => setDraft({ ...draft, tokenBudget: value ?? NaN })} /><small id="settings-tokens-help" className={tokensInvalid ? 'warning-text' : undefined}>{tokensInvalid ? 'Enter a whole number from 1 to 10,000,000.' : 'Input, output and repeated context/cache tokens count.'}</small></label>
+          </div>
+          <p className="settings-safety">Limits stop work; they never restart it. Pausing does not roll back changes. Human evidence review is still required before Done.</p>
+          <details className="settings-details"><summary>Pause and restart controls</summary><p>Use Pause all new starts on Projects to prevent new sessions. Pause the current run separately to interrupt active execution. Saving these settings does neither.</p></details>
+        </div>
+      </section>
+      <section className="settings-section" aria-labelledby="settings-folders-heading">
+        <div className="settings-section-intro"><h2 id="settings-folders-heading">Folder access</h2><p>Limit which project directories the folder picker can browse.</p></div>
+        <div className="settings-fields"><label htmlFor="settings-roots">Permitted folder roots<Input.TextArea id="settings-roots" autoSize={{ minRows: 2, maxRows: 5 }} value={roots} disabled={busy} onChange={event => setRoots(event.target.value)} required spellCheck={false} aria-describedby="settings-roots-help" /><small id="settings-roots-help">One absolute directory per line. Browsing cannot escape these roots, including through symlinks.</small></label><p className="settings-safety">Folder access is not an execution sandbox. Agents retain the backend OS user's permissions.</p></div>
+      </section>
+      <div className="settings-actions">
+        <span role="status" className={dirty ? 'settings-unsaved' : 'muted'}>{busy ? 'Saving settings…' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span>
+        <div className="toolbar"><Button htmlType="button" disabled={busy || !dirty} onClick={() => {
+          setDraft(settings); setRoots(settings.roots.join('\n'));
+          void discover(settings.executable, settings.model);
+        }}>Load saved settings</Button><Button type="primary" htmlType="submit" disabled={busy || !dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid}>Save settings</Button></div>
+      </div>
+    </form>
+  </section>;
 }
 
 function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run; ticket?: Ticket; repo?: Repo; api: RequestApi; execute: Execute; busy: boolean; onClose: () => void }) {

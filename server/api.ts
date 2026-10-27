@@ -3,13 +3,14 @@ import { constants } from 'node:fs';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Repo, Runtime, Settings, Store } from './contracts';
+import { THINKING_LEVELS } from './contracts';
 import { database, digest, subscribe, token, within } from './store';
 import { HttpError, MAX_ATTACHMENT, MAX_MARKDOWN, readSafe, reconcileTickets, ticketDirectory, uploadAttachment, validAttachmentName, writeTicket } from './tickets';
 import { completions } from './completions';
 import { requestOrigin, parseRemoteOrigin } from './access';
 import { proofDownload } from './evidence';
 import { inspectWorkspaceHandoff } from './runtime';
-import { handleDraftRequest } from './drafting';
+import { discoverExecutionModels, handleDraftRequest } from './drafting';
 import { handleAssistedCreation } from './assisted-creation';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 
@@ -143,11 +144,28 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
         const repo: Repo = { id: randomUUID(), name: basename(path), path, git, mode: 'paused', lastStarted: 0 };
         store.save('repos', repo); await reconcileTickets(store, true); runtime.wake(); return json(repo, 201);
       }
+      if (url.pathname === '/api/settings/models' && request.method === 'POST') {
+        const input = await body(request);
+        if (Object.keys(input).some(key => !['executable', 'model'].includes(key))) throw new HttpError(400, 'Unknown model discovery field');
+        const executable = string(input.executable, 'executable', 4096).trim();
+        const model = string(input.model, 'model', 512);
+        if (!executable || executable.includes('\0')) throw new HttpError(400, 'Set an OMP executable path or command');
+        if (model && (!/^[^/]+\/.+$/u.test(model) || /\p{Cc}/u.test(model))) throw new HttpError(400, 'Choose an exact provider/model');
+        return json(await discoverExecutionModels(executable, model));
+      }
       if (url.pathname === '/api/settings' && request.method === 'PATCH') {
         const input = await body(request); const settings = store.settings();
-        if (Object.keys(input).some(key => !['executable', 'model', 'roots', 'timeLimitMinutes', 'tokenBudget', 'paused'].includes(key))) throw new HttpError(400, 'Unknown setting');
+        if (Object.keys(input).some(key => !['executable', 'model', 'thinking', 'roots', 'timeLimitMinutes', 'tokenBudget', 'paused'].includes(key))) throw new HttpError(400, 'Unknown setting');
         if (input.executable !== undefined) { settings.executable = string(input.executable, 'executable', 4096).trim(); if (!settings.executable || settings.executable.includes('\0')) throw new HttpError(400, 'Set an OMP executable path or command'); }
-        if (input.model !== undefined) settings.model = string(input.model, 'model', 200);
+        if (input.model !== undefined) {
+          settings.model = string(input.model, 'model', 512);
+          if (settings.model && (!/^[^/]+\/.+$/u.test(settings.model) || /\p{Cc}/u.test(settings.model))) throw new HttpError(400, 'Choose an exact provider/model');
+        }
+        if (input.thinking !== undefined) {
+          const thinking = string(input.thinking, 'thinking', 32);
+          if (thinking && !THINKING_LEVELS.some(level => level === thinking)) throw new HttpError(400, 'Invalid thinking level');
+          settings.thinking = thinking;
+        }
         for (const key of ['timeLimitMinutes', 'tokenBudget'] as const) { if (input[key] !== undefined) { const value = input[key]; const max = key === 'timeLimitMinutes' ? 1440 : 10000000; if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) throw new HttpError(400, `Invalid ${key}`); settings[key] = value; } }
         if (input.paused !== undefined) { if (typeof input.paused !== 'boolean') throw new HttpError(400, 'paused must be boolean'); settings.paused = input.paused; }
         if (input.roots !== undefined) {

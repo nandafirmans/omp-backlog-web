@@ -118,7 +118,7 @@ Reference: [Synthetic records](attachments/records.json)
 
 Drafts/uploads remain tab-local until creation; reload discards the conversation and staged files. Changing views preserves them. Assisted publication retries within the ten-minute confirmation lifetime return the same unchanged ticket, not a duplicate. Backend restart/expiry requires renewed review; existing IDs are never overwritten. Atomic assisted publication requires Linux/glibc `renameat2(RENAME_NOREPLACE)` and filesystem support; unsupported environments fail closed while manual creation remains available.
 
-Drafting currently supports audited **OMP v18.12.6** only. It uses a private HOME/config/discovery namespace and working directory, no model tools or executable project discovery, and bounded host-selected context. Existing local OMP authentication stays inside OMP; executable config-based credential resolution and custom model/plugin configuration are not inherited. Configure provider authentication outside this website. This capability restriction is **not an OS sandbox**. Explicit metadata/model selection can make discovery/auth requests and OMP's credential-less connection probe; no drafting inference runs before Send.
+Drafting and execution-model discovery support audited **OMP v18.12.6 and v18.13.1**. They use a private HOME/config/discovery namespace and working directory, no model tools or executable project discovery, and bounded host-selected context. Existing local OMP authentication stays inside OMP; executable config-based credential resolution and custom model/plugin configuration are not inherited. Configure provider authentication outside this website. This capability restriction is **not an OS sandbox**. Explicit metadata/model selection can make discovery/auth requests and OMP's credential-less connection probe; no drafting inference runs before Send.
 
 Drafting limits: four live conversations; 32 KiB prompt; 128 KiB per text reference; 512 KiB per image subject to 256 KiB combined readable context and the inbound RPC frame limit; 16 turns; 32K accounted session tokens; two minutes/turn; ten-minute idle and 45-minute session expiry. Ordinary ticket attachment limits still apply. Previously transmitted images prevent switching that conversation to a text-only model; start a fresh conversation instead.
 
@@ -166,6 +166,16 @@ Hooks, signing, external diff drivers and clean filters are not executed. Git id
 Each run has a private requirements/attachment snapshot and a fresh OMP session. The scheduler advances between tickets; OMP goal mode continues within a ticket. No additional `/loop` is needed. Time and token limits prevent indefinite unattended continuation.
 
 Token accounting includes the OMP session's reported usage, including repeated context/cache tokens and resumed turns—not just newly generated output. Large global instruction sets can consume the default budget quickly. Set a deliberate budget in Settings; exhaustion records Failed and requires review rather than silently increasing limits.
+
+### Execution model and thinking
+
+Settings provides a searchable model dropdown and a thinking-level dropdown. Models and supported levels are discovered through an isolated, tool-disabled OMP process; no prompt, goal or ticket run is submitted. Refresh models after editing the executable. Discovery errors stay visible and can be retried without replacing saved settings.
+
+The form groups OMP/model choices, run limits and folder access. Token budgets display thousands separators. Save settings requires changed values, valid run limits and any required thinking-level discovery; the backend still validates all submitted settings. Load saved settings discards local form edits without saving. The footer identifies unsaved changes. Additional discovery/default and pause-control guidance is available in the form's disclosures; safety warnings and blocking feedback remain visible.
+
+Choose **OMP configured default** for the model or **OMP default** for thinking to leave that choice to OMP at execution time. The restricted discovery profile does not inherit executable configuration or custom models, so its displayed discovery model is not a guarantee of the normal execution default. Explicit model choices use exact provider/model IDs. Changing models resets incompatible thinking to default; fresh execution rejects an unsupported or clamped explicit thinking level before prompting.
+
+These settings are global, not per-ticket. They apply to new sessions; saving does not restart a failed ticket or change an existing/resumed session's thinking. Use Review & retry separately after reviewing partial work. Drafting-page model/thinking choices remain independent.
 
 ## Security boundaries
 

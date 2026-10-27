@@ -56,6 +56,12 @@ Needs review, never automatic Done
 
 The scheduler selects tickets; native OMP goal mode continues work within one ticket. There is no additional `/loop` or second scheduler. Only one ticket is active globally, and an observed paused run retains that slot.
 
+Global Settings offers a discovered model dropdown and model-specific thinking levels, with explicit OMP defaults. Metadata discovery uses the restricted drafting profile and submits no prompt or goal; its default model can differ from normal execution configuration. Explicit thinking is checked and verified before a fresh run prompts; existing/resumed session thinking is preserved. These are global new-run settings, not per-ticket overrides. See [execution settings](../README.md#execution-model-and-thinking).
+
+The v18.13.1 isolation update was checked against the [upstream v18.12.6…v18.13.1 changes](https://github.com/can1357/oh-my-pi/compare/v18.12.6...v18.13.1): discovery registry/root/plugin loaders remain unchanged, extension loading only adds realpath-based deduplication, and startup configuration still honors the restricted profile. Metadata-only discovery on installed v18.13.1 returned 18 models and exact `openai-codex/gpt-6.1-sol` selection with `off`, `low`, `medium`, `high`, `xhigh`, `max`. No provider inference or real ticket execution was exercised.
+
+Verification for execution selectors: focused settings/drafting/runtime tests passed (24 tests, 332 assertions), and changed-code ESLint passed. A real browser rendered the actual Settings UI with synthetic API responses: model/thinking save, incompatible-level reset, discovery failure/explicit retry and mobile save-control reachability were exercised. Dark/Light desktop and 390px mobile were visually inspected, with no horizontal document overflow or recorded browser runtime errors. UI fixture proof is separate from installed-OMP metadata discovery and does not establish provider inference or real ticket execution.
+
 Projects support Paused, Approved tickets only and Automatic execution permissions. Automatic is standing permission for eligible revisions, not a waiver of dependency, handoff, evidence or human acceptance gates. Dependencies require Done, not Needs review.
 
 Markdown and requirement attachments determine the ticket revision. Changing them invalidates approval. A run retains its immutable snapshot, but proof from an older revision cannot accept newly edited requirements.

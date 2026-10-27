@@ -267,7 +267,25 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .run-list .ant-btn > span { display: grid; gap: 9px; }
 .run-list time, .run-list small { font-size: 13px; color: var(--muted); }
 .settings-view .lead { margin: 16px 0 24px; }
-.settings-form { display: grid; gap: 24px; }
+.settings-form { display: grid; gap: 0; padding: 0; }
+.settings-section { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 32px; padding: 24px; }
+.settings-section + .settings-section { border-top: 1px solid var(--line); }
+.settings-section-intro h2 { margin-bottom: 6px; }
+.settings-section-intro p { color: var(--muted); font-size: 13px; line-height: 1.7; margin: 0; max-width: 30ch; }
+.settings-fields { display: grid; gap: 16px; min-width: 0; }
+.settings-fields label small { font-weight: 400; }
+.settings-model-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: start; }
+.settings-fields .form-columns { align-items: start; }
+.settings-discovery { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.settings-fields .error-banner, .settings-fields .warning-text { margin: 0; }
+.settings-details { font-size: 13px; line-height: 1.7; color: var(--muted); min-width: 0; overflow-wrap: anywhere; }
+.settings-details summary { color: var(--text); width: fit-content; }
+.settings-details p { margin: 8px 0 0; max-width: 80ch; }
+.settings-safety { margin: 0; font-size: 13px; line-height: 1.7; color: var(--muted); max-width: 80ch; }
+.settings-actions { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 16px 24px; border-top: 1px solid var(--line); background: var(--surface-inset); }
+.settings-actions .ant-btn-primary:not(:disabled) { background: var(--accent); box-shadow: none; }
+.settings-actions > span { font-size: 13px; }
+.settings-unsaved { color: var(--warning); }
 .form-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 .folder-path { display: block; padding: 12px; background: var(--surface-inset); border: 1px solid var(--line); }
 .folder-list { margin: 16px 0; max-height: 300px; overflow: auto; border-block: 1px solid var(--line); }
@@ -327,6 +345,7 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
 }
 @media (max-width: 1023px) {
   .active-run { align-items: start; flex-direction: column; }
+  .settings-section { grid-template-columns: 180px minmax(0, 1fr); gap: 24px; }
   .login-view { gap: 24px; }
   .topbar { padding: 8px 12px; flex-wrap: wrap; gap: 8px; }
   .topbar > .navbar-tools { margin-left: auto; }
@@ -343,6 +362,12 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
   .project-grid { grid-template-columns: minmax(0, 1fr); }
   .login-view { padding: 20px 0; gap: 28px; min-height: auto; }
   .panel { padding: 18px; }
+  .settings-form { padding: 0; }
+  .settings-section { grid-template-columns: minmax(0, 1fr); gap: 18px; padding: 18px; }
+  .settings-section-intro p { max-width: 65ch; }
+  .settings-model-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .settings-actions { padding: 16px 18px; }
+  .settings-actions .toolbar { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 8px; }
   .editor-panel { padding: 14px; }
   .ticket-facts p { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .editor-tabs .muted { margin-left: 0; }
