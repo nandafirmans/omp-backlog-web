@@ -160,8 +160,21 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .execution-mode-label { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .execution-mode-label svg { flex: none; }
 .execution-context { margin: 10px 0 20px; font-size: 13px; color: var(--muted); flex: none; }
+.workspace-handoff { flex: none; min-width: 0; margin-bottom: 16px; border: 1px solid var(--line); border-inline-start: 2px solid var(--warning); background: var(--surface-elevated); }
+.workspace-handoff-summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; padding: 12px 16px; }
+.workspace-handoff-message { min-width: 0; flex: 1 1 280px; }
+.workspace-handoff-message h2 { font-size: 15px; line-height: 1.6; letter-spacing: 0; }
+.workspace-handoff-message p { margin: 2px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.workspace-handoff-actions { margin: 0; }
+.workspace-handoff-details > summary { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--accent); font: 13px/1.7 var(--font-mono); cursor: pointer; }
+.workspace-handoff-details > summary:focus-visible { outline-offset: -3px; }
+.workspace-handoff-body { padding: 0 16px 16px; font-size: 14px; overflow-wrap: anywhere; }
+.workspace-handoff-body p { margin-top: 12px; }
+.workspace-handoff-body li { line-height: 1.75; }
+.workspace-handoff-body h3 { font-size: 14px; margin-bottom: 8px; }
+.workspace-handoff-body pre { max-height: 200px; margin: 0; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .path { font-size: 13px; line-height: 1.8; color: var(--muted); overflow-wrap: anywhere; }
-.ticket-workspace { flex: 1; min-height: 480px; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 0; background: color-mix(in srgb, var(--surface-inset) 45%, transparent); overflow: hidden; }
+.ticket-workspace { flex: 1; min-height: 680px; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 0; background: color-mix(in srgb, var(--surface-inset) 45%, transparent); overflow: hidden; }
 .board-toolbar { flex: none; display: flex; align-items: center; gap: 16px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: linear-gradient(110deg, var(--surface-elevated), color-mix(in srgb, var(--accent) 4%, var(--surface-elevated))); }
 .view-label { display: flex; gap: 7px; align-items: center; }
 .ticket-search { max-width: 320px; }
@@ -294,6 +307,26 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .folder-list li.muted { padding: 15px; }
 .dialog-actions { display: flex; justify-content: end; gap: 10px; border-top: 1px solid var(--line); padding-top: 16px; }
 .run-panel { border-top: 2px solid var(--accent); margin-top: 28px; scroll-margin-top: 24px; }
+.run-context-links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px; font-size: 13px; overflow-wrap: anywhere; }
+.run-summary-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-block: 12px 4px; font-size: 13px; color: var(--muted); }
+.run-summary-line .ant-btn-link { padding-inline: 0; }
+.run-views { min-width: 0; font-family: var(--font-sans); }
+.run-views > .ant-tabs-nav { margin-bottom: 20px; font-family: var(--font-mono); }
+.run-views .ant-tabs-content > .detail-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+.run-views .ant-tabs-content, .run-views .ant-tabs-tabpane { min-width: 0; }
+.run-records { display: grid; gap: 8px; }
+.run-record { border: 1px solid var(--line); background: var(--surface-inset); margin-block: 8px; min-width: 0; }
+.run-record > summary { padding: 12px 16px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.run-record[open] > summary { border-bottom: 1px solid var(--line); }
+.run-record-index { color: var(--muted); font-family: var(--font-mono); }
+.run-record-body, .run-record > .criteria-list { margin: 16px; overflow-wrap: anywhere; }
+.run-record pre { max-height: 400px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.run-record > pre { margin: 16px; }
+.run-outcome-passed.ant-tag { color: var(--accent); border-color: var(--accent); }
+.run-outcome-failed.ant-tag { color: var(--danger); border-color: var(--danger); }
+.run-outcome-blocked.ant-tag, .run-outcome-not_run.ant-tag { color: var(--warning); border-color: var(--warning); }
+.run-technical-details { margin-top: 20px; }
+.run-technical-details > summary { font: 13px/1.7 var(--font-mono); padding-block: 12px; }
 .run-metadata { display: grid; gap: 12px; border-block: 1px solid var(--line); padding: 16px 0; margin: 24px 0; font-size: 13px; }
 .run-metadata > div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; }
 .run-metadata dt { color: var(--muted); }
@@ -301,6 +334,27 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .transcript { max-height: 560px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .criteria-list, .evidence-list { padding-left: 22px; font-size: 15px; line-height: 1.8; }
 .evidence-list pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.blocked-recovery { min-width: 0; scroll-margin-top: 16px; }
+.blocked-recovery h4 { margin-bottom: 8px; }
+.blocked-recovery .toolbar { margin-top: 16px; }
+.blocked-recovery .cm-editor, .blocked-recovery .cm-content { min-height: 160px; }
+.recovery-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 280px; overflow: auto; }
+.ticket-execution { min-width: 0; }
+.ticket-execution summary { cursor: pointer; }
+.ticket-execution-title { font-size: 16px; font-weight: 700; }
+.ticket-execution-summary { display: block; margin-top: 8px; font-size: 13px; font-weight: 400; }
+.ticket-execution .form-columns { margin-bottom: 16px; }
+.ticket-execution label small { font-weight: 400; }
+.ticket-execution .ant-checkbox-wrapper { font-weight: 400; }
+.settings-fields .ant-checkbox-wrapper { font-weight: 400; }
+.ticket-execution .ant-select, .ticket-execution .ant-input-number { width: 100%; min-width: 0; }
+.run-usage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.run-usage-grid > div { min-width: 0; }
+.run-usage h4 { margin: 0 0 12px; }
+.run-usage-model, .token-reading { overflow-wrap: anywhere; }
+.token-reading { font-family: var(--font-mono); font-size: 14px; }
+.run-usage small { color: var(--muted); }
+@media (max-width: 767px) { .run-usage-grid { grid-template-columns: 1fr; gap: 20px; } }
 .agent-dialog { border: 1px solid var(--warning); padding: 22px; margin: 24px 0; background: var(--surface-elevated); }
 .agent-dialog h3 { font-size: 16px; }
 .agent-dialog form { display: grid; gap: 14px; margin: 18px 0; }

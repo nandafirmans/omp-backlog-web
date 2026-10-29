@@ -8,9 +8,11 @@
 .board-status-filters button[aria-pressed="true"] { border-color: var(--warning); color: var(--text); background: var(--surface-raised); }
 .board-status-filters button span { font-variant-numeric: tabular-nums; }
 .board-ticket { position: relative; gap: 10px; }
+.board-ticket[draggable="true"] { cursor: grab; }
+.board-ticket[draggable="true"]:active { cursor: grabbing; }
 .board-card-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .board-card-top .badge { margin-left: auto; font-size: 11px; text-transform: capitalize; white-space: nowrap; }
-.board-drag-handle { display: grid; place-items: center; flex: none; width: 28px; height: 30px; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: grab; }
+.board-drag-handle { display: grid; place-items: center; flex: none; width: 36px; height: 36px; padding: 0; border: 1px solid var(--line); background: var(--surface-inset); color: var(--muted); cursor: grab; }
 .board-drag-handle:active { cursor: grabbing; }
 .board-drag-handle:disabled { cursor: not-allowed; opacity: .4; }
 .board-ticket-title { color: var(--text); text-decoration: none; }
@@ -27,7 +29,10 @@
 .ticket-list > .is-dragging { opacity: .45; }
 .ticket-list > li { position: relative; }
 .ticket-list > .drop-before::before { content: ''; position: absolute; z-index: 1; left: 0; right: 0; top: -6px; height: 3px; background: var(--accent); pointer-events: none; }
-.kanban-column.drop-at-end { box-shadow: inset 0 -3px var(--accent); }
+.kanban-column.drop-at-end .ticket-list::after { content: ''; display: block; flex: none; min-height: 36px; border: 1px dashed var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.kanban-board .ticket-list { flex: 1; }
+.kanban-board .ticket-list:empty { display: none; }
+.kanban-board .kanban-empty { display: grid; place-content: center; flex: 1; min-height: 160px; }
 .board-confirmation { overflow-wrap: anywhere; }
 .board-confirmation h3 { margin: 16px 0 8px; font-size: 14px; }
 .board-confirmation ul { padding-left: 20px; max-height: 180px; overflow: auto; }

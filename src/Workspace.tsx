@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Breadcrumb, Button, Drawer, Input, InputNumber, Modal, Segmented, Select, Tag } from 'antd';
+import { Breadcrumb, Button, Checkbox, Drawer, Input, InputNumber, Modal, Segmented, Select, Tabs, Tag } from 'antd';
 import { ArrowsInIcon, ArrowsOutIcon, FolderIcon, LightningIcon, PauseIcon, PlusIcon, ShieldCheckIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
@@ -15,6 +15,9 @@ import TicketBoard from './TicketBoard';
 import { requestReviewFeedback } from './reviewFeedback';
 import WorkspaceCommit from './WorkspaceCommit';
 import RunTranscript from './RunTranscript';
+import BlockedRecovery from './BlockedRecovery';
+import TicketExecution from './TicketExecution';
+import RunUsage from './RunUsage';
 
 const RichMarkdownEditor = lazy(() => import('./RichMarkdownEditor'));
 
@@ -120,24 +123,36 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
       </header>
       <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. A current run continues.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and the global slot still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'}</p>
       {!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}
-      {repo.handoff && <section className="panel" aria-label="Workspace handoff"><h2>Operator reconciliation required</h2><p>{repo.handoff.reason}</p>{repo.handoff.runId && <Link to={`/runs/${encode(repo.handoff.runId)}`}>Review originating run</Link>}<ol><li>Review evidence and partial work. Preserve unrelated edits.</li><li>Use Review &amp; commit for an explicitly confirmed local commit, or reconcile in your terminal. No automatic commits, pushes, stashes, resets or file deletion.</li><li>When Git is clean outside <code>.omp-backlog/</code>, recheck below. Eligible queued tickets may then start under existing permissions.</li></ol>{repo.handoff.files.length > 0 && <pre tabIndex={0}>{repo.handoff.files.map(file => JSON.stringify(file)).join('\n')}</pre>}<div className="toolbar"><WorkspaceCommit key={repo.handoff.id} repo={repo} api={api} disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onCommitted={refresh} /><Button disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClick={async () => {
-        if (!await modal.confirm({ title: 'Recheck reconciled workspace?', content: 'This only inspects Git status. A clean result releases this project gate; eligible tickets may start under existing permissions. Dirty or unavailable Git remains blocked. No files will be changed.', okText: 'Recheck workspace', cancelText: 'Keep blocked' })) return;
-        await execute('Workspace reconciled. Existing execution permissions still apply.', async () => { await api(`/api/repos/${encode(repo.id)}/reconcile-workspace`, json('POST', { handoffId: repo.handoff!.id })); });
-      }}>Recheck workspace</Button></div></section>}
+      {repo.handoff && <section className="workspace-handoff" aria-label="Workspace handoff">
+        <div className="workspace-handoff-summary">
+          <div className="workspace-handoff-message"><h2>New starts blocked</h2><p>{repo.handoff.files.length ? `Review workspace changes before the next ticket · ${repo.handoff.files.length} recorded ${repo.handoff.files.length === 1 ? 'path' : 'paths'}.` : 'Workspace inspection needs operator review before the next ticket.'}</p></div>
+          <div className="toolbar workspace-handoff-actions"><WorkspaceCommit key={repo.handoff.id} repo={repo} api={api} disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onCommitted={refresh} /><Button disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClick={async () => {
+            if (!await modal.confirm({ title: 'Recheck reconciled workspace?', content: 'This only inspects Git status. A clean result releases this project gate; eligible tickets may start under existing permissions. Dirty or unavailable Git remains blocked. No files will be changed.', okText: 'Recheck workspace', cancelText: 'Keep blocked' })) return;
+            await execute('Workspace reconciled. Existing execution permissions still apply.', async () => { await api(`/api/repos/${encode(repo.id)}/reconcile-workspace`, json('POST', { handoffId: repo.handoff!.id })); });
+          }}>Recheck workspace</Button></div>
+        </div>
+        <details className="workspace-handoff-details" key={repo.handoff.id}>
+          <summary>Details &amp; recovery</summary>
+          <div className="workspace-handoff-body"><p>{repo.handoff.reason}</p>{repo.handoff.runId && <Link to={`/runs/${encode(repo.handoff.runId)}`}>Review originating run</Link>}
+            <ol><li>Review evidence and partial work. Preserve unrelated edits.</li><li>Use Review &amp; commit for an explicitly confirmed local commit, or reconcile in your terminal. No automatic commits, pushes, stashes, resets or file deletion.</li><li>When Git is clean outside <code>.omp-backlog/</code>, recheck above. Eligible queued tickets may then start under existing permissions. Marking a ticket Done does not clear this gate.</li></ol>
+            {repo.handoff.files.length > 0 && <><h3>Recorded paths</h3><pre tabIndex={0} aria-label="Recorded workspace paths">{repo.handoff.files.map(file => JSON.stringify(file)).join('\n')}</pre></>}
+          </div>
+        </details>
+      </section>}
       <TicketBoard key={repo.id} repo={repo} tickets={tickets} snapshot={snapshot} selectedId={ticket?.id} busy={busy} api={api} execute={execute} onOpen={element => { returnFocus.current = element; }} />
       <Drawer className="ticket-drawer" title={creating ? 'New ticket' : ticket?.id ?? 'Ticket unavailable'} open={creating || !!ticketId} onClose={() => { void navigate(`/projects/${encode(repo.id)}`); }} size={expanded ? '100vw' : 'min(800px, 100vw)'} destroyOnHidden afterOpenChange={open => { if (!open) { setExpanded(false); (returnFocus.current?.isConnected ? returnFocus.current : newTicketLink.current)?.focus({ preventScroll: true }); } }} extra={<Button type="text" aria-label={expanded ? 'Restore ticket panel' : 'Expand ticket panel'} icon={expanded ? <ArrowsInIcon size={18} /> : <ArrowsOutIcon size={18} />} onClick={() => setExpanded(value => !value)} />}>
-        {creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : ticketId ? <div className="empty-state"><h2>Ticket not found</h2><p>This ticket is not available in this project.</p><Link to={`/projects/${encode(repo.id)}`}>Return to board</Link></div> : null}
+        {creating ? <TicketEditor key={`new-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : ticket ? <TicketEditor key={`${repo.id}-${ticket.id}`} repo={repo} ticket={ticket} tickets={tickets} settings={snapshot.settings} api={api} execute={execute} busy={busy} runs={snapshot.runs.filter(value => value.repoId === repo.id && value.ticketId === ticket.id).sort((a, b) => b.started - a.started)} onCreated={() => undefined} onRun={setRunId} /> : ticketId ? <div className="empty-state"><h2>Ticket not found</h2><p>This ticket is not available in this project.</p><Link to={`/projects/${encode(repo.id)}`}>Return to board</Link></div> : null}
       </Drawer>
       </>}
     </> : !selectedRun && <section className="panel empty-state"><h1>Page not found</h1><p>This project, run, or page is unavailable.</p><Link to="/">Return to projects</Link></section>}
-    {selectedRun && <RunPanel run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => { void navigate(`/projects/${encode(selectedRun.repoId)}/tickets/${encode(selectedRun.ticketId)}`); }} />}
+    {selectedRun && <RunPanel key={selectedRun.id} run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => { void navigate(`/projects/${encode(selectedRun.repoId)}/tickets/${encode(selectedRun.ticketId)}`); }} />}
     {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => { void navigate('/'); }} onRegistered={id => { void navigate(`/projects/${encode(id)}`); }} />}
   </>;
 }
 
-interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; api: RequestApi; execute: Execute; busy: boolean; runs: Run[]; onCreated: (id: string) => void; onRun: (id: string) => void; assisted?: boolean }
+interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; settings?: Settings; api: RequestApi; execute: Execute; busy: boolean; runs: Run[]; onCreated: (id: string) => void; onRun: (id: string) => void; assisted?: boolean }
 const template = '---\nid: T001\ntitle: \ndepends_on: []\n---\n\n[What to change and where.]\n\n[Constraints or reference, if needed.]\n\nDone when:\n- [Observable result.]\n- [How to verify it.]\n';
-function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, onCreated, onRun, assisted = false }: EditorProps) {
+function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy, runs, onCreated, onRun, assisted = false }: EditorProps) {
   const [draft, setDraft] = useState(ticket?.markdown ?? template);
   const latestDraft = useRef(draft);
   useEffect(() => { latestDraft.current = draft; }, [draft]);
@@ -153,6 +168,8 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   const [agentVisible, setAgentVisible] = useState(assisted);
   const [assistedUsed, setAssistedUsed] = useState(assisted);
   const [agentDirty, setAgentDirty] = useState(false);
+  const [recoveryDirty, setRecoveryDirty] = useState(false);
+  const [executionDirty, setExecutionDirty] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [confirmationMode, setConfirmationMode] = useState<Mode>();
@@ -169,14 +186,15 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
   const [modal, modalContext] = Modal.useModal();
   const stale = !!ticket && !uploading && !knownRevisions.has(ticket.revision);
   const dirty = draft !== base.markdown;
-  const actionsBusy = busy || uploading || stagedCount > 0;
+  const actionsBusy = busy || uploading || stagedCount > 0 || executionDirty;
   const savedNavigation = useRef(false);
   const editorBusy = busy || agentBusy || publishing;
-  const unsaved = dirty || agentDirty || agentBusy || publishing || stagedCount > 0 || (!ticket && hasServerTicket);
+  const unsaved = dirty || recoveryDirty || executionDirty || agentDirty || agentBusy || publishing || stagedCount > 0 || (!ticket && hasServerTicket);
   const blocker = useBlocker(({ currentLocation, nextLocation }) => unsaved && !savedNavigation.current && currentLocation.pathname !== nextLocation.pathname);
   const working = !!ticket && activeStatuses.includes(ticket.status);
   const path = ticket ? `/api/repos/${encode(ticket.repoId)}/tickets/${encode(ticket.id)}` : '';
   const attachmentBase = path ? `${path}/attachments/` : '';
+  const currentRun = runs.find(run => run.id === ticket?.runId);
 
   useEffect(() => {
     alive.current = true;
@@ -385,17 +403,18 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
 
   async function action(value: 'approve' | 'retry' | 'done' | 'changes' | 'reorder', order?: number) {
     if (!ticket || uploading || stagedCount > 0) return;
+    if ((value === 'retry' || value === 'approve') && currentRun?.status === 'blocked') { document.querySelector<HTMLElement>('.blocked-recovery')?.scrollIntoView({ block: 'start' }); return; }
     if (value === 'retry' && ticket.status === 'interrupted' && !await modal.confirm({ title: 'Retry interrupted run?', content: 'Have you reviewed this interrupted run and its partial filesystem changes? Retrying starts a fresh session and may repeat actions.', okText: 'Retry reviewed run', cancelText: 'Cancel' })) return;
     if (value === 'done' && !await modal.confirm({ title: 'Mark this revision Done?', content: 'Confirm every acceptance criterion has revision-bound evidence and any visual or subjective requirements have been reviewed.', okText: 'Mark revision Done', cancelText: 'Keep in review' })) return;
     const feedback = value === 'changes' ? await requestReviewFeedback(modal, <p>{ticket.id}: describe the missing behavior or evidence.</p>) : undefined;
     if (feedback === null) return;
-    await execute(value === 'done' ? 'Reviewed revision marked Done.' : `Ticket ${value} recorded.`, async () => { await api(`/api/tickets/${encode(ticket.repoId)}/${encode(ticket.id)}/action`, json('POST', { action: value, revision: ticket.revision, ...(order !== undefined ? { order } : {}), ...(feedback ? { feedback } : {}) })); });
+    await execute(value === 'done' ? 'Reviewed revision marked Done.' : `Ticket ${value} recorded.`, async () => { await api(`/api/tickets/${encode(ticket.repoId)}/${encode(ticket.id)}/action`, json('POST', { action: value, revision: ticket.revision, executionVersion: ticket.executionVersion ?? null, ...(order !== undefined ? { order } : {}), ...(feedback ? { feedback } : {}) })); });
   }
 
 
   return <div className={assisted ? 'panel editor-panel agent-creation-page' : 'panel editor-panel'}>
     {modalContext}
-    <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Discard changes" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Your unsaved ticket changes, agent conversation and staged files will be discarded. An owned drafting session will be stopped.</p></Modal>
+    <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Discard changes" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Your unsaved ticket changes, execution settings, recovery instructions, agent conversation and staged files will be discarded. An owned drafting session will be stopped.</p></Modal>
     {assisted ? <header className="agent-page-heading"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Projects</Link> }, { title: <Link to={`/projects/${encode(repo.id)}`}>{repo.name}</Link> }, { title: <span aria-current="page">Create with agent</span> }]} /><h1>Draft ticket with OMP</h1><p className="muted">Discuss the change, then review the ticket before creating it. Drafts and files live in this tab; reloading loses them.</p><Segmented aria-label="Drafting view" disabled={editorBusy || uploading || hasServerTicket} options={['Discuss', 'Review ticket']} value={agentVisible ? 'Discuss' : 'Review ticket'} onChange={value => setAgentVisible(value === 'Discuss')} /></header> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}
@@ -403,8 +422,15 @@ function TicketEditor({ repo, ticket, tickets = [], api, execute, busy, runs, on
     {(stale || conflict) && <div className="conflict-box" role="alert"><p>{conflict || 'A newer ticket or attachment revision is available. Preserve your draft and reconcile before saving.'}</p><div className="toolbar"><Button onClick={() => { void navigator.clipboard.writeText(draft).catch(() => setConflict('Clipboard unavailable. Select and copy the Markdown from the editor before loading the current version.')); }}>Copy my draft</Button><Button download={`${ticket?.id ?? 'ticket'}-draft.md`} href={`data:text/markdown;charset=utf-8,${encode(draft)}`}>Download draft</Button><Button disabled={busy || uploading} onClick={() => void loadCurrentVersion()}>Load current version</Button></div></div>}
     {ticket && <div className="ticket-facts"><p><span>Dependencies</span>{ticket.dependencies.length ? ticket.dependencies.join(', ') : 'None'}</p><p><span>Approval</span>{ticket.approvedRevision === ticket.revision ? 'Current revision approved' : 'Current revision not approved'}</p><p><span>Acceptance criteria</span>{ticket.criteria.length}</p></div>}
     {ticket && <>
-      <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar"><Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>{['blocked', 'failed', 'interrupted'].includes(ticket.status) && <Button disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onClick={() => void action('retry')}>Review & retry</Button>}{ticket.status === 'needs_review' && <><Button type="primary" className="primary" disabled={actionsBusy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={actionsBusy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}{tickets.length > 1 && <><Button disabled={actionsBusy || tickets[0]?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i - 1]?.order ?? ticket.order) - 0.5); }}>Move up</Button><Button disabled={actionsBusy || tickets.at(-1)?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i + 1]?.order ?? ticket.order) + 0.5); }}>Move down</Button></>}</div><p className="muted">Approval is revision-bound, not a command to bypass dependencies or pauses. Dependencies wait for Done, not Needs review.</p>{ticket.status === 'interrupted' && <p className="warning-text">Recovery required: inspect the previous transcript and partial changes before explicitly retrying. No mutating action is replayed automatically.</p>}{working && <p className="warning-text">To stop active work, open its run and pause it. Repository pause only prevents future starts.</p>}</section>
+      <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar">
+        <Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || currentRun?.status === 'blocked' || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>
+        {['blocked', 'failed', 'interrupted'].includes(ticket.status) && <Button disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onClick={() => void action('retry')}>{ticket.status === 'blocked' ? 'Review recovery' : 'Review & retry'}</Button>}
+        {ticket.status === 'needs_review' && <><Button type="primary" className="primary" disabled={actionsBusy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={actionsBusy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}
+        {tickets.length > 1 && <><Button disabled={actionsBusy || tickets[0]?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i - 1]?.order ?? ticket.order) - 0.5); }}>Move up</Button><Button disabled={actionsBusy || tickets.at(-1)?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i + 1]?.order ?? ticket.order) + 0.5); }}>Move down</Button></>}
+      </div><p className="muted">Approval is revision-bound, not a command to bypass dependencies or pauses. Dependencies wait for Done, not Needs review.</p>{ticket.status === 'interrupted' && <p className="warning-text">Recovery required: inspect the previous transcript and partial changes before explicitly retrying. No mutating action is replayed automatically.</p>}{working && <p className="warning-text">To stop active work, open its run and pause it. Repository pause only prevents future starts.</p>}</section>
     </>}
+    {ticket && currentRun?.status === 'blocked' && <BlockedRecovery key={ticket.runId} repo={repo} ticket={ticket} run={currentRun} api={api} execute={execute} disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onDirtyChange={setRecoveryDirty} />}
+    {ticket && settings && <TicketExecution ticket={ticket} settings={settings} api={api} execute={execute} disabled={busy || uploading || stagedCount > 0 || dirty || stale || working || ticket.removed || !!ticket.error} onDirtyChange={setExecutionDirty} />}
     {ticket && <div className="requirements-heading"><h3>Requirements</h3><Button disabled={actionsBusy || (editing && unsaved)} onClick={() => setEditing(value => !value)}>{editing ? 'Reading view' : 'Edit Markdown'}</Button></div>}
     {!editing && <article className="ticket-reading" aria-label="Ticket requirements"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => url.startsWith('attachments/') ? `${attachmentBase}${url.slice('attachments/'.length)}` : defaultUrlTransform(url)} components={{ a: ({ href, children }) => <a href={href} rel="noreferrer">{children}</a> }}>{draft.replace(/^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '')}</Markdown></article>}
     {assisted && <>
@@ -488,6 +514,8 @@ interface ExecutionModels {
 
 function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; api: RequestApi; execute: Execute; busy: boolean }) {
   const [draft, setDraft] = useState(settings);
+  const finiteTokenBudget = useRef(settings.tokenBudget ?? 100000);
+  const [modal, modalContext] = Modal.useModal();
   const [roots, setRoots] = useState(settings.roots.join('\n'));
   const [discovery, setDiscovery] = useState<(ExecutionModels & { executable: string; requestedModel: string })>();
   const [loading, setLoading] = useState(false);
@@ -530,7 +558,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
   const thinkingNeedsDiscovery = !!draft.thinking && !currentDiscovery?.thinkingLevels.includes(draft.thinking) && (executionChanged || draft.thinking !== (settings.thinking ?? ''));
   const dirty = draft.executable !== settings.executable || draft.model !== settings.model || (draft.thinking ?? '') !== (settings.thinking ?? '') || draft.timeLimitMinutes !== settings.timeLimitMinutes || draft.tokenBudget !== settings.tokenBudget || roots !== settings.roots.join('\n');
   const timeInvalid = !Number.isInteger(draft.timeLimitMinutes) || draft.timeLimitMinutes < 1 || draft.timeLimitMinutes > 1440;
-  const tokensInvalid = !Number.isInteger(draft.tokenBudget) || draft.tokenBudget < 1 || draft.tokenBudget > 10000000;
+  const tokensInvalid = draft.tokenBudget !== null && (!Number.isInteger(draft.tokenBudget) || draft.tokenBudget < 1 || draft.tokenBudget > 10000000);
 
   function changeModel(model: string) {
     setDraft(current => ({ ...current, model }));
@@ -539,12 +567,14 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid) return;
+    if (draft.tokenBudget === null && settings.tokenBudget !== null && !await modal.confirm({ title: 'Remove the workspace cumulative token limit?', autoFocusButton: 'cancel', okText: 'Save uncapped default', cancelText: 'Keep editing', content: <p>New attempts inheriting workspace settings will have no cumulative token cap. Usage and cost may keep growing until the run finishes or another stop condition applies. Ticket-specific caps still override this default. Existing runs keep their recorded limits. Native auto-compaction, the time limit, pause controls and human acceptance remain.</p> })) return;
     await execute('Settings saved. Existing runs are not restarted.', async () => {
       const saved = await api<Settings>('/api/settings', json('PATCH', { executable: draft.executable, model: draft.model, thinking: draft.thinking ?? '', roots: roots.split('\n').map(value => value.trim()).filter(Boolean), timeLimitMinutes: draft.timeLimitMinutes, tokenBudget: draft.tokenBudget }));
       setDraft(saved); setRoots(saved.roots.join('\n'));
     });
   }
   return <section className="settings-view">
+    {modalContext}
     <h1>Execution settings</h1>
     <p className="lead">Defaults for new ticket runs. Existing sessions and your global OMP configuration stay unchanged.</p>
     <form className="panel settings-form" onSubmit={event => void save(event)}>
@@ -576,8 +606,13 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
         <div className="settings-fields">
           <div className="form-columns">
             <label htmlFor="settings-time">Time limit (minutes)<InputNumber id="settings-time" type="number" min={1} max={1440} step={1} required disabled={busy} status={timeInvalid ? 'error' : undefined} aria-invalid={timeInvalid} aria-describedby="settings-time-help" value={Number.isNaN(draft.timeLimitMinutes) ? null : draft.timeLimitMinutes} onChange={value => setDraft({ ...draft, timeLimitMinutes: value ?? NaN })} /><small id="settings-time-help" className={timeInvalid ? 'warning-text' : undefined}>{timeInvalid ? 'Enter a whole number from 1 to 1,440.' : '1-1,440 minutes per run.'}</small></label>
-            <label htmlFor="settings-tokens">Token budget<InputNumber<number> id="settings-tokens" min={1} max={10000000} step={10000} required disabled={busy} status={tokensInvalid ? 'error' : undefined} aria-invalid={tokensInvalid} aria-describedby="settings-tokens-help" formatter={(value, info) => info.userTyping ? info.input : value === undefined ? '' : Number(value).toLocaleString('en-US')} value={Number.isNaN(draft.tokenBudget) ? null : draft.tokenBudget} onChange={value => setDraft({ ...draft, tokenBudget: value ?? NaN })} /><small id="settings-tokens-help" className={tokensInvalid ? 'warning-text' : undefined}>{tokensInvalid ? 'Enter a whole number from 1 to 10,000,000.' : 'Input, output and repeated context/cache tokens count.'}</small></label>
+            <label htmlFor="settings-tokens">Token budget<InputNumber<number> id="settings-tokens" min={1} max={10000000} step={10000} required={draft.tokenBudget !== null} disabled={busy || draft.tokenBudget === null} placeholder={draft.tokenBudget === null ? 'No cumulative token limit' : undefined} status={tokensInvalid ? 'error' : undefined} aria-invalid={tokensInvalid} aria-describedby="settings-tokens-help" formatter={(value, info) => info.userTyping ? info.input : value === undefined || value === null || String(value) === '' ? '' : Number(value).toLocaleString('en-US')} value={Number.isNaN(draft.tokenBudget) ? null : draft.tokenBudget} onChange={value => setDraft({ ...draft, tokenBudget: value ?? NaN })} /><small id="settings-tokens-help" className={tokensInvalid ? 'warning-text' : undefined}>{tokensInvalid ? 'Enter a whole number from 1 to 10,000,000.' : draft.tokenBudget === null ? 'No cumulative cap for inheriting new attempts. Context-window capacity is separate.' : 'Input, output and repeated context/cache tokens count.'}</small></label>
           </div>
+          <Checkbox checked={draft.tokenBudget === null} disabled={busy} onChange={event => {
+            if (event.target.checked && draft.tokenBudget !== null && !tokensInvalid) finiteTokenBudget.current = draft.tokenBudget;
+            setDraft(current => ({ ...current, tokenBudget: event.target.checked ? null : finiteTokenBudget.current }));
+          }}>No cumulative token limit</Checkbox>
+          {draft.tokenBudget === null && <p className="warning-text">Usage and cost have no cumulative token cap. Native OMP auto-compaction remains enabled; the time limit and all safety/review gates still apply. Completion is not guaranteed.</p>}
           <p className="settings-safety">Limits stop work; they never restart it. Pausing does not roll back changes. Human evidence review is still required before Done.</p>
           <details className="settings-details"><summary>Pause and restart controls</summary><p>Use Pause all new starts on Projects to prevent new sessions. Pause the current run separately to interrupt active execution. Saving these settings does neither.</p></details>
         </div>
@@ -590,6 +625,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
         <span role="status" className={dirty ? 'settings-unsaved' : 'muted'}>{busy ? 'Saving settings…' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span>
         <div className="toolbar"><Button htmlType="button" disabled={busy || !dirty} onClick={() => {
           setDraft(settings); setRoots(settings.roots.join('\n'));
+          finiteTokenBudget.current = settings.tokenBudget ?? 100000;
           void discover(settings.executable, settings.model);
         }}>Load saved settings</Button><Button type="primary" htmlType="submit" disabled={busy || !dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid}>Save settings</Button></div>
       </div>
@@ -601,14 +637,39 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
   const section = useRef<HTMLElement>(null);
   useEffect(() => { section.current?.scrollIntoView({ block: 'start', behavior: 'instant' }); section.current?.focus({ preventScroll: true }); }, [run.id]);
   const old = !!ticket && run.revision !== ticket.revision;
-  return <section ref={section} className="panel run-panel" tabIndex={-1} aria-labelledby="run-heading"><div className="section-heading"><div><p className="run-reference">{repo?.name ?? run.repoId} / {run.ticketId}</p><h2 id="run-heading">Run evidence & transcript</h2></div><Button onClick={onClose}>Close run</Button></div><div className="toolbar"><Status value={run.status} /><span className="muted">{new Date(run.started).toLocaleString()}</span>{run.status === 'running' && <Button disabled={busy} onClick={() => void execute('Pause requested. Stopping is not yet stopped.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'pause' })); })}>Pause run</Button>}{run.status === 'paused' && <Button type="primary" className="primary" disabled={busy} onClick={() => void execute('Explicit run resume requested.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'resume' })); })}>Resume run</Button>}</div>{run.status === 'stopping' && <p className="notice" role="status">Stopping... Waiting for the agent and its child work to actually stop. Completed actions are not rolled back.</p>}{old && <p className="warning-text">Requirements changed during or after this run. This evidence belongs to an older revision and cannot complete the current ticket.</p>}{run.error && <p role="alert" className="error-banner">{run.error}</p>}{run.blocker && <section className="blocker-box"><h3>Blocked · prerequisite needed</h3><p>{run.blocker}</p></section>}{run.dialog && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}
-    <dl className="run-metadata"><div><dt>Run</dt><dd>{run.id}</dd></div><div><dt>Revision</dt><dd>{run.revision}</dd></div><div><dt>OMP session</dt><dd>{run.sessionId || 'Not recorded yet'}</dd></div><div><dt>Finished</dt><dd>{run.finished ? new Date(run.finished).toLocaleString() : 'Not settled'}</dd></div></dl>
-    {run.progress && <section className="detail-section" aria-label="Observed progress"><h3>Observed progress</h3><p>{run.progress.phase}</p><p>Latest tool/action: {run.progress.latestAction}</p><p>Run time limit: {new Date(run.progress.deadline).toLocaleString()} · Token budget: {run.progress.tokenBudget}</p>{run.progress.tokens ? <><p>Last reported session usage: {run.progress.tokens.total} tokens · sampled {new Date(run.progress.tokens.sampled).toLocaleString()}</p><small>{run.progress.tokens.basis}</small></> : <p>Session token usage not reported yet.</p>}<p className="muted">Activity is not percentage completion or proof of correctness. Criterion outcomes below remain agent-reported.</p></section>}
-    <section className="detail-section"><h3>Acceptance evidence</h3><p className="muted">An agent's success claim is not independent verification. Review evidence against every criterion before accepting this revision.</p>{ticket && !old && ticket.criteria.length > 0 && <ol className="criteria-list">{ticket.criteria.map((criterion, i) => <li key={`${i}-${criterion}`}>{criterion}</li>)}</ol>}{run.evidence.length ? <ol className="evidence-list">{run.evidence.map((item, i) => <li key={i}><pre tabIndex={0}>{item}</pre></li>)}</ol> : <p className="muted">No verification evidence recorded.</p>}</section>
-    <section className="detail-section"><h3>Verification receipts</h3><p className="muted">Outcomes, commands and recipe identities below are agent-reported. Host records receipt time and artifact bytes/hash, not whether a check really ran or its conclusion is correct.</p>{run.verification?.length ? <ol className="evidence-list">{run.verification.map(receipt => <li key={receipt.id}><strong>{receipt.outcome} · {receipt.criterion}</strong><p>{receipt.feature} → {receipt.entryPoint}</p><pre tabIndex={0}>{receipt.method}{'\n'}{receipt.details}</pre><p>Recipe (reported): {receipt.recipe}</p><small>Run {receipt.runId} · revision {receipt.revision} · recorded {new Date(receipt.recorded).toLocaleString()}</small>{receipt.artifact && <p><a href={`/api/runs/${encode(run.id)}/proof/${encode(receipt.artifact.id)}`} download>{receipt.artifact.name}</a> · {receipt.artifact.size} bytes · SHA-256 <code>{receipt.artifact.sha256}</code></p>}</li>)}</ol> : <p className="muted">No structured receipts. Legacy text evidence is unverified.</p>}</section>
+  const [view, setView] = useState('transcript');
+  return <section ref={section} className="panel run-panel" tabIndex={-1} aria-labelledby="run-heading"><div className="section-heading"><div><p className="run-reference">{repo?.name ?? run.repoId} / {run.ticketId}</p><h1 id="run-heading">Run details</h1></div><Button onClick={onClose}>Close run</Button></div><div className="toolbar"><Status value={run.status} /><span className="muted">{new Date(run.started).toLocaleString()}</span>{run.status === 'running' && <Button disabled={busy} onClick={() => void execute('Pause requested. Stopping is not yet stopped.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'pause' })); })}>Pause run</Button>}{run.status === 'paused' && <Button type="primary" className="primary" disabled={busy} onClick={() => void execute('Explicit run resume requested.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'resume' })); })}>Resume run</Button>}</div>{run.status === 'stopping' && <p className="notice" role="status">Stopping... Waiting for the agent and its child work to actually stop. Completed actions are not rolled back.</p>}{old && <p className="warning-text">Requirements changed during or after this run. This evidence belongs to an older revision and cannot complete the current ticket.</p>}{run.error && <p role="alert" className="error-banner">{run.error}</p>}{run.blocker && <section className="blocker-box"><h3>Blocked · prerequisite needed</h3><p>{run.blocker}</p></section>}{run.dialog && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}
     {run.reviewFeedback && <section className="detail-section"><h3>Human change request</h3><p>Linked to this run and revision; supplied to the next authorized attempt.</p><pre tabIndex={0}>{run.reviewFeedback.message}</pre></section>}
-    <section className="detail-section"><h3>Changed files</h3><pre className="transcript" tabIndex={0}>{run.changedFiles || (repo?.git ? 'No changed-file summary recorded.' : 'Git change tracking unavailable for this workspace.')}</pre></section>
-    <RunTranscript key={run.id} run={run} />
+    {run.blocker && <p><Link to={`/projects/${encode(run.repoId)}/tickets/${encode(run.ticketId)}`}>Review blocker recovery instructions on ticket</Link></p>}
+    {run.recoveryNote && <section className="detail-section"><h3>Recovery note</h3><p>{run.recoveryNote.reviewed ? 'Operator reviewed for retry' : 'Saved only · not approved for execution'} · revision {run.recoveryNote.revision.slice(0, 10)}</p><pre className="recovery-text" tabIndex={0}>{run.recoveryNote.instructions}</pre></section>}
+    {run.recoveryContext && <section className="detail-section"><h3>Reviewed recovery handoff</h3><p>Received from <Link to={`/runs/${encode(run.recoveryContext.sourceRunId)}`}>blocked source run</Link>. Previous evidence is context, not fresh verification.</p><pre className="recovery-text" tabIndex={0}>{run.recoveryContext.note.instructions}</pre></section>}
+    <nav className="run-context-links" aria-label="Run context">
+      {ticket && <Link to={`/projects/${encode(run.repoId)}/tickets/${encode(run.ticketId)}`}>{ticket.id} · {ticket.title}</Link>}
+      <span className="muted">Revision {run.revision.slice(0, 10)}</span>
+    </nav>
+    <div className="run-summary-line">
+      <span>{run.verification?.length ?? 0} checks reported · {run.evidence.length} evidence notes</span>
+      {!!run.verification?.some(receipt => receipt.outcome !== 'passed') && <Button type="link" onClick={() => setView('evidence')}>Review unresolved checks</Button>}
+      {run.status === 'needs_review' && <span className="warning-text">Awaiting human review · not accepted</span>}
+    </div>
+    <Tabs className="run-views" activeKey={view} onChange={setView} tabBarGutter={20} aria-label="Run sections" items={[
+      { key: 'transcript', label: 'Transcript', forceRender: true, children: <RunTranscript key={run.id} run={run} /> },
+      { key: 'evidence', label: `Evidence (${run.verification?.length ?? 0})`, children: <>
+        <section className="detail-section"><h3>Acceptance evidence</h3><p className="muted">Agent claims, not independent verification. Review every criterion before accepting this revision.</p>
+          {ticket && !old && ticket.criteria.length > 0 && <details className="run-record"><summary>Requirements · {ticket.criteria.length} criteria</summary><ol className="criteria-list">{ticket.criteria.map((criterion, i) => <li key={`${i}-${criterion}`}>{criterion}</li>)}</ol></details>}
+          {run.evidence.length ? <div className="run-records">{run.evidence.map((item, i) => <details className="run-record" key={i}><summary><span className="run-record-index">{i + 1}.</span> {item.split('\n').find(line => line.trim()) || 'Recorded evidence'}</summary><pre tabIndex={0}>{item}</pre></details>)}</div> : <p className="muted">No verification evidence recorded.</p>}
+        </section>
+        <section className="detail-section"><h3>Verification receipts</h3><p className="muted">Outcomes, commands and recipe identities are agent-reported. Host records receipt time and artifact bytes/hash, not whether a check ran or its conclusion is correct.</p>
+          {run.verification?.length ? <div className="run-records">{run.verification.map(receipt => <details className="run-record" key={receipt.id}><summary><Tag className={`run-outcome run-outcome-${receipt.outcome}`}>{receipt.outcome.replaceAll('_', ' ')}</Tag> {receipt.criterion}</summary><div className="run-record-body"><p>{receipt.feature} → {receipt.entryPoint}</p><pre tabIndex={0}>{receipt.method}{'\n'}{receipt.details}</pre><p>Recipe (reported): {receipt.recipe}</p><small>Run {receipt.runId} · revision {receipt.revision} · recorded {new Date(receipt.recorded).toLocaleString()}</small>{receipt.artifact && <p><a href={`/api/runs/${encode(run.id)}/proof/${encode(receipt.artifact.id)}`} download>{receipt.artifact.name}</a> · {receipt.artifact.size} bytes · SHA-256 <code>{receipt.artifact.sha256}</code></p>}</div></details>)}</div> : <p className="muted">No structured receipts. Legacy text evidence is unverified.</p>}
+        </section>
+      </> },
+      { key: 'files', label: 'Files', children: <section className="detail-section"><h3>Changed files</h3><p className="muted">Recorded workspace changes, not an acceptance decision.</p><pre className="transcript" tabIndex={0}>{run.changedFiles || (repo?.git ? 'No changed-file summary recorded.' : 'Git change tracking unavailable for this workspace.')}</pre></section> },
+      { key: 'runtime', label: 'Usage', children: <>
+        <RunUsage run={run} />
+        <details className="run-technical-details"><summary>Run identifiers &amp; timing</summary><dl className="run-metadata"><div><dt>Run</dt><dd>{run.id}</dd></div><div><dt>Revision</dt><dd>{run.revision}</dd></div><div><dt>OMP session</dt><dd>{run.sessionId || 'Not recorded yet'}</dd></div><div><dt>Finished</dt><dd>{run.finished ? new Date(run.finished).toLocaleString() : 'Not settled'}</dd></div></dl></details>
+        {run.progress && <section className="detail-section" aria-label="Observed progress"><h3>Observed progress</h3><p>{run.progress.phase}</p><p>Latest tool/action: {run.progress.latestAction}</p><p>Run time limit: {new Date(run.progress.deadline).toLocaleString()}</p><p className="muted">Activity and token percentages are not percentage completion or proof of correctness. Criterion outcomes remain agent-reported.</p></section>}
+      </> },
+    ]} />
   </section>;
 }
 

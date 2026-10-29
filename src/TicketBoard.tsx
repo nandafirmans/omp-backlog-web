@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { Button, Checkbox, Dropdown, Input, Modal, Popover, Segmented, Tag } from 'antd';
 import { ColumnsIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, SlidersHorizontalIcon } from '@phosphor-icons/react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import type { Repo, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
-import { boardGroups, canMoveTicket, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
+import { boardGroups, canMoveTicket, dropBefore, edgeScroll, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
 import './TicketBoard.css';
 import { requestReviewFeedback } from './reviewFeedback';
 
@@ -25,7 +25,18 @@ const label = (status: string) => status.replaceAll('_', ' ');
 const encode = encodeURIComponent;
 type DropTarget = { group: string; before?: string };
 
+function targetBefore(column: Element, y: number, sourceId?: string) {
+  const cards = Array.from(column.querySelectorAll<HTMLElement>('.ticket-list > li[data-ticket-id]'))
+    .filter(card => card.dataset.ticketId !== sourceId)
+    .map(card => {
+      const { top, height } = card.getBoundingClientRect();
+      return { id: card.dataset.ticketId!, top, height };
+    });
+  return dropBefore(cards, y);
+}
+
 export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy, api, execute, onOpen }: Props) {
+  const navigate = useNavigate();
   const [modal, modalContext] = Modal.useModal();
   const [layout, setLayout] = useState(() => localStorage.getItem('omp-ticket-layout') === 'list' ? 'list' : 'board');
   const [showEmpty, setShowEmpty] = useState(() => localStorage.getItem('omp-ticket-empty') === 'true');
@@ -40,12 +51,41 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
   const locked = useRef(false);
   const dragSource = useRef<Ticket | null>(null);
   const controls = useRef(new Map<string, HTMLElement>());
+  const pointer = useRef<{ x: number; y: number } | null>(null);
+  const surface = useRef<HTMLDivElement>(null);
   useEffect(() => { latest.current = { tickets, snapshot }; }, [tickets, snapshot]);
   useEffect(() => {
     localStorage.setItem('omp-ticket-layout', layout);
     localStorage.setItem('omp-ticket-empty', String(showEmpty));
     localStorage.setItem('omp-ticket-hidden', hidden.join(','));
   }, [layout, showEmpty, hidden]);
+  useEffect(() => {
+    const source = dragging;
+    if (!source) return;
+    let frame: number;
+    function scroll() {
+      const board = surface.current;
+      const point = pointer.current;
+      if (board && point) {
+        const bounds = board.getBoundingClientRect();
+        board.scrollLeft += edgeScroll(point.x, bounds.left, bounds.right);
+        const column = document.elementFromPoint(point.x, point.y)?.closest('.kanban-column');
+        const list = column?.querySelector<HTMLOListElement>('.ticket-list');
+        if (list && board.contains(list)) {
+          const rect = list.getBoundingClientRect();
+          list.scrollTop += edgeScroll(point.y, rect.top, rect.bottom);
+          const group = column?.getAttribute('data-board-group');
+          if (column && group && (groupFor(source.status).id === group || transitionFor(source, group))) {
+            const before = targetBefore(column, point.y, source.id);
+            setOver(previous => previous?.group === group && previous.before === before ? previous : { group, before });
+          }
+        }
+      }
+      frame = requestAnimationFrame(scroll);
+    }
+    frame = requestAnimationFrame(scroll);
+    return () => cancelAnimationFrame(frame);
+  }, [dragging]);
 
   const disabled = busy || confirming;
   const matching = tickets.filter(ticket => `${ticket.id} ${ticket.title}`.toLowerCase().includes(search.trim().toLowerCase()));
@@ -74,7 +114,12 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
     const sameGroup = groupFor(current.status).id === destination;
     const action = sameGroup ? 'reorder' : transitionFor(current, destination);
     if (!action) return;
-    const order = sameGroup ? insertionOrder(latest.current.tickets, current, destination, before) : null;
+    if ((action === 'retry' || action === 'approve') && (current.status === 'blocked' || latest.current.snapshot.runs.find(run => run.id === current.runId)?.status === 'blocked')) {
+      setAnnouncement('Review and save recovery instructions on the blocked ticket before retrying. No move saved.');
+      void navigate(`/projects/${encode(repo.id)}/tickets/${encode(current.id)}`);
+      return;
+    }
+    const order = insertionOrder(latest.current.tickets, current, destination, before);
     if (sameGroup && order === null) {
       setAnnouncement('Position unchanged. No queue changes saved.');
       focusCard(source.id);
@@ -122,7 +167,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
       const success = await execute(action === 'reorder' ? `${current.id} queue position saved.` : `${current.id}: ${action === 'done' ? 'reviewed revision marked Done' : 'Ready requested; execution permissions still apply'}.`, async () => {
         const latestTicket = latest.current.tickets.find(ticket => ticket.id === source.id);
         if (!sameBoardRevision(latestTicket, source) || !latestTicket || !canMoveTicket(latestTicket)) throw new Error('Ticket changed during confirmation. Review the current revision and try again.');
-        await api(`/api/tickets/${encode(repo.id)}/${encode(current.id)}/action`, { method: 'POST', body: JSON.stringify({ action, revision: current.revision, ...(order !== null ? { order } : {}), ...(feedback ? { feedback } : {}) }) });
+        await api(`/api/tickets/${encode(repo.id)}/${encode(current.id)}/action`, { method: 'POST', body: JSON.stringify({ action, revision: current.revision, executionVersion: current.executionVersion ?? null, ...(order !== null ? { order } : {}), ...(feedback ? { feedback } : {}) }) });
       });
       if (!success) setAnnouncement(`${current.id} move was not confirmed saved. Review the error and current board before retrying.`);
     } finally {
@@ -133,26 +178,30 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
   }
 
   function clearDrag() {
+    pointer.current = null;
     dragSource.current = null;
     setDragging(null);
     setOver(null);
   }
 
-  function dragOver(event: DragEvent<HTMLElement>, group: string, before?: string) {
+  function dragOver(event: DragEvent<HTMLElement>, group: string) {
     const source = dragSource.current;
     if (!source || disabled) return;
+    pointer.current = { x: event.clientX, y: event.clientY };
     event.stopPropagation();
     const valid = groupFor(source.status).id === group || !!transitionFor(source, group);
     event.dataTransfer.dropEffect = valid ? 'move' : 'none';
     if (!valid) { setOver(null); return; }
     event.preventDefault();
-    setOver({ group, before });
+    const before = targetBefore(event.currentTarget, event.clientY, source.id);
+    setOver(previous => previous?.group === group && previous.before === before ? previous : { group, before });
   }
 
-  function drop(event: DragEvent<HTMLElement>, group: string, before?: string) {
+  function drop(event: DragEvent<HTMLElement>, group: string) {
     event.preventDefault();
     event.stopPropagation();
     const source = dragSource.current;
+    const before = targetBefore(event.currentTarget, event.clientY, source?.id);
     clearDrag();
     if (source) void move(source, group, before);
   }
@@ -168,13 +217,13 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
         <Button type="link" onClick={() => { setShowEmpty(false); setHidden([]); setAttentionFilter(null); }}>Reset display</Button>
       </div>}><Button className="display-button" icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />}>Display{hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}</Button></Popover>
     </div>
-    <p className="board-instructions" id="board-move-help">{dragging ? 'Drop into a highlighted column. Ready and Done require confirmation; execution determines other statuses.' : 'Drag by the grip to reorder or request a move. Use each card’s Actions menu without dragging.'}</p>
+    <p className="board-instructions" id="board-move-help">{dragging ? 'Drop between cards in a highlighted column. Hold near an edge to scroll. Ready and Done require confirmation.' : 'Drag a card to reorder or request a move. Use each card’s Actions menu for keyboard or touch moves.'}</p>
     <p className="board-announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
-    <div id="ticket-board-region" className={`ticket-surface ${layout === 'list' ? 'ticket-list-view' : 'kanban-board'}`} role="region" aria-label="Tickets grouped by workflow stage" aria-busy={busy} tabIndex={0}>
+    <div ref={surface} id="ticket-board-region" className={`ticket-surface ${layout === 'list' ? 'ticket-list-view' : 'kanban-board'}`} role="region" aria-label="Tickets grouped by workflow stage" aria-busy={busy} tabIndex={0} onDragOver={event => { if (dragSource.current) pointer.current = { x: event.clientX, y: event.clientY }; }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) pointer.current = null; }}>
       {visibleColumns.map(column => {
         const validDrop = !!dragging && (groupFor(dragging.status).id === column.id || !!transitionFor(dragging, column.id));
         const shownTickets = column.id === 'attention' && attentionFilter ? column.tickets.filter(ticket => ticket.status === attentionFilter) : column.tickets;
-        return <section key={column.id} className={`kanban-column board-group-${column.id}${dragging ? validDrop ? ' can-drop' : ' cannot-drop' : ''}${over?.group === column.id && !over.before ? ' drop-at-end' : ''}`} aria-labelledby={`column-${column.id}`} onDragOver={event => dragOver(event, column.id)} onDrop={event => drop(event, column.id)} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}>
+        return <section key={column.id} data-board-group={column.id} className={`kanban-column board-group-${column.id}${dragging ? validDrop ? ' can-drop' : ' cannot-drop' : ''}${over?.group === column.id && !over.before ? ' drop-at-end' : ''}`} aria-labelledby={`column-${column.id}`} onDragOver={event => dragOver(event, column.id)} onDrop={event => drop(event, column.id)} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}>
           <div className="kanban-heading"><h2 id={`column-${column.id}`}>{column.label}</h2><span className="kanban-count">{column.tickets.length}</span></div>
           {column.id === 'active' && <p className="board-group-note">Agent-managed · paused work still holds the slot</p>}
           {column.id === 'attention' && <div className="board-status-filters" aria-label="Filter attention statuses">{column.statuses.map(status => <button type="button" key={status} aria-pressed={attentionFilter === status} onClick={() => setAttentionFilter(previous => previous === status ? null : status)}>{label(status)} <span>{column.tickets.filter(ticket => ticket.status === status).length}</span></button>)}</div>}
@@ -186,10 +235,10 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
             const afterNext = shownTickets[index + 2];
             const reason = value.error || run?.blocker || run?.error;
             const details = `/projects/${encode(repo.id)}/tickets/${encode(value.id)}`;
-            return <li key={value.id} className={`${dragging?.id === value.id ? 'is-dragging ' : ''}${over?.group === column.id && over.before === value.id ? 'drop-before' : ''}`} onDragOver={event => dragOver(event, column.id, value.id)} onDrop={event => drop(event, column.id, value.id)}>
-              <article className={`ticket-card board-ticket ${selectedId === value.id ? 'selected' : ''}`} aria-label={`${value.id}: ${value.title}, ${label(value.status)}`}>
-                <div className="board-card-top"><button type="button" className="board-drag-handle" disabled={!movable} draggable={movable && layout === 'board'} aria-label={`Drag ${value.id}; use Actions for keyboard or touch moves`} aria-describedby="board-move-help" title={movable ? 'Drag to move; use Actions without dragging' : 'Unavailable while active, invalid, or saving'} onDragStart={event => { if (!movable) { event.preventDefault(); return; } dragSource.current = value; setDragging(value); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', value.id); }} onDragEnd={clearDrag}><DotsSixVerticalIcon size={18} aria-hidden="true" /></button><span className="ticket-meta">{value.id}</span><Tag className={`badge status-${value.status}`}>{label(value.status)}</Tag></div>
-                <Link className="board-ticket-title" aria-current={selectedId === value.id ? 'page' : undefined} onClick={event => onOpen(event.currentTarget)} to={details}><strong>{value.title || value.id}</strong></Link>
+            return <li key={value.id} data-ticket-id={value.id} className={`${dragging?.id === value.id ? 'is-dragging ' : ''}${over?.group === column.id && over.before === value.id ? 'drop-before' : ''}`}>
+              <article className={`ticket-card board-ticket ${selectedId === value.id ? 'selected' : ''}`} aria-label={`${value.id}: ${value.title}, ${label(value.status)}`} draggable={movable && layout === 'board'} onDragStart={event => { if (!movable || (event.target as HTMLElement).closest('a, .board-card-actions')) { event.preventDefault(); return; } dragSource.current = value; setDragging(value); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', value.id); event.dataTransfer.setDragImage(event.currentTarget, 24, 24); }} onDragEnd={clearDrag}>
+                <div className="board-card-top"><button type="button" className="board-drag-handle" disabled={!movable} aria-label={`Drag ${value.id}; use Actions for keyboard or touch moves`} aria-describedby="board-move-help" title={movable ? 'Drag to move; use Actions without dragging' : 'Unavailable while active, invalid, or saving'}><DotsSixVerticalIcon size={18} aria-hidden="true" /></button><span className="ticket-meta">{value.id}</span><Tag className={`badge status-${value.status}`}>{label(value.status)}</Tag></div>
+                <Link draggable={false} className="board-ticket-title" aria-current={selectedId === value.id ? 'page' : undefined} onClick={event => onOpen(event.currentTarget)} to={details}><strong>{value.title || value.id}</strong></Link>
                 {(value.removed || value.dependencies.length > 0) && <small>{value.removed ? 'Ticket file removed' : `Depends on ${value.dependencies.join(', ')}`}</small>}
                 {reason && <span className="ticket-error" title={reason}>{reason}</span>}
                 {value.status === 'interrupted' && <small className="warning-text">Partial changes may remain. Review before retrying.</small>}

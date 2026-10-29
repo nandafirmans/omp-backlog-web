@@ -32,6 +32,18 @@ export function sameBoardRevision(current: Ticket | undefined, expected: Ticket)
   return !!current && current.revision === expected.revision && current.status === expected.status && !current.removed;
 }
 
+export function dropBefore(cards: { id: string; top: number; height: number }[], y: number) {
+  return cards.find(card => y < card.top + card.height / 2)?.id;
+}
+
+export function edgeScroll(position: number, start: number, end: number) {
+  const edge = Math.min(48, (end - start) / 3);
+  if (position < start || position > end || edge <= 0) return 0;
+  if (position < start + edge) return -Math.ceil(12 * (start + edge - position) / edge);
+  if (position > end - edge) return Math.ceil(12 * (position - end + edge) / edge);
+  return 0;
+}
+
 // Use global neighbors so moving within a group never renumbers hidden tickets.
 export function insertionOrder(tickets: Ticket[], moving: Ticket, groupId: string, beforeId?: string) {
   if (beforeId === moving.id) return null;
@@ -45,11 +57,11 @@ export function insertionOrder(tickets: Ticket[], moving: Ticket, groupId: strin
     if (index < 0) return null;
   } else {
     index = remaining.findLastIndex(ticket => groupFor(ticket.status).id === groupId) + 1;
-    if (index === 0) return null;
+    if (index === 0) index = remaining.length;
   }
   const previous = remaining[index - 1]?.order;
   const next = remaining[index]?.order;
-  const order = previous === undefined ? next! - 1 : next === undefined ? previous + 1 : previous + (next - previous) / 2;
+  const order = previous === undefined ? (next ?? 1) - 1 : next === undefined ? previous + 1 : previous + (next - previous) / 2;
   if (!Number.isFinite(order) || (previous !== undefined && order <= previous) || (next !== undefined && order >= next)) return null;
   return order === moving.order ? null : order;
 }

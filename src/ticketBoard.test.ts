@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { Ticket } from '../server/contracts';
-import { boardGroups, canMoveTicket, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
+import { boardGroups, canMoveTicket, dropBefore, edgeScroll, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
 
 function ticket(id: string, status: Ticket['status'], order = 1): Ticket {
   return { id, status, order, repoId: 'repo', revision: 'revision', title: id, markdown: '', approvedRevision: null, dependencies: [], criteria: [], attachments: [], error: null, removed: false, runId: null };
@@ -53,4 +53,34 @@ test('reordering grouped statuses respects global and hidden neighbors', () => {
   expect(insertionOrder(values, values[0]!, 'attention', 'A')).toBeNull();
   expect(insertionOrder(values, values[0]!, 'attention', 'hidden')).toBeNull();
   expect(insertionOrder([ticket('A', 'failed'), ticket('B', 'blocked'), ticket('C', 'interrupted')], ticket('C', 'interrupted'), 'attention', 'B')).toBeNull();
+});
+
+test('drop position follows card midpoints, including after the last card', () => {
+  const cards = [{ id: 'A', top: 100, height: 80 }, { id: 'B', top: 200, height: 120 }];
+  expect(dropBefore(cards, 100)).toBe('A');
+  expect(dropBefore(cards, 139)).toBe('A');
+  expect(dropBefore(cards, 140)).toBe('B');
+  expect(dropBefore(cards, 259)).toBe('B');
+  expect(dropBefore(cards, 260)).toBeUndefined();
+  expect(dropBefore([], 100)).toBeUndefined();
+});
+
+test('cross-column placement uses destination neighbors, including empty stages', () => {
+  const values = [ticket('A', 'draft', 10), ticket('B', 'ready', 20), ticket('C', 'ready', 30)];
+  expect(insertionOrder(values, values[0]!, 'ready', 'B')).toBe(19);
+  expect(insertionOrder(values, values[0]!, 'ready', 'C')).toBe(25);
+  expect(insertionOrder(values, values[0]!, 'ready')).toBe(31);
+  expect(insertionOrder(values, values[0]!, 'done')).toBe(31);
+  expect(insertionOrder([values[0]!], values[0]!, 'ready')).toBe(0);
+});
+
+test('edge scrolling is bounded and stops outside the scroll surface', () => {
+  expect(edgeScroll(100, 100, 400)).toBe(-12);
+  expect(edgeScroll(124, 100, 400)).toBe(-6);
+  expect(edgeScroll(250, 100, 400)).toBe(0);
+  expect(edgeScroll(376, 100, 400)).toBe(6);
+  expect(edgeScroll(400, 100, 400)).toBe(12);
+  expect(edgeScroll(99, 100, 400)).toBe(0);
+  expect(edgeScroll(401, 100, 400)).toBe(0);
+  expect(edgeScroll(100, 100, 100)).toBe(0);
 });
