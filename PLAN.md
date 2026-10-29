@@ -460,6 +460,22 @@ Status: partially implemented; delivery boundaries below. Adopt the useful workf
 
 This extends section 10 rather than replacing its remaining handoff/proof requirements. No full pstack parity or complete-plan delivery is claimed. Deferred components still need individual approval and verification evidence.
 
+### Reviewed blocker recovery slice (October 29, 2026)
+
+- Added structured, bounded agent blocker details and editable private source-run recovery notes, separate from requirements. Save alone grants no approval/execution. Legacy runs remain readable; no database schema migration.
+- Added explicit Review fix & retry bound to current revision, source run and saved note identity. Fresh runs snapshot reviewed recovery context; no inherited passing checks. Panel, board Actions and blocked-to-Ready dragging converge on recovery review. Existing workspace/ownership/dependency/permission gates remain authoritative.
+- Verification: changed-code ESLint and synthetic-API real-browser checks passed; details/limits in [current workflow](docs/current-agent-workflow.md#reviewed-blocker-recovery). Backend regression tests added, not run under lint-only policy. No live-provider recovery claim.
+- Not delivered: stronger bounded same-run remediation, install/setup preauthorization, unattended fresh retries, or independent host-observed command verification. [Research and proposed later stages](docs/blocker-recovery-research.md).
+
+### Ticket execution settings and context telemetry (October 29, 2026)
+
+- Added private per-ticket model/thinking/optional budget overrides with explicit save, version/revision checks and active-run rejection. Save grants no retry or approval. Fresh runs snapshot configuration; new snapshots preserve limits/model across pause/resume. Existing gates and explicit Failed retry remain.
+- Run details distinguish cumulative consumption from estimated current context and surface model, native compaction status and sample age. Execution enables/validates native session-scoped automatic compaction; OMP owns thresholds, no second host compaction loop or budget reset.
+- Added exact OMP 18.13.3 support after source review and installed restricted metadata smoke. Unknown releases still fail closed. Corrected blank optional budget displaying zero. [Compatibility scope](docs/omp-18.13.3-compatibility.md).
+- Verification: changed-code ESLint, synthetic-API browser journeys and installed metadata discovery passed. Backend/API/runtime/guard regression tests added or extended but not run under lint-only policy. No live-provider/native compaction or current strict-typecheck/build claim. [Current workflow and proof boundaries](docs/current-agent-workflow.md#ticket-model-overrides-and-context-compaction).
+
+- Later explicit extension: global and per-ticket **No cumulative token limit** with cost warning/save confirmation. `null` is uncapped; omitted ticket cap inherits; numeric cap still bounds usage. Native goal omits `token_budget` and host skips only that token check; accounting, native compaction, fixed finite deadline, ownership and acceptance gates remain. Existing defaults/runs are not silently changed. Legacy resumes retain recorded progress limits when available. Browser/UI and lint verification only; additional backend/protocol tests added, not run. No guarantee of automatic completion or waived provider/account limits.
+
 ## Initialization delivery
 
 Provide a runnable Bun/React/Vite development app, strict TypeScript and lint commands, loopback-only development server, a read-only health endpoint, and a project overview linking this plan. Keep runtime state and local secrets out of source control. Do not start an OMP worker, register repositories, or mutate other projects during initialization.

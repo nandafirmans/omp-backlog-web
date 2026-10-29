@@ -13,3 +13,19 @@ Fixture browser path: configure owned protocol executable, approve literal `proo
 Evidence: distinguish model claims, host records, protocol-fixture checks and real provider/browser checks. Receipts retain exact criterion, feature/entry point, method, outcome, details and reported recipe identity; host only attests stored artifact bytes/hash. Artifact downloads are authenticated, forced attachment, bounded and hash-checked. Preserve private artifacts after teardown. `server/runtime-integration.test.ts` is a fixture, never provider availability proof.
 
 Gotchas: no auto-Done, commit, push or deploy. Dirty worktree may block next run; do not reset or auto-commit to continue. Run artifacts must not mutate requirement attachments.
+
+## Blocker recovery handoff
+
+Entry points: blocked ticket panel/direct URL, board Actions → Ready, native blocked-card drag → Ready, source run recovery link. Actions/drag open the panel without saving a move. Run details show saved notes and received handoff snapshots read-only; editing remains on the ticket.
+
+Drive with an authorized disposable fixture: inspect agent-reported prerequisite/fix and optional attempts/permission/check plan; review source evidence/partial work. Save an edited recovery note; confirm requirements revision, approval and Blocked status are unchanged. Reload; note survives. Cancel unsaved close and retry separately. Change the saved note/revision in another tab; stale review must fail without discarding local text. Explicitly load/reconcile current note. Confirm Review fix & retry binds source run, saved-note identity and exact current revision, then requests Ready without releasing any workspace gate. A subsequent separately authorized run must receive the reviewed snapshot and fresh-check instructions, not inherited passing evidence. Old requirements require a new saved/reviewed note. Legacy blockers must show unavailable details honestly.
+
+Check keyboard disclosure, unsaved navigation, visible errors, enabled retry and Dark/Light desktop/mobile layouts. This slice's browser evidence is synthetic-API UI coverage only (see current workflow); `server/recovery.test.ts` and runtime integration assertions were added but not run under lint-only policy. Persistence/backend/provider behavior needs separately authorized verification. No install or auto-retry authority granted.
+
+## Run usage and native compaction
+
+Entry point: run detail token-usage section and its failed-run next-attempt link. Verify cumulative total/budget and actual percentage (including overshoot) independently from current estimated context/capacity. Check actual model/thinking, sample times, unknown legacy fields, native compaction running/ended/aborted/error state and no fabricated completion percentage. A paused/stopped run must not show an active compaction spinner from a stale sample.
+
+For an explicitly authorized real run, confirm native automatic compaction is enabled before prompting, observe its lifecycle and context reduction if it actually triggers, and check that consumption/budget are not reset. This is a native OMP path, not a host polling compaction loop. Missing real triggering/provider authorization leaves native compaction unverified. Existing synthetic UI/protocol coverage is not live compaction proof.
+
+For explicitly uncapped runs, expect actual consumption plus No cumulative token limit, not a made-up budget percentage. Native goal creation must omit `token_budget` rather than send null/zero. Check accounted usage beyond a former finite default does not itself stop the run; the original time deadline, errors/blockers and pause still stop it. Pause/resume must preserve uncapped or finite snapshots, including recorded legacy limits. Completion still requires fresh evidence and human acceptance.

@@ -10,6 +10,14 @@ Side effects: immutable requirement revision includes references; Markdown/attac
 
 Gotchas: unique frontmatter id/title/depends_on; exact criterion text matters. Uploading evidence as a requirement attachment changes revision. Removed/invalid or active work cannot be treated as arbitrary drag destinations.
 
+## Ticket-specific next-attempt settings
+
+Entry points: saved ticket panel and failed-run Configure model/budget link. Explicitly load models, choose model/thinking and optional budget; opening a ticket alone must not run discovery. Cancel save/navigation separately; selections survive canceled navigation and unsaved settings disable panel retry. Confirm save changes only private overrides/version, not Markdown/revision/approval/status/workspace handoff/global defaults, and starts no Failed retry. Clear budget: field stays blank and inherits, never zero. Reload preserves saved overrides. Concurrent version/revision changes must reject stale saves and retry confirmations; explicit current-settings reload requires unsaved replacement confirmation. Active/stopping/paused ownership rejects changes. Separately authorized runtime checks must establish configuration snapshot and pause/resume limit preservation; UI fixtures alone cannot.
+
+Uncapped entry points: global Settings → Run limits checkbox and ticket checkbox. Verify keyboard toggle, cost-warning confirmation/cancel, save/reload and explicit restoration of finite caps. Global uncapped is inherited only by tickets without a cap; a finite ticket cap wins, while a ticket's explicit uncapped override wins over a finite global default. Saving must not alter an existing run snapshot or time limit. Ticket inheritance and explicit no-cap must remain distinguishable; no blank-as-zero interpretation. Runtime field omission/time enforcement need separately authorized protocol/provider checks, not just synthetic UI proof.
+
+Execution controls start collapsed in the ticket panel. Verify the summary reports global inheritance versus saved overrides; Enter/Space expands and collapses without discovery or saves. Collapse a dirty form: selections and unsaved navigation/retry protection must survive, with unsaved status in the summary. Errors and stale-save reconciliation must remain visible while collapsed. Reload starts collapsed without clearing saved overrides. Inspect expanded/collapsed Dark/Light desktop/mobile layouts.
+
 ## Optional agent-assisted creation
 
 Keep manual creation/import independent: New ticket opens its Markdown drawer and needs no OMP connection or agent UI. The sibling Create with agent opens `/projects/:repoId/tickets/new/agent` as a dedicated page, not another overlay. For the assisted journey, connect explicitly, choose a discovered model and supported thinking level, and observe effective selections. If the isolated OMP default is unavailable, Send must stay disabled until an available model is selected; no silent fallback.
