@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-if (process.argv.includes('--version')) { console.log(process.argv.includes('release-18.13.1') ? 'omp/18.13.1' : process.argv.includes('unaudited-release') ? 'omp/99.0.0' : 'omp/18.12.6'); process.exit(0); }
+if (process.argv.includes('--version')) { console.log(process.argv.includes('release-18.13.3') ? 'omp/18.13.3' : process.argv.includes('release-18.13.1') ? 'omp/18.13.1' : process.argv.includes('unaudited-release') ? 'omp/99.0.0' : 'omp/18.12.6'); process.exit(0); }
 const logIndex = process.argv.indexOf('--fixture-log');
 const log = (value: unknown) => { if (logIndex >= 0) appendFileSync(process.argv[logIndex + 1]!, JSON.stringify(value) + '\n'); };
 log({ event: 'spawn', pid: process.pid, cwd: process.cwd() });

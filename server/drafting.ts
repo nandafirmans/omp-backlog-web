@@ -29,7 +29,7 @@ interface Draft {
 }
 interface Prepared extends DraftPreparation { message: string; images: { type: 'image'; mimeType: string; data: string }[]; bytes: number; prompt: string }
 
-// Audited against official v18.12.6 and v18.13.1 CLI/main, SDK, discovery and plugin loaders.
+// Audited against official v18.12.6, v18.13.1 and v18.13.3 CLI/main, SDK, discovery and plugin loaders.
 // Empty namespaces are established BEFORE loading OMP; --no-tools alone is unsafe.
 // Local provider auth stays inside OMP through its existing DB, not application code.
 // This reduces capabilities, not OS permissions; it is deliberately not a sandbox.
@@ -47,6 +47,8 @@ const profile = {
   startup: { checkUpdate: false, setupWizard: false, showSplash: false, quiet: true },
   marketplace: { autoUpdate: 'off' }, power: { sleepPrevention: 'off' }, magicKeywords: { enabled: false },
 };
+const auditedVersions = ['18.12.6', '18.13.1', '18.13.3'];
+const auditedVersionLabel = auditedVersions.map(version => `v${version}`).join(', ');
 
 function launchEnv(directory: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -97,10 +99,11 @@ async function checkVersion(executable: string, cwd: string, env: NodeJS.Process
   let output = ''; let exceeded = false;
   const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new HttpError(503, 'OMP version discovery timed out')); }, 10000);
   child.stdout.on('data', (data: Buffer) => { if (output.length + data.length > 4096) { exceeded = true; child.kill('SIGKILL'); } else output += data.toString('utf8'); });
-  child.once('error', () => { clearTimeout(timeout); reject(new HttpError(503, 'Cannot launch the configured OMP executable; install audited OMP v18.12.6 or v18.13.1')); });
+  child.once('error', () => { clearTimeout(timeout); reject(new HttpError(503, `Cannot launch the configured OMP executable; supported audited releases: ${auditedVersionLabel}`)); });
   child.once('close', code => {
     clearTimeout(timeout);
-    if (code !== 0 || exceeded || !/^(?:omp\/)?18\.(?:12\.6|13\.1)$/.test(output.trim())) reject(new HttpError(503, 'Model discovery and drafting require audited OMP v18.12.6 or v18.13.1; other CLI isolation profiles have not been verified'));
+    const version = /^(?:omp\/)?(\d{1,4}\.\d{1,4}\.\d{1,4})$/.exec(output.trim())?.[1];
+    if (code !== 0 || exceeded || !version || !auditedVersions.includes(version)) reject(new HttpError(503, `Model discovery and drafting require audited OMP ${auditedVersionLabel}. Detected: ${version ? `v${version}` : 'unrecognized version'}. Other CLI isolation profiles have not been verified`));
     else resolveVersion();
   });
   await promise;
