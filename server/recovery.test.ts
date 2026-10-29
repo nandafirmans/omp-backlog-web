@@ -1,0 +1,85 @@
+import { expect, test } from 'bun:test';
+import { mkdir, mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { createApi } from './api';
+import type { Run, Runtime } from './contracts';
+import { closeStore, createStore, database, digest, token } from './store';
+import { writeTicket } from './tickets';
+import { parseResult, eligible } from './runtime';
+import { recoveryContext, recoveryObjective } from './recovery';
+
+test('blocked recovery is durable, stale-safe, separately saved and explicitly reviewed before a fresh objective', async () => {
+  const root = await mkdtemp('/tmp/opencode/backlog-recovery-test-');
+  const directory = join(root, 'private');
+  let store = createStore(directory);
+  try {
+    const workspace = join(root, 'repo'); await mkdir(workspace);
+    const repo = { id: 'repo', path: workspace, name: 'Recovery fixture', git: false, mode: 'approved' as const, lastStarted: 0 };
+    store.save('repos', repo);
+    const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Recover safely\ndepends_on: []\n---\n\nDone when:\n- Original journey works.\n');
+    const result = parseResult({ revision: ticket.revision, status: 'blocked', evidence: [], prerequisite: 'Fixture unavailable', unblock: 'Recheck fixture', attempted: 'Read existing setup docs', permission: 'No additional permission', verification: 'Original journey', recoveryPrompt: 'Probe fixture first; preserve partial work.' }, ticket);
+    expect(result.details?.attempted).toBe('Read existing setup docs');
+    const sanitized = parseResult({ revision: ticket.revision, status: 'blocked', evidence: [], prerequisite: 'password=synthetic-value', unblock: 'Owner provides fixture' }, ticket);
+    expect(sanitized.blocker).not.toContain('synthetic-value');
+    expect(sanitized.details?.suggestedPrompt).not.toContain('synthetic-value');
+    expect(parseResult({ revision: ticket.revision, status: 'blocked', evidence: [], prerequisite: 'Fixture', unblock: 'Recheck' }, ticket).details?.suggestedPrompt).toContain('not permission');
+    expect(() => parseResult({ revision: ticket.revision, status: 'blocked', evidence: [], prerequisite: 'x'.repeat(2001), unblock: 'Recheck' }, ticket)).toThrow();
+    const run: Run = { id: 'source', repoId: repo.id, ticketId: ticket.id, revision: ticket.revision, status: 'blocked', started: 1, finished: 2, pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: ['Partial report'], blocker: result.blocker, blockerDetails: result.details, changedFiles: 'Partial output', dialog: null, error: null };
+    store.save('runs', run); store.save('tickets', { ...ticket, status: 'blocked', runId: run.id });
+    let wakes = 0;
+    const runtime: Runtime = { wake() { wakes++; }, async reconcile() {}, async control() {}, async answer() {}, async close() {} };
+    let api = createApi(store, runtime);
+    const cookie = token(); const csrf = token();
+    database(store).query('INSERT INTO sessions VALUES(?,?,1,?)').run(digest(cookie), csrf, Date.now() + 60000);
+    const origin = 'http://localhost:4310';
+    const call = (path: string, input: unknown, authenticated = true, validCsrf = true) => api(new Request(`${origin}${path}`, { method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json', ...(authenticated ? { Cookie: `omp_session=${cookie}` } : {}), ...(validCsrf ? { 'X-CSRF-Token': csrf } : {}) }, body: JSON.stringify(input) }));
+    const notePath = '/api/runs/source/recovery'; const actionPath = '/api/tickets/repo/T001/action';
+    const input = { revision: ticket.revision, noteId: null, instructions: 'Check fixture first, then original journey.' };
+    expect((await call(notePath, input, false)).status).toBe(401);
+    expect((await call(notePath, input, true, false)).status).toBe(403);
+    for (const instructions of ['', 'x'.repeat(8001), 'bad\0input']) expect((await call(notePath, { ...input, instructions })).status).toBe(400);
+    expect((await call(notePath, { ...input, revision: 'stale' })).status).toBe(409);
+    expect((await call(notePath, input)).status).toBe(200);
+    const note = store.get('runs', run.id)!.recoveryNote!;
+    expect(note.reviewed).toBeUndefined();
+    expect(wakes).toBe(0);
+    expect(store.get('tickets', 'repo/T001')).toEqual({ ...ticket, status: 'blocked', runId: run.id });
+    expect(recoveryContext(store, { ...ticket, runId: run.id })).toBeUndefined();
+    expect((await call(notePath, input)).status).toBe(409);
+    expect((await call(actionPath, { action: 'retry', revision: ticket.revision })).status).toBe(409);
+    const retry = { action: 'recover', revision: ticket.revision, runId: run.id, noteId: note.id };
+    for (const patch of [{ noteId: 'stale' }, { runId: 'other' }, { revision: 'stale' }]) expect((await call(actionPath, { ...retry, ...patch })).status).toBe(409);
+    // Private JSON record survives restart without a schema migration.
+    closeStore(store); store = createStore(directory); api = createApi(store, runtime);
+    expect(store.get('runs', run.id)!.recoveryNote).toEqual(note);
+    const handoff = { id: 'gate', runId: run.id, detected: Date.now(), files: ['partial.txt'], reason: 'Reconcile first' };
+    store.save('repos', { ...repo, handoff });
+    expect((await call(actionPath, retry)).status).toBe(200);
+    const ready = store.get('tickets', 'repo/T001')!;
+    expect(ready.status).toBe('ready'); expect(ready.approvedRevision).toBe(ticket.revision);
+    expect(store.get('repos', repo.id)!.handoff).toEqual(handoff);
+    expect(eligible(store, store.get('repos', repo.id)!, ready)).toBe(false);
+    expect(wakes).toBe(1); expect(store.list('runs')).toHaveLength(1);
+    expect((await call(actionPath, retry)).status).toBe(409);
+    expect((await call(notePath, { ...input, noteId: note.id })).status).toBe(409);
+    const context = recoveryContext(store, ready)!;
+    expect(context.sourceRunId).toBe(run.id); expect(context.note.instructions).toBe(input.instructions);
+    const fresh = { ...run, id: 'fresh', recoveryContext: context, verification: [] };
+    expect(recoveryObjective(fresh).join('\n')).toContain(input.instructions);
+    expect(recoveryObjective(fresh).join('\n')).toContain('not a passing check');
+    expect(recoveryObjective({ ...fresh, revision: 'edited' })).toEqual([]);
+    expect(recoveryContext(store, { ...ready, revision: 'edited' })).toBeUndefined();
+    expect(store.get('runs', run.id)!.evidence).toEqual(['Partial report']);
+
+    // Requirement edits cannot reuse an old note or bypass recovery through Draft approval.
+    store.save('tickets', { ...ready, status: 'blocked' });
+    const edited = await writeTicket(store, repo, ticket.markdown.replace('Original journey works.', 'Edited original journey works.'), ticket.revision, ticket.id);
+    for (const action of ['approve', 'retry']) expect((await call(actionPath, { action, revision: edited.revision })).status).toBe(409);
+    expect((await call(actionPath, { ...retry, revision: edited.revision })).status).toBe(409);
+    expect((await call(notePath, { ...input, revision: edited.revision, noteId: note.id, instructions: 'Reconcile edited criteria before the probe.' })).status).toBe(200);
+    const revisedNote = store.get('runs', run.id)!.recoveryNote!;
+    expect(revisedNote.id).not.toBe(note.id); expect(revisedNote.reviewed).toBeUndefined();
+    expect((await call(actionPath, { ...retry, revision: edited.revision, noteId: revisedNote.id })).status).toBe(200);
+    expect(recoveryContext(store, store.get('tickets', 'repo/T001')!)!.sourceRevision).toBe(run.revision);
+  } finally { closeStore(store); }
+});

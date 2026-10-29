@@ -22,8 +22,8 @@ const sessionFile = args.includes('--resume') ? argument('--resume') : join(argu
 if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
 const session = args.includes('--resume')
-  ? JSON.parse(await readFile(sessionFile, 'utf8')) as { id: string; thinking?: string }
-  : { id: crypto.randomUUID(), thinking: 'medium' };
+  ? JSON.parse(await readFile(sessionFile, 'utf8')) as { id: string; thinking?: string; model?: string }
+  : { id: crypto.randomUUID(), thinking: 'medium', model: args.includes('--model') ? argument('--model') : '' };
 await writeFile(sessionFile, JSON.stringify(session));
 const log = (event: Record<string, unknown>) => appendFile(join(process.cwd(), 'fixture-events.jsonl'), JSON.stringify({ ...event, pid: process.pid, sessionId: session.id }) + '\n');
 const send = (frame: Frame) => process.stdout.write(JSON.stringify(frame) + '\n');
@@ -32,6 +32,7 @@ let resultId: string | null = null;
 let evidenceId: string | null = null;
 let negotiated = false;
 let toolsRegistered = false;
+let autoCompactionEnabled = false;
 const decoder = new FrameDecoder();
 await log({ event: 'spawn', resumed: args.includes('--resume'), sessionFile });
 send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2], maxFrameBytes: 1024 * 1024, maxReassembledFrameBytes: 64 * 1024 * 1024 });
@@ -39,7 +40,7 @@ send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2], max
 for await (const line of createInterface({ input: process.stdin })) {
   const frame = decoder.decode(Buffer.from(line));
   if (!frame) continue;
-  await log({ event: 'command', command: frame.type, op: frame.op, level: frame.level });
+  await log({ event: 'command', command: frame.type, op: frame.op, level: frame.level, ...(Object.hasOwn(frame, 'token_budget') ? { tokenBudget: frame.token_budget } : {}) });
   const respond = (data: Record<string, unknown> = {}) => send({ type: 'response', id: frame.id, success: true, data });
   if (frame.type === 'negotiate_protocol' && frame.protocolVersion === 2) {
     negotiated = true;
@@ -47,7 +48,9 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (!negotiated) {
     throw new Error('Fixture requires protocol v2 negotiation');
   } else if (frame.type === 'get_state') {
-    respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, thinkingLevel: session.thinking ?? 'medium' });
+    const selected = session.model ?? '';
+    const slash = selected.indexOf('/');
+    respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, thinkingLevel: session.thinking ?? 'medium', ...(slash > 0 ? { model: { provider: selected.slice(0, slash), id: selected.slice(slash + 1) } } : {}), autoCompactionEnabled, isCompacting: false, contextUsage: { tokens: 400, contextWindow: 1000, percent: 40 } });
   } else if (frame.type === 'get_available_thinking_levels') {
     respond({ levels: ['off', 'medium', 'high'] });
   } else if (frame.type === 'set_thinking_level') {
@@ -58,6 +61,9 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (!Array.isArray(frame.tools) || !frame.tools.some((tool) => tool.name === 'backlog_result')) throw new Error('Missing backlog_result registration');
     toolsRegistered = true;
     respond();
+  } else if (frame.type === 'set_auto_compaction') {
+    autoCompactionEnabled = frame.enabled === true;
+    respond();
   } else if (frame.type === 'set_auto_retry' || frame.type === 'set_cache_warming' || frame.type === 'abort') {
     respond();
   } else if (frame.type === 'prompt') {
@@ -66,6 +72,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     await log({ event: 'prompt-admitted', revision: ticket.revision, thinking: session.thinking ?? 'medium' });
     respond();
   } else if (frame.type === 'goal') {
+    if (frame.token_budget !== undefined && (typeof frame.token_budget !== 'number' || !Number.isInteger(frame.token_budget) || frame.token_budget <= 0)) throw new Error('Native goal token_budget must be omitted or a positive integer');
     respond();
     if (frame.op === 'create' || frame.op === 'resume') {
       await log({ event: 'executing' });

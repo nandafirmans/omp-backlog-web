@@ -13,7 +13,7 @@ import { createApi } from './api';
 
 // These are process/protocol acceptance tests. The child verifies a disposable
 // proof file; it does not exercise a real OMP installation, model, or credentials.
-interface Event { event: string; pid: number; sessionId: string; command?: string; op?: string; resumed?: boolean; revision?: string; sessionFile?: string; level?: string; thinking?: string }
+interface Event { event: string; pid: number; sessionId: string; command?: string; op?: string; resumed?: boolean; revision?: string; sessionFile?: string; level?: string; thinking?: string; tokenBudget?: number }
 interface Harness { root: string; store: Store; executable: string; runtime: Runtime | null }
 
 // Real timers are intentional: detached children and fs.watch run outside the
@@ -322,7 +322,63 @@ test('provider failure after successful prompt admission fails the run and never
   });
 }, 15_000);
 
-test('pause retains the claim and resume uses the same durable session and immutable run', async () => {
+test('uncapped ticket omits native token budget, keeps accounting/compaction and still stops at its original deadline', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'uncapped', 0, 'tokens');
+    const selected = await ticket(harness, repo);
+    harness.store.save('tickets', { ...selected, status: 'ready', execution: { tokenBudget: null } });
+    await start(harness);
+    const first = await running(harness);
+    const sampled = await waitFor('usage reaches the inherited finite cap without stopping', () => {
+      const current = harness.store.get('runs', first.id);
+      return current?.status === 'running' && current.progress?.tokens?.total === 7 ? current : undefined;
+    });
+    expect(sampled.configuration?.tokenBudget).toBeNull();
+    expect(sampled.progress?.tokenBudget).toBeNull();
+    expect(sampled.progress?.compaction?.enabled).toBe(true);
+    const created = (await events(repo)).find(event => event.command === 'goal' && event.op === 'create');
+    expect(created).toBeDefined(); expect(Object.hasOwn(created!, 'tokenBudget')).toBe(false);
+    await harness.runtime!.control(first.id, 'pause');
+    harness.store.setSettings({ ...harness.store.settings(), tokenBudget: 9000000, timeLimitMinutes: 60 });
+    await harness.runtime!.control(first.id, 'resume');
+    const resumed = await running(harness);
+    expect(resumed.progress?.tokenBudget).toBeNull();
+    expect(resumed.progress?.deadline).toBe(first.progress?.deadline);
+    expect(resumed.sessionId).toBe(first.sessionId);
+    const failed = await waitFor('original time limit stops uncapped work', () => {
+      const current = harness.store.get('runs', first.id);
+      return current?.status === 'failed' && current.pid === null ? current : undefined;
+    });
+    expect(failed.error).toContain('Execution time budget exhausted');
+    expect(harness.store.list('runs')).toHaveLength(1);
+  }, { tokenBudget: 7, timeLimitMinutes: 0.15 });
+}, 20_000);
+
+test('ticket model/budget are snapshotted and native compaction does not change resume limits', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'ticket-settings');
+    const selected = await ticket(harness, repo);
+    const execution = { model: 'fixture/ticket-model', thinking: 'high', tokenBudget: 30000 };
+    harness.store.save('tickets', { ...selected, execution });
+    await start(harness);
+    const before = await running(harness);
+    expect(before.configuration).toMatchObject(execution);
+    expect(before.progress?.model).toBe(execution.model);
+    expect(before.progress?.tokenBudget).toBe(30000);
+    expect(before.progress?.compaction?.enabled).toBe(true);
+    await harness.runtime!.control(before.id, 'pause');
+    harness.store.setSettings({ ...harness.store.settings(), model: 'fixture/new-global', tokenBudget: null });
+    await harness.runtime!.control(before.id, 'resume');
+    const resumed = await running(harness);
+    expect(resumed.sessionId).toBe(before.sessionId);
+    expect(resumed.progress?.model).toBe(execution.model);
+    expect(resumed.progress?.tokenBudget).toBe(30000);
+    expect(resumed.progress?.deadline).toBe(before.progress?.deadline);
+    expect((await events(repo)).some(event => event.command === 'set_auto_compaction')).toBe(true);
+  });
+}, 15_000);
+
+test('pause retains the claim and legacy resume preserves recorded limits, session and immutable run', async () => {
   await withHarness(async harness => {
     const repo = await repository(harness, 'paused');
     await ticket(harness, repo);
@@ -336,6 +392,9 @@ test('pause retains the claim and resume uses the same durable session and immut
     expect(paused.pid).toBeNull();
     expect(paused.finished).toBeNull();
     expect(paused.progress?.phase).toBe('Paused; execution slot retained');
+    // Older runs have progress limits but no configuration snapshot.
+    harness.store.save('runs', { ...paused, configuration: undefined });
+    harness.store.setSettings({ ...harness.store.settings(), tokenBudget: null, timeLimitMinutes: 60 });
     await harness.runtime!.reconcile();
     expect(harness.store.list('runs')).toHaveLength(1);
     await harness.runtime!.control(before.id, 'resume');
@@ -346,6 +405,8 @@ test('pause retains the claim and resume uses the same durable session and immut
     expect(resumed.snapshot).toBe(before.snapshot);
     expect(resumed.sessionId).toBe(before.sessionId);
     expect(resumed.sessionFile).toBe(before.sessionFile);
+    expect(resumed.progress?.tokenBudget).toBe(before.progress?.tokenBudget);
+    expect(resumed.progress?.deadline).toBe(before.progress?.deadline);
     expect(resumed.pid).not.toBe(before.pid);
     expect(await readFile(resumed.sessionFile!, 'utf8')).toBe(session);
     const log = await events(repo);
@@ -391,7 +452,10 @@ test('blocked result stops an unsettled goal without completing it or rerunning;
       return value?.status === 'blocked' && value.pid === null ? value : undefined;
     });
     expect(blocked.blocker).toContain('Operator supplies prerequisite');
+    expect(blocked.blockerDetails?.suggestedPrompt).toContain('Recheck this prerequisite');
     expect(blocked.progress?.phase).toBe('Owned child work stopped');
+    expect(blocked.progress?.compaction?.enabled).toBe(true);
+    expect(blocked.progress?.context?.window).toBe(1000);
     const log = await events(repo);
     expect(log.some(event => event.command === 'goal' && event.op === 'pause')).toBe(true);
     expect(log.some(event => event.op === 'complete')).toBe(false);
@@ -400,13 +464,15 @@ test('blocked result stops an unsettled goal without completing it or rerunning;
 
     // Simulate an operator-authorized next attempt; API feedback validation has separate coverage.
     const message = 'Check the alternate user entry point.';
-    harness.store.save('runs', { ...blocked, reviewFeedback: { message, recorded: Date.now() } });
+    harness.store.save('runs', { ...blocked, reviewFeedback: { message, recorded: Date.now() }, recoveryNote: { id: 'reviewed-note', revision: blocked.revision, instructions: 'Probe the missing fixture before repair.', recorded: Date.now(), reviewed: Date.now() } });
     await writeFile(join(repo.path, 'fixture.json'), JSON.stringify({ scenario: 'hold', expectedFeedback: message }));
     const selected = harness.store.get('tickets', `${repo.id}/T001`)!;
     harness.store.save('tickets', { ...selected, status: 'ready' });
     harness.runtime!.wake();
     const next = await running(harness);
     expect(next.id).not.toBe(blocked.id);
+    expect(next.recoveryContext?.sourceRunId).toBe(blocked.id);
+    expect(next.recoveryContext?.note.instructions).toContain('Probe the missing fixture');
     const completed = await finish(harness, next);
     expect(completed.verification).toHaveLength(1);
     const artifact = completed.verification![0]!.artifact!;

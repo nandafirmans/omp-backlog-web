@@ -9,13 +9,15 @@ import { object, RpcProcess } from './rpc';
 import type { Frame } from './rpc';
 import { assertVerifiedCriteria, recordEvidence } from './evidence';
 import { redactTranscript, RunConversation, settleConversation, transcriptValue } from './transcript';
+import { blockerDetails, recoveryContext, recoveryObjective } from './recovery';
+import { resolveRunConfiguration, sampleRunState } from './execution';
 
 const CLAIMED: Status[] = ['running', 'stopping', 'paused'];
 const QUIET_MS = 1_000;
 const TRANSCRIPT_LIMIT = 192_000;
 interface Identity { pid: number; start: string; boot: string }
 interface ProcessInfo { pid: number; group: number; start: string; state: string }
-interface Result { status: 'complete' | 'blocked'; evidence: string[]; blocker: string | null }
+interface Result { status: 'complete' | 'blocked'; evidence: string[]; blocker: string | null; details?: Run['blockerDetails'] }
 interface Execution {
   run: Run;
   repo: Repo;
@@ -142,13 +144,15 @@ export function parseResult(value: unknown, ticket: Ticket): Result {
   }
   if (result.status === 'complete' && ticket.criteria.some((criterion) => !evidence.has(criterion))) throw new Error('Completion requires evidence for every acceptance criterion');
   let blocker: string | null = null;
+  let details: Run['blockerDetails'];
   if (result.status === 'blocked') {
     if (typeof result.prerequisite !== 'string' || !result.prerequisite.trim() || typeof result.unblock !== 'string' || !result.unblock.trim()) {
       throw new Error('Blocked results require the exact unavailable prerequisite and required unblock action');
     }
-    blocker = `Prerequisite: ${result.prerequisite.trim()}\nUnblock: ${result.unblock.trim()}`;
+    details = blockerDetails(result);
+    blocker = `Prerequisite: ${details.prerequisite}\nUnblock: ${details.unblock}`;
   }
-  return { status: result.status, evidence: ticket.criteria.filter((criterion) => evidence.has(criterion)).map((criterion) => `${criterion}\nEvidence: ${evidence.get(criterion)}`), blocker };
+  return { status: result.status, evidence: ticket.criteria.filter((criterion) => evidence.has(criterion)).map((criterion) => `${criterion}\nEvidence: ${evidence.get(criterion)}`), blocker, ...(details ? { details } : {}) };
 }
 
 export async function createRuntime(store: Store): Promise<Runtime> {
@@ -285,6 +289,12 @@ export async function createRuntime(store: Store): Promise<Runtime> {
 
   function onFrame(execution: Execution, frame: Frame) {
     if (execution.conversation.frame(frame)) persist(execution);
+    if ((frame.type === 'auto_compaction_start' || frame.type === 'auto_compaction_end') && execution.run.progress) {
+      const starting = frame.type === 'auto_compaction_start';
+      const lastEvent = starting ? 'Native OMP compaction started' : frame.aborted === true ? 'Native OMP compaction aborted' : frame.errorMessage ? `Native OMP compaction failed: ${redact(String(frame.errorMessage)).slice(0, 1000)}` : frame.skipped === true ? 'Native OMP compaction skipped' : 'Native OMP compaction ended';
+      execution.run.progress.compaction = { ...execution.run.progress.compaction, active: starting, sampled: Date.now(), lastEvent };
+      persist(execution);
+    }
     if (frame.type === 'prompt_result' && frame.status === 'error') fail(execution, String(object(frame.error).message ?? 'Provider turn failed'));
     if (frame.type === 'rpc_frame_error' || (frame.type === 'notice' && frame.level === 'error')) fail(execution, String(frame.message ?? frame.error ?? 'OMP transport or persistence error'));
     if (frame.type === 'message_end') {
@@ -338,6 +348,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             execution.result = result;
             execution.run.evidence = result.evidence;
             execution.run.blocker = result.blocker;
+            execution.run.blockerDetails = result.details;
             response = result.status === 'blocked' ? 'Blocker recorded. Host will pause and stop goal continuation; do not complete an unmet goal.' : 'Result recorded for human review, not marked Done. Complete your achieved goal and settle; do not start another ticket.';
           } else throw new Error('Unknown host tool');
           execution.conversation.hostResult(frame, response);
@@ -370,7 +381,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       if (!run.conversation) execution.conversation.add('system', `Earlier activity was recorded only as a legacy transcript; no structured details were recovered.\n\n${run.transcript}`);
       execution.conversation.add('user', 'Resume this same ticket and session. Previously canceled questions remain unanswered.');
     }
-    const settings = store.settings();
+    const savedLimits = resume && run.progress ? { tokenBudget: run.progress.tokenBudget, timeLimitMinutes: (run.progress.deadline - run.started) / 60_000 } : {};
+    const settings = { ...store.settings(), ...savedLimits, ...(run.configuration ?? {}) };
     run.progress = { phase: resume ? 'Resuming same session' : 'Starting selected ticket', latestAction: 'Host launching OMP', tokenBudget: settings.tokenBudget, deadline: run.started + settings.timeLimitMinutes * 60_000, ...(run.progress?.tokens ? { tokens: run.progress.tokens } : {}) };
     const remaining = settings.timeLimitMinutes * 60_000 - (Date.now() - run.started);
     execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Execution time budget exhausted; explicit review required'); }, Math.max(1, remaining));
@@ -435,6 +447,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             revision: { type: 'string' }, status: { type: 'string', enum: ['complete', 'blocked'] },
             evidence: { type: 'array', items: { type: 'object', properties: { criterion: { type: 'string' }, evidence: { type: 'string' } }, required: ['criterion', 'evidence'], additionalProperties: false } },
             prerequisite: { type: 'string' }, unblock: { type: 'string' },
+            attempted: { type: 'string', description: 'Sanitized repair attempts and outcomes; include uncertain side effects not to replay. Max 2000 characters.' },
+            permission: { type: 'string', description: 'Required permission or operator-only prerequisite; recommendation is not authorization. Max 2000 characters.' },
+            verification: { type: 'string', description: 'Original checks to perform after recovery. Max 2000 characters.' },
+            recoveryPrompt: { type: 'string', description: 'Suggested recovery instructions for operator review, never permission to bypass policy. No secrets. Max 8000 characters.' },
           }, required: ['revision', 'status', 'evidence'], additionalProperties: false,
         },
       }, {
@@ -448,6 +464,12 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         }, required: ['revision', 'criterion', 'feature', 'entryPoint', 'method', 'outcome', 'details', 'recipe'], additionalProperties: false },
       }] });
       await rpc.command('set_auto_retry', { enabled: false });
+      // OMP owns threshold detection/compaction. This override is session-scoped, not global config.
+      await rpc.command('set_auto_compaction', { enabled: true });
+      const maintenanceState = await rpc.command('get_state');
+      if (maintenanceState.autoCompactionEnabled !== true) throw new Error('OMP did not enable native automatic compaction; refusing execution');
+      sampleRunState(run, maintenanceState);
+      persist(execution);
       if (execution.stopping) { execution.setup = false; execution.initializedResolve(); return; }
       await rpc.command('set_cache_warming', { mode: 'off' });
       const objective = [
@@ -460,8 +482,9 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         'Inspect applicable project verification skills under .omp/skills, .agent/skills or .agents/skills and their feature maps. Read relevant mapped journeys; drive each affected entry point independently. Do not require a whole-map maintenance pass for every ticket. Missing required setup or tools stay blocked/unverified; do not install dependencies or weaken repository check policy.',
         'Before completion, call backlog_evidence for each criterion and affected journey: exact criterion, feature, entryPoint, method/command, outcome, details including observed exit status/side effects, and recipe path+hash (or explicit missing-recipe reason). Submit failures/not-run honestly. Recheck the same journey/method after fixes. Optional sanitized png/jpg/txt/json artifacts are base64 bytes, not filesystem paths; never include credentials, cookies, sessions or secrets. All current reported checks must pass for completion; host storage does not attest their truth.',
         ...store.list('runs').filter(previous => previous.id !== run.id && previous.repoId === repo.id && previous.ticketId === ticket.id && previous.reviewFeedback).sort((a, b) => b.started - a.started).slice(0, 5).map(previous => `Human change request on run ${previous.id}, revision ${previous.revision}${previous.revision !== run.revision ? ' (older requirements; reconcile against current ticket)' : ''}:\n${previous.reviewFeedback!.message}`),
+        ...recoveryObjective(run),
         'On completion call backlog_result with the exact revision, status:"complete", and one {criterion,evidence} per exact criterion below. Evidence must state observed verification, commands/results and relevant files; never claim unperformed checks passed. Visual/subjective criteria remain for human review.',
-        'If blocked call backlog_result with status:"blocked", partial observed evidence, prerequisite and unblock. Host pauses goal continuation and stops owned child work. Do NOT complete an unmet goal. A successful command, agent yield or exit alone is NOT completion.',
+        'If blocked call backlog_result with status:"blocked", partial observed evidence, prerequisite and unblock (each at most 2000 characters). Include attempted fixes/outcomes, permission needed, verification to recheck (attempted/permission/verification: each at most 2000 characters) and a suggested recoveryPrompt (at most 8000 characters). Never include secrets. Suggestions are not authorization. Host pauses goal continuation and stops owned child work. Do NOT complete an unmet goal. A successful command, agent yield or exit alone is NOT completion.',
         `Revision: ${run.revision}\nAcceptance criteria:\n${ticket.criteria.map((criterion) => `- ${criterion}`).join('\n')}`,
         `\nSelected ticket snapshot:\n${ticket.markdown}`,
       ].join('\n\n');
@@ -490,7 +513,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         if (execution.stopping) { execution.setup = false; execution.initializedResolve(); return; }
         if (execution.failed) throw new Error(execution.failed);
         await rpc.command('prompt', { message: objective, ...(images.length ? { images } : {}) });
-        if (!execution.failed && !execution.stopping) await rpc.command('goal', { op: 'create', objective, token_budget: settings.tokenBudget });
+        if (!execution.failed && !execution.stopping) await rpc.command('goal', { op: 'create', objective, ...(settings.tokenBudget === null ? {} : { token_budget: settings.tokenBudget }) });
       }
       execution.setup = false;
       execution.initializedResolve();
@@ -507,9 +530,11 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             execution.run.progress.tokens = { total, sampled: Date.now(), basis: 'OMP get_session_stats session total (includes input/output/cache; not goal-only or a spending limit)' };
             persist(execution);
           }
-          if (total >= settings.tokenBudget) { await stop(execution, 'failed', 'Execution token budget exhausted; explicit review required'); return; }
+          if (settings.tokenBudget !== null && total >= settings.tokenBudget) { await stop(execution, 'failed', 'Execution token budget exhausted; explicit review required'); return; }
           const current = await rpc.command('get_state');
           if (current.sessionId !== run.sessionId) throw new Error('OMP changed session identity during execution');
+          sampleRunState(run, current);
+          persist(execution);
           if (current.isSettled === true) await settled(execution);
         })().catch((error: unknown) => fail(execution, message(error))).finally(() => { execution.polling = false; });
       }, 3_000);
@@ -616,6 +641,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           const fresh = store.get('tickets', key(candidate));
           if (!fresh || !freshRepo || store.settings().paused || !eligible(store, freshRepo, fresh) || fresh.revision !== candidate.revision || store.list('runs').some((run) => CLAIMED.includes(run.status))) return null;
           const run: Run = { id: crypto.randomUUID(), repoId: repo.id, ticketId: fresh.id, revision: fresh.revision, status: 'running', started: Date.now(), finished: null, pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
+          run.recoveryContext = recoveryContext(store, fresh);
+          run.configuration = resolveRunConfiguration(store.settings(), fresh);
           store.save('runs', run);
           store.save('tickets', { ...fresh, status: 'running', runId: run.id });
           store.save('repos', { ...freshRepo, lastStarted: run.started });

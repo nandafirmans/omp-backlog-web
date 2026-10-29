@@ -20,6 +20,8 @@ test('settings preserve legacy defaults and other values while validating thinki
   try {
     const before = store.settings();
     expect(before.thinking).toBeUndefined();
+    expect((await call('settings', 'PATCH', { tokenBudget: null }, false)).status).toBe(401);
+    expect((await call('settings', 'PATCH', { tokenBudget: null }, true, false)).status).toBe(403);
     expect((await call('settings/models', 'POST', { executable: 'unused', model: '' }, false)).status).toBe(401);
     expect((await call('settings/models', 'POST', { executable: 'unused', model: '' }, true, false)).status).toBe(403);
     for (const value of [
@@ -39,6 +41,16 @@ test('settings preserve legacy defaults and other values while validating thinki
     expect((await call('settings', 'PATCH', { model: 'provider/id/with/slashes' })).status).toBe(200);
     expect(store.settings().model).toBe('provider/id/with/slashes');
     expect((await call('settings', 'PATCH', { model: 'model-alias' })).status).toBe(400);
+    for (const tokenBudget of [0, -1, 10000001, 1.5, 'unlimited', false]) expect((await call('settings', 'PATCH', { tokenBudget })).status).toBe(400);
+    const finite = store.settings();
+    expect((await call('settings', 'PATCH', { tokenBudget: null })).status).toBe(200);
+    expect(store.settings()).toEqual({ ...finite, tokenBudget: null });
+    const reloaded = createStore(store.dataDir);
+    try { expect(reloaded.settings().tokenBudget).toBeNull(); } finally { closeStore(reloaded); }
+    expect((await call('settings', 'PATCH', { timeLimitMinutes: null })).status).toBe(400);
+    expect(store.settings().timeLimitMinutes).toBe(finite.timeLimitMinutes);
+    expect((await call('settings', 'PATCH', { tokenBudget: finite.tokenBudget })).status).toBe(200);
+    expect(store.settings()).toEqual(finite);
     expect(store.list('runs')).toEqual([]);
     expect(store.list('tickets')).toEqual([]);
   } finally { closeStore(store); await rm(root, { recursive: true, force: true }); }

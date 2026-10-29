@@ -13,6 +13,8 @@ import { inspectWorkspaceHandoff } from './runtime';
 import { discoverExecutionModels, handleDraftRequest } from './drafting';
 import { handleAssistedCreation } from './assisted-creation';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
+import { reviewRecovery, saveRecoveryNote } from './recovery';
+import { parseExecutionOverrides } from './execution';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
 interface Owner { username: string; hash: string }
@@ -166,7 +168,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           if (thinking && !THINKING_LEVELS.some(level => level === thinking)) throw new HttpError(400, 'Invalid thinking level');
           settings.thinking = thinking;
         }
-        for (const key of ['timeLimitMinutes', 'tokenBudget'] as const) { if (input[key] !== undefined) { const value = input[key]; const max = key === 'timeLimitMinutes' ? 1440 : 10000000; if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) throw new HttpError(400, `Invalid ${key}`); settings[key] = value; } }
+        for (const key of ['timeLimitMinutes', 'tokenBudget'] as const) { if (input[key] !== undefined) { const value = input[key]; if (key === 'tokenBudget' && value === null) { settings.tokenBudget = null; continue; } const max = key === 'timeLimitMinutes' ? 1440 : 10000000; if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) throw new HttpError(400, `Invalid ${key}`); settings[key] = value; } }
         if (input.paused !== undefined) { if (typeof input.paused !== 'boolean') throw new HttpError(400, 'paused must be boolean'); settings.paused = input.paused; }
         if (input.roots !== undefined) {
           if (!Array.isArray(input.roots) || !input.roots.length || input.roots.length > 20) throw new HttpError(400, 'Provide 1–20 permitted roots');
@@ -243,15 +245,35 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           }
         }
       }
+      if (segments[1] === 'tickets' && segments.length === 5 && segments[4] === 'execution' && request.method === 'PATCH') {
+        const input = await body(request); await reconcileTickets(store, true);
+        const ticket = store.get('tickets', `${segments[2]}/${segments[3]}`);
+        if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
+        if (input.revision !== ticket.revision || input.version !== (ticket.executionVersion ?? null)) throw new HttpError(409, 'Ticket or execution settings changed; reload and review');
+        if (['running', 'stopping', 'paused'].includes(ticket.status) || store.list('runs').some(run => run.repoId === ticket.repoId && run.ticketId === ticket.id && ['running', 'stopping', 'paused'].includes(run.status))) throw new HttpError(409, 'Finish owned work before changing settings for the next attempt');
+        const execution = parseExecutionOverrides(input.execution);
+        const updated = { ...ticket, execution, executionVersion: randomUUID() };
+        store.save('tickets', updated); return json(updated);
+      }
       if (segments[1] === 'tickets' && segments.length === 5 && segments[4] === 'action' && request.method === 'POST') {
         const input = await body(request); await reconcileTickets(store, true);
         const ticket = store.get('tickets', `${segments[2]}/${segments[3]}`);
         if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
         if (input.revision !== ticket.revision) throw new HttpError(409, 'Requirements changed; review the current revision first');
         const action = string(input.action, 'action', 20);
-        if (action === 'reorder') { if (typeof input.order !== 'number' || !Number.isFinite(input.order)) throw new HttpError(400, 'Invalid order'); ticket.order = input.order; }
-        else if (action === 'approve') { if (ticket.error) throw new HttpError(400, ticket.error); if (['running', 'stopping', 'paused', 'needs_review', 'done', 'interrupted', 'failed', 'blocked'].includes(ticket.status)) throw new HttpError(409, 'Use the appropriate review, retry, or run control action'); ticket.approvedRevision = ticket.revision; ticket.status = 'ready'; }
-        else if (action === 'retry') { if (!['failed', 'blocked', 'interrupted', 'draft'].includes(ticket.status)) throw new HttpError(409, 'This ticket cannot be retried'); if (ticket.error) throw new HttpError(400, ticket.error); ticket.approvedRevision = ticket.revision; ticket.status = 'ready'; }
+        if (['approve', 'retry', 'recover', 'changes'].includes(action) && (input.executionVersion ?? null) !== (ticket.executionVersion ?? null)) throw new HttpError(409, 'Ticket execution settings changed; review the model and budget before queuing work');
+        if ((action === 'reorder' || input.order !== undefined) && (typeof input.order !== 'number' || !Number.isFinite(input.order))) throw new HttpError(400, 'Invalid order');
+        if (['approve', 'retry'].includes(action) && ['blocked', 'draft'].includes(ticket.status) && ticket.runId && store.get('runs', ticket.runId)?.status === 'blocked') throw new HttpError(409, 'Review recovery instructions on the blocked ticket before retrying');
+        if (action === 'approve') { if (ticket.error) throw new HttpError(400, ticket.error); if (['running', 'stopping', 'paused', 'needs_review', 'done', 'interrupted', 'failed', 'blocked'].includes(ticket.status)) throw new HttpError(409, 'Use the appropriate review, retry, or run control action'); ticket.approvedRevision = ticket.revision; ticket.status = 'ready'; }
+        else if (action === 'recover') {
+          if (ticket.error) throw new HttpError(400, ticket.error);
+          const run = reviewRecovery(store, ticket, input);
+          ticket.approvedRevision = ticket.revision; ticket.status = 'ready';
+          if (typeof input.order === 'number') ticket.order = input.order;
+          store.transaction(() => { store.save('runs', run); store.save('tickets', ticket); });
+          runtime.wake(); return json(ticket);
+        }
+        else if (action === 'retry') { if (ticket.status === 'blocked') throw new HttpError(409, 'Review recovery instructions on the blocked ticket before retrying'); if (!['failed', 'interrupted', 'draft'].includes(ticket.status)) throw new HttpError(409, 'This ticket cannot be retried'); if (ticket.error) throw new HttpError(400, ticket.error); ticket.approvedRevision = ticket.revision; ticket.status = 'ready'; }
         else if (action === 'done' || action === 'changes') {
           const run = ticket.runId ? store.get('runs', ticket.runId) : undefined;
           if (ticket.status !== 'needs_review' || !run || run.revision !== ticket.revision) throw new HttpError(409, 'Only evidence for this revision may be reviewed');
@@ -263,7 +285,8 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             ticket.status = 'ready'; ticket.approvedRevision = ticket.revision;
           }
           store.save('runs', run);
-        } else throw new HttpError(400, 'Unknown ticket action');
+        } else if (action !== 'reorder') throw new HttpError(400, 'Unknown ticket action');
+        if (typeof input.order === 'number') ticket.order = input.order;
         store.save('tickets', ticket); runtime.wake(); return json(ticket);
       }
       if (segments[1] === 'runs' && segments[2]) {
@@ -272,6 +295,12 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
         if (segments.length === 5 && segments[3] === 'proof' && request.method === 'GET') return await proofDownload(store, run, segments[4]!);
         if (segments.length === 4 && request.method === 'POST') {
           const input = await body(request);
+          if (segments[3] === 'recovery') {
+            await reconcileTickets(store, true);
+            const ticket = store.get('tickets', `${run.repoId}/${run.ticketId}`);
+            if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
+            return json(saveRecoveryNote(store, ticket, run.id, input));
+          }
           if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }
           if (segments[3] === 'answer') { await runtime.answer(run.id, input); return json({ ok: true }); }
         }
