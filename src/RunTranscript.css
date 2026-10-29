@@ -2,8 +2,11 @@
 .run-transcript > .muted { margin-bottom: 12px; }
 .run-transcript-surface { border: 1px solid var(--line); background: var(--surface-elevated); min-width: 0; }
 .run-transcript-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 49px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface-inset); font: 13px/1.7 var(--font-mono); }
+.run-transcript-activity { display: inline-flex; align-items: center; gap: 10px; color: var(--accent); }
+.run-transcript-activity > span { display: inline-flex; align-items: center; }
 .run-transcript-viewport { min-height: 160px; max-height: min(65dvh, 640px); overflow: auto; overflow-anchor: none; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; scroll-behavior: auto; }
 .run-transcript-viewport:focus-visible { outline-offset: -3px; }
+.run-transcript-entries { min-width: 0; }
 .run-transcript-message { padding: 18px 20px; min-width: 0; overflow-wrap: anywhere; }
 .run-transcript-message + *, .run-transcript-tool + * { border-top: 1px solid var(--line); }
 .run-transcript-message > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; font: 13px/1.7 var(--font-mono); color: var(--muted); }
@@ -28,22 +31,48 @@
 .run-transcript-markdown li { margin-block: 4px; }
 .run-transcript-image { color: var(--muted); }
 .run-transcript-tool { min-width: 0; background: var(--surface-inset); }
-.run-transcript-tool > summary { padding: 12px 20px; overflow-wrap: anywhere; font: 13px/1.7 var(--font-mono); }
+.run-transcript-tool > summary { padding: 12px 16px; overflow-wrap: anywhere; font: 13px/1.7 var(--font-mono); cursor: pointer; }
 .run-transcript-tool > summary:focus-visible { outline-offset: -3px; }
 .run-transcript-tool-heading { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; max-width: 100%; vertical-align: middle; }
 .run-transcript-tool-heading strong { font-weight: 600; }
-.run-transcript-action { display: block; margin-top: 6px; white-space: pre-wrap; font: 14px/1.7 var(--font-sans); }
-.run-transcript-disclosure-hint { display: block; margin-top: 4px; color: var(--muted); }
-.run-transcript-tool-body { padding: 0 20px 16px; display: grid; gap: 16px; }
+.run-transcript-target { display: block; margin-top: 6px; color: var(--accent); white-space: pre-wrap; }
+.run-transcript-action { display: block; margin-top: 4px; white-space: pre-wrap; font: 13px/1.7 var(--font-sans); color: var(--muted); }
+.run-transcript-disclosure-hint { display: block; margin-top: 8px; color: var(--accent); font-size: 12px; }
+.run-transcript-collapse-label, .run-transcript-tool[open] > summary .run-transcript-expand-label, .run-transcript-tool[open] > summary .run-transcript-preview { display: none; }
+.run-transcript-tool[open] > summary .run-transcript-collapse-label { display: inline; }
+.run-transcript-preview { display: block; margin-top: 10px; }
+.run-transcript-content-label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.run-transcript-tool-body { padding: 0 16px 16px; display: grid; gap: 16px; min-width: 0; }
 .run-transcript-tool-body h4 { font: 13px/1.7 var(--font-mono); color: var(--muted); margin: 0 0 6px; }
-.run-transcript-tool-body pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; margin: 0; padding: 12px; font-size: 13px; background: var(--surface-elevated); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.run-transcript-error .run-transcript-tool-body > :last-child h4 { color: var(--danger); }
+.run-transcript-tool-body pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; margin: 0; padding: 12px; font-size: 13px; background: var(--surface-elevated); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.run-transcript pre.run-transcript-code { margin: 0; padding: 8px 0; border: 1px solid var(--line); background: var(--surface-elevated); font: 13px/1.75 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 480px; }
+.run-transcript-preview pre.run-transcript-code { overflow: hidden; pointer-events: none; }
+.run-transcript-code code, .run-transcript-code-rows { display: block; min-width: 0; }
+.run-transcript-code-line { display: flex; min-height: 23px; padding-right: 12px; }
+.run-transcript-line-number { flex: 0 0 6ch; margin-right: 12px; padding-left: 8px; text-align: right; color: var(--muted); user-select: none; }
+.run-transcript-source { flex: 1; min-width: 0; }
+.run-transcript-diff .diff-add { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.run-transcript-diff .diff-remove { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.run-transcript-diff .diff-meta { color: var(--muted); }
+.run-transcript-preview pre.run-transcript-code { max-height: 198px; }
+.run-transcript-retention { display: block; margin-top: 8px; color: var(--warning); font: 13px/1.7 var(--font-sans); }
+.run-transcript-record { min-width: 0; }
+.run-transcript-record > summary { color: var(--muted); font: 12px/1.8 var(--font-mono); cursor: pointer; }
+.run-transcript-record h4 { margin-top: 12px; }
+.run-transcript-streaming { color: var(--accent); font-size: 12px; }
+.run-transcript-message-agent[data-state="running"] .run-transcript-markdown::after { content: ''; display: inline-block; width: 7px; height: 14px; margin-top: 8px; background: var(--accent); }
+.run-transcript-error .run-transcript-tool-body > :first-child h4 { color: var(--danger); }
 .run-transcript-empty { padding: 24px 20px; margin: 0; color: var(--muted); font-size: 14px; }
 .run-transcript-legacy { margin: 0; border: 0; background: transparent; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
 .run-transcript-legacy-note { color: var(--muted); font-size: 13px; }
-.run-transcript-raw { margin-top: 12px; font-size: 13px; min-width: 0; }
-.run-transcript-raw > summary { width: fit-content; font-family: var(--font-mono); }
-.run-transcript-raw .transcript { font-size: 13px; }
+.transcript-syntax-keyword, .transcript-syntax-name { color: var(--accent); }
+.transcript-syntax-keyword, .transcript-syntax-heading { font-weight: 600; }
+.transcript-syntax-string { color: var(--warning); }
+.transcript-syntax-number { color: color-mix(in srgb, var(--warning) 65%, var(--accent)); }
+.transcript-syntax-comment { color: var(--muted); font-style: italic; }
+.transcript-syntax-heading, .transcript-syntax-link { color: var(--accent); }
+.run-transcript-diff .diff-add .run-transcript-line-number, .run-transcript-diff .diff-add .run-transcript-diff-sign { color: var(--accent); }
+.run-transcript-diff .diff-remove .run-transcript-line-number, .run-transcript-diff .diff-remove .run-transcript-diff-sign { color: var(--danger); }
 @media (max-width: 600px) {
   .run-transcript-message { padding: 16px 12px; }
   .run-transcript-tool > summary { padding: 12px; }

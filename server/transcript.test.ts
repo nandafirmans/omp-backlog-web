@@ -24,6 +24,103 @@ test('consumer correlates tool snapshots, stream previews and final errors witho
   expect(JSON.stringify(value)).not.toContain('quoted secret');
 });
 
+test('actual edit diff survives oversized result content instead of falling back to proposed PUT instructions', () => {
+  const value = run();
+  const conversation = new RunConversation(value);
+  const call = { toolCallId: 'large-edit', toolName: 'edit', args: { path: 'src/main.js', patch: 'PUT 116.=116:\n+  type: "number",' } };
+  const diff = ' 115|const field = {\n-116|  type: "text",\n+116|  type: "number",\n 117|};';
+  conversation.frame({ type: 'tool_execution_start', ...call });
+  expect(value.conversation?.[0]?.diff).toBeUndefined();
+  conversation.frame({ type: 'tool_execution_end', ...call, result: {
+    content: [{ type: 'text', text: 'File snapshot\n'.repeat(1_200) }],
+    details: { path: 'src/main.js', diff },
+  } });
+  const persisted = JSON.parse(JSON.stringify(value)) as Run;
+  expect(persisted.conversation?.[0]?.diff).toBe(diff);
+  expect(persisted.conversation?.[0]?.output?.length).toBeLessThanOrEqual(10_000);
+  expect(persisted.conversation?.[0]?.output).toContain('Truncated');
+  expect(persisted.conversation?.[0]?.output).not.toContain('type: "number"');
+  expect(persisted.conversation?.[0]?.state).toBe('complete');
+});
+
+test('retains filenames when combining actual per-file edit results and stream previews', () => {
+  const value = run();
+  const conversation = new RunConversation(value);
+  const call = { toolCallId: 'multi-edit', toolName: 'edit' };
+  const files = [
+    { path: 'src/first.ts', diff: '-12|const first = false;\n+12|const first = true;' },
+    { path: 'src/second.ts', diff: '-42|const second = false;\n+42|const second = true;' },
+  ];
+  conversation.frame({ type: 'tool_stream_update', ...call, update: { files } });
+  const preview = value.conversation?.[0]?.diff;
+  expect(preview).toBe('--- src/first.ts\n+++ src/first.ts\n' + files[0]!.diff + '\n--- src/second.ts\n+++ src/second.ts\n' + files[1]!.diff);
+  expect(value.conversation?.[0]?.state).toBe('running');
+  conversation.frame({ type: 'tool_execution_end', ...call, result: { details: { perFileResults: files } } });
+  expect(value.conversation?.[0]?.diff).toBe(preview);
+  expect(value.conversation?.[0]?.state).toBe('complete');
+  expect(value.conversation).toHaveLength(1);
+});
+
+test('cumulative diff snapshots replace previews and final results clear diffs they do not report', () => {
+  for (const isError of [false, true]) {
+    const value = run();
+    const conversation = new RunConversation(value);
+    const call = { toolCallId: 'cumulative-edit', toolName: 'edit', args: { diff: '+1|proposed only' } };
+    conversation.frame({ type: 'tool_execution_start', ...call });
+    expect(value.conversation?.[0]?.diff).toBeUndefined();
+    conversation.frame({ type: 'tool_execution_update', ...call, partialResult: { details: { diff: '+1|first preview' } } });
+    conversation.frame({ type: 'tool_execution_update', ...call, partialResult: { details: { diff: '+1|replacement preview' } } });
+    expect(value.conversation?.[0]?.diff).toBe('+1|replacement preview');
+    conversation.frame({ type: 'tool_execution_end', ...call, isError, result: { content: [{ type: 'text', text: isError ? 'Edit failed' : 'No changes' }] } });
+    expect(value.conversation?.[0]?.diff).toBeUndefined();
+    expect(value.conversation?.[0]?.state).toBe(isError ? 'error' : 'complete');
+    expect(value.conversation).toHaveLength(1);
+  }
+});
+
+test('final errors retain only partial diffs actually reported by the final result', () => {
+  const value = run();
+  const conversation = new RunConversation(value);
+  const call = { toolCallId: 'partial-edit', toolName: 'edit' };
+  conversation.frame({ type: 'tool_stream_update', ...call, update: { files: [{ path: 'src/main.ts', diff: '+1|preview' }] } });
+  conversation.frame({ type: 'tool_execution_end', ...call, isError: true, result: { diff: '+1|applied before failure', error: 'Second file failed' } });
+  expect(value.conversation?.[0]?.diff).toBe('+1|applied before failure');
+  expect(value.conversation?.[0]?.state).toBe('error');
+});
+
+test('diff extraction excludes proposed and unrelated nested metadata and clears absent final results', () => {
+  const value = run();
+  const conversation = new RunConversation(value);
+  const call = { toolCallId: 'unrelated-edit', toolName: 'edit', args: { diff: '+1|proposed only' } };
+  conversation.frame({ type: 'tool_execution_end', ...call, result: { metadata: { diff: '+1|unrelated' }, details: { args: { diff: '+1|proposed only' } } } });
+  expect(value.conversation?.[0]?.diff).toBeUndefined();
+  conversation.frame({ type: 'tool_stream_update', ...call, update: { files: [{ path: 'src/main.ts', diff: '+1|preview' }] } });
+  conversation.frame({ type: 'tool_execution_end', ...call });
+  expect(value.conversation?.[0]?.diff).toBeUndefined();
+  expect(value.conversation?.[0]?.state).toBe('complete');
+});
+
+test('independently retained diffs redact credentials and obey field and total retention limits', () => {
+  const value = run();
+  const conversation = new RunConversation(value);
+  const secret = ['synthetic', 'diff', 'credential'].join('-');
+  const diff = `-1|const password = "${secret}";\n+1|const password = "replacement";\n${' 2|const visible = true;\n'.repeat(1_000)}`;
+  for (let index = 0; index < 30; index++) {
+    conversation.frame({ type: 'tool_execution_end', toolCallId: `bounded-edit-${index}`, toolName: 'edit',
+      result: { content: [{ type: 'text', text: 'File snapshot\n'.repeat(1_200) }], details: { perFileResults: [{ path: `src/main.ts?token=${secret}`, diff }] } } });
+  }
+  const persisted = JSON.stringify(value.conversation);
+  expect(persisted.includes(secret)).toBe(false);
+  expect(persisted.length).toBeLessThanOrEqual(192_000);
+  expect(value.conversation!.length).toBeLessThanOrEqual(256);
+  expect(value.conversation?.[0]?.text).toContain('retention limit');
+  const latest = value.conversation?.at(-1);
+  expect(latest?.id.endsWith(':tool:bounded-edit-29')).toBe(true);
+  expect(latest?.diff?.length).toBeLessThanOrEqual(10_000);
+  expect(latest?.diff).toContain('[redacted]');
+  expect(latest?.diff).toContain('Truncated');
+});
+
 test('assembled assistant deltas redact split credentials, replace with final text, and exclude private reasoning', () => {
   const value = run();
   const conversation = new RunConversation(value);

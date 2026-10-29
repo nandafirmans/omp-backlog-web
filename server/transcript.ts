@@ -59,6 +59,27 @@ export function transcriptValue(value: unknown): string {
   return bounded(typeof safe === 'string' ? safe : JSON.stringify(safe, null, 2) ?? '');
 }
 
+/** Retain actual result diffs separately, before large content can truncate them. */
+function resultDiff(value: unknown): string | undefined {
+  const result = object(value);
+  const details = object(result.details);
+  const files = Array.isArray(details.perFileResults) ? details.perFileResults : result.files;
+  if (Array.isArray(files)) {
+    let combined = '';
+    for (const item of files) {
+      const file = object(item);
+      if (typeof file.diff !== 'string' || !file.diff.trim()) continue;
+      const header = typeof file.path === 'string' ? `--- ${file.path}\n+++ ${file.path}\n` : '';
+      const diff = bounded(redactTranscript(header + file.diff));
+      combined += (combined ? '\n' : '') + diff;
+      if (combined.length > FIELD_LIMIT) return bounded(combined);
+    }
+    if (combined) return combined;
+  }
+  const diff = typeof details.diff === 'string' && details.diff.trim() ? details.diff : result.diff;
+  return typeof diff === 'string' && diff.trim() ? bounded(redactTranscript(diff)) : undefined;
+}
+
 function visibleText(value: unknown) {
   if (!Array.isArray(value)) return '';
   return value.flatMap(part => { const item = object(part); return item.type === 'text' && typeof item.text === 'string' ? [item.text] : []; }).join('\n');
@@ -74,7 +95,7 @@ export class RunConversation {
   private save(entry: TranscriptEntry) {
     const entries = this.run.conversation ??= [];
     const index = entries.findIndex(item => item.id === entry.id);
-    for (const field of ['text', 'input', 'output'] as const) if (typeof entry[field] === 'string') entry[field] = bounded(entry[field]);
+    for (const field of ['text', 'input', 'output', 'diff'] as const) if (typeof entry[field] === 'string') entry[field] = bounded(entry[field]);
     if (index < 0) entries.push(entry); else entries[index] = entry;
     let size = entries.reduce((sum, item) => sum + JSON.stringify(item).length + 1, 2);
     let removed = false;
@@ -106,9 +127,10 @@ export class RunConversation {
     const previous = this.run.conversation?.find(entry => entry.id === id);
     const args = object(frame.args ?? frame.arguments);
     const action = frame.intent ?? args.i ?? args.command ?? args.path ?? previous?.text ?? '';
+    const diff = resultDiff(result);
     this.save({ ...previous, id, kind: 'tool', text: transcriptValue(action), toolName: transcriptValue(frame.toolName ?? previous?.toolName ?? 'unknown').slice(0, 200),
       ...(frame.args !== undefined || frame.arguments !== undefined ? { input: transcriptValue(frame.args ?? frame.arguments) } : {}),
-      ...(result !== undefined ? { output: transcriptValue(result) } : {}), state });
+      ...(result !== undefined || state !== 'running' ? { diff, output: result === undefined ? undefined : transcriptValue(result) } : {}), state });
     return true;
   }
 
