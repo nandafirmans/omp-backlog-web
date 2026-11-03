@@ -29,7 +29,9 @@ test('context telemetry is separate from cumulative consumption and excludes raw
   expect(run.progress!.context?.tokens).toBe(80); expect(run.progress!.context?.window).toBe(100);
   expect(run.progress!.compaction?.active).toBe(true); expect(run.progress!.model).toBe('provider/model');
   expect(JSON.stringify(run)).not.toContain('Never persist');
+  run.progress!.compaction!.lastCompletedAt = 123;
   sampleRunState(run, { contextUsage: { tokens: 20, contextWindow: 100 }, autoCompactionEnabled: true, isCompacting: false });
+  expect(run.progress!.compaction?.lastCompletedAt).toBe(123);
   expect(run.progress!.context?.tokens).toBe(20); expect(run.progress!.tokens!.total).toBe(950);
   sampleRunState(run, { contextUsage: { tokens: NaN, contextWindow: 0 } });
   expect(run.progress!.context).toBeUndefined();

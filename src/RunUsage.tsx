@@ -22,12 +22,16 @@ export default function RunUsage({ run }: { run: Run }) {
       </div>
       <div><h4>Current context window · estimate</h4><p className="token-reading">{context ? `${number(context.tokens)} / ${number(context.window)} tokens · ${contextPercent!.toFixed(1)}%` : 'Current context not reported'}</p>
         {contextPercent !== undefined && <Progress percent={Math.min(100, contextPercent)} showInfo={false} status="normal" strokeColor="var(--accent)" aria-label={`Context window ${contextPercent.toFixed(1)} percent used`} />}
+        <div className="run-compaction" aria-label="Native compaction status">
+          <p role="status">{compaction?.active && ['running', 'stopping'].includes(run.status) ? <><Spin size="small" /> Compacting context…</> : `Automatic compaction: ${compaction?.enabled === true ? 'enabled · native OMP' : compaction?.enabled === false ? 'disabled' : 'not reported for this run'}`}</p>
+          <p className="muted">Threshold managed by OMP · not reported through RPC. Background summary activity is not reported.</p>
+          <p className="muted">Last successful compaction reported: {compaction?.lastCompletedAt ? new Date(compaction.lastCompletedAt).toLocaleString() : 'not recorded for this run'}. {compaction?.lastCompletedAt && 'Time observed by dashboard, not an OMP execution timestamp.'}</p>
+          {compaction?.lastEvent && <p className="muted">{compaction.lastEvent}</p>}
+        </div>
         <p className="muted">Context sent to the model, separate from cumulative consumption. Native OMP compacts at its configured threshold—not at the run budget.</p>
         {context && <small>{active ? 'Context sampled' : 'Last context snapshot'}: {new Date(context.sampled).toLocaleString()}. Provider usage and local estimation may differ.</small>}
       </div>
     </div>
-    <p role="status">{compaction?.active && ['running', 'stopping'].includes(run.status) ? <><Spin size="small" /> Compacting context…</> : `Automatic compaction: ${compaction?.enabled === true ? 'enabled · native OMP' : compaction?.enabled === false ? 'disabled' : 'not reported for this run'}`}</p>
-    {compaction?.lastEvent && <p className="muted">{compaction.lastEvent}</p>}
     {run.status === 'failed' && <p className="warning-text">A failed run is stopped, not resumed by changing models. <Link to={`/projects/${encodeURIComponent(run.repoId)}/tickets/${encodeURIComponent(run.ticketId)}`}>Configure model/budget for this ticket’s next attempt</Link>, reconcile partial work, then explicitly review &amp; retry.</p>}
   </section>;
 }

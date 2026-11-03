@@ -17,7 +17,7 @@ const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
 }
-const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript'; tokens?: number; expectedFeedback?: string };
+const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript' | 'compaction'; tokens?: number; expectedFeedback?: string };
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
@@ -76,6 +76,18 @@ for await (const line of createInterface({ input: process.stdin })) {
     respond();
     if (frame.op === 'create' || frame.op === 'resume') {
       await log({ event: 'executing' });
+      if (configuration.scenario === 'compaction') {
+        if (!args.includes('--resume')) {
+          send({ type: 'auto_compaction_start', reason: 'threshold', action: 'context-full' });
+          send({ type: 'auto_compaction_end', action: 'context-full', aborted: false, willRetry: false, result: { summary: 'Synthetic summary, never persist its contents', tokensBefore: 800, firstKeptEntryId: 'fixture-entry' } });
+        } else {
+          // None of these outcomes establishes a new successful compaction.
+          for (const outcome of [{ aborted: true }, { errorMessage: 'Synthetic compaction failure' }, { skipped: true }, { willRetry: true }, { result: undefined }]) {
+            send({ type: 'auto_compaction_start', reason: 'threshold', action: 'context-full' });
+            send({ type: 'auto_compaction_end', action: 'context-full', aborted: false, willRetry: false, result: {}, ...outcome });
+          }
+        }
+      }
       if (configuration.scenario === 'transcript') {
         // Matches installed OMP AgentEvent/RPC projection: updates carry cumulative
         // partialResult snapshots; start/update use args, and end uses result/isError.

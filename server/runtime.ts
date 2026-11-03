@@ -292,7 +292,9 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     if ((frame.type === 'auto_compaction_start' || frame.type === 'auto_compaction_end') && execution.run.progress) {
       const starting = frame.type === 'auto_compaction_start';
       const lastEvent = starting ? 'Native OMP compaction started' : frame.aborted === true ? 'Native OMP compaction aborted' : frame.errorMessage ? `Native OMP compaction failed: ${redact(String(frame.errorMessage)).slice(0, 1000)}` : frame.skipped === true ? 'Native OMP compaction skipped' : 'Native OMP compaction ended';
-      execution.run.progress.compaction = { ...execution.run.progress.compaction, active: starting, sampled: Date.now(), lastEvent };
+      const sampled = Date.now();
+      const completed = !starting && frame.aborted === false && frame.skipped !== true && !frame.errorMessage && frame.willRetry !== true && frame.result !== null && typeof frame.result === 'object' && !Array.isArray(frame.result);
+      execution.run.progress.compaction = { ...execution.run.progress.compaction, active: starting, sampled, lastEvent, ...(completed ? { lastCompletedAt: sampled } : {}) };
       persist(execution);
     }
     if (frame.type === 'prompt_result' && frame.status === 'error') fail(execution, String(object(frame.error).message ?? 'Provider turn failed'));
@@ -383,7 +385,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     }
     const savedLimits = resume && run.progress ? { tokenBudget: run.progress.tokenBudget, timeLimitMinutes: (run.progress.deadline - run.started) / 60_000 } : {};
     const settings = { ...store.settings(), ...savedLimits, ...(run.configuration ?? {}) };
-    run.progress = { phase: resume ? 'Resuming same session' : 'Starting selected ticket', latestAction: 'Host launching OMP', tokenBudget: settings.tokenBudget, deadline: run.started + settings.timeLimitMinutes * 60_000, ...(run.progress?.tokens ? { tokens: run.progress.tokens } : {}) };
+    run.progress = { phase: resume ? 'Resuming same session' : 'Starting selected ticket', latestAction: 'Host launching OMP', tokenBudget: settings.tokenBudget, deadline: run.started + settings.timeLimitMinutes * 60_000, ...(run.progress?.tokens ? { tokens: run.progress.tokens } : {}), ...(resume && run.progress?.compaction ? { compaction: { ...run.progress.compaction, active: false } } : {}) };
     const remaining = settings.timeLimitMinutes * 60_000 - (Date.now() - run.started);
     execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Execution time budget exhausted; explicit review required'); }, Math.max(1, remaining));
     try {

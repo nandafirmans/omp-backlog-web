@@ -378,6 +378,31 @@ test('ticket model/budget are snapshotted and native compaction does not change 
   });
 }, 15_000);
 
+test('native compaction completion time survives polling and resume; unsuccessful events cannot overwrite it', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'compaction', 0, 'compaction');
+    await ticket(harness, repo);
+    await start(harness);
+    const before = await running(harness);
+    const completedAt = before.progress?.compaction?.lastCompletedAt;
+    expect(completedAt).toBeNumber();
+    expect(completedAt!).toBeGreaterThanOrEqual(before.started);
+    expect(before.progress?.compaction?.active).toBe(false);
+    expect(JSON.stringify(before.progress)).not.toContain('Synthetic summary');
+    await harness.runtime!.control(before.id, 'pause');
+    expect(harness.store.get('runs', before.id)?.progress?.compaction?.lastCompletedAt).toBe(completedAt);
+    await harness.runtime!.control(before.id, 'resume');
+    const resumed = await running(harness);
+    expect(resumed.progress?.compaction?.lastCompletedAt).toBe(completedAt);
+    expect(resumed.progress?.compaction?.lastEvent).toBe('Native OMP compaction ended');
+    expect(resumed.progress?.compaction?.active).toBe(false);
+    expect(resumed.progress?.tokenBudget).toBe(before.progress?.tokenBudget);
+    expect(resumed.progress?.deadline).toBe(before.progress?.deadline);
+    const ended = await finish(harness, resumed);
+    expect(ended.progress?.compaction?.lastCompletedAt).toBe(completedAt);
+  });
+}, 15_000);
+
 test('pause retains the claim and legacy resume preserves recorded limits, session and immutable run', async () => {
   await withHarness(async harness => {
     const repo = await repository(harness, 'paused');
