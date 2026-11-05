@@ -30,7 +30,7 @@ Private proof is retained under `/tmp/backlog-agent-smoke-PyWw4u/proof`. Browser
 
 The dedicated drafting-page UI was separately exercised in a real browser using actual Workspace/MarkdownEditor components and styles with an in-memory synthetic API: independent manual drawer and agent page, proposal handoff, retained unsent prompt/pasted file/human review edits across views, canceled overwrite, unresolved-context blocking, disconnect and route-unmount DELETE requests, canceled navigation and publication, and confirmed synthetic publication with the staged attachment. Desktop and 390px mobile surfaces were inspected; no horizontal document overflow was observed. Changed-file ESLint passed. This frontend smoke did not run OMP, validate real backend publication, or prove provider/process behavior; the earlier live-provider evidence above predates this layout change.
 
-## Normal ticket lifecycle
+## Human-reviewed ticket lifecycle (default)
 
 ```text
 Create ticket with observable acceptance criteria and references
@@ -83,7 +83,7 @@ Uncapped execution omits the native goal's optional `token_budget`, skips only h
 
 Added/extended regression coverage for `null` validation/persistence, inheritance/finite overrides, native field omission, over-budget accounting, fixed pause/resume limits and deadline shutdown. These tests were not run under lint-only policy. Real-browser synthetic-API coverage exercised global/ticket confirmation cancellation and save/reload, keyboard controls, restored caps, inherited uncapped warnings, unchanged prior run/time/pause settings, and uncapped usage presentation in Dark/Light desktop/mobile. Final proof is recorded in the design-language entry; this is not backend/runtime/provider/native-compaction verification.
 
-Projects support Paused, Approved tickets only and Automatic execution permissions. Automatic is standing permission for eligible revisions, not a waiver of dependency, handoff, evidence or human acceptance gates. Dependencies require Done, not Needs review.
+Projects support Paused, Approved tickets only and Automatic start permissions. Automatic is standing permission for eligible revisions, not a waiver of dependency, workspace or completion gates. The separate completion policy below determines who may accept Done. Dependencies always require Done.
 
 Markdown and requirement attachments determine the ticket revision. Changing them invalidates approval. A run retains its immutable snapshot, but proof from an older revision cannot accept newly edited requirements.
 
@@ -108,6 +108,43 @@ Artifacts support simple png/jpg/txt/json filenames, up to 512 KiB each, 10 MiB 
 
 Never submit credentials, cookies, sessions or other secrets as proof. Never upload verification output as requirement attachments: those are inputs, and changing them changes approval/revision. Existing runs without structured receipts remain readable as unverified legacy text evidence.
 
+## Autonomous completion
+
+Explicit project opt-in now extends the same scheduler/native OMP lifecycle; it does not install pstack, add `/loop`, or enable another queue. **Completion** is independent of start permission. Existing projects and runs retain human-reviewed behavior.
+
+### Commissioning and authority
+
+The project header opens a revision-checked completion-policy form. Human review is default. Enabling/recommissioning requires explicit confirmation, Git with a committed attached branch, clean admission, no recorded handoff and no active/paused owner. The owner supplies exact command argv, repository recipe files, command timeout (1–1800 seconds), correction bound (0–2), recovery bound (0–1), and optional exact reviewer model. Recipe file bytes, argv and timeout are hashed at save and checked again at admission and every no-edit phase. Agents cannot rewrite a recipe to make failed verification pass; changed recipe bytes require owner recommissioning.
+
+The standing grant permits only implementation within the ticket, commissioned verification, fresh restricted review, exact local publication and host Done. No push, PR, merge, deployment, dependency installation, generic setup repair or destructive permission is added. Blank reviewer selection snapshots the actual author's model for a separate session; it does not promise cross-family diversity. Author and reviewer sessions, role token totals, current policy revision and ticket revision remain recorded.
+
+### Phases and acceptance
+
+1. Capture a clean baseline and immutable ticket/configuration/policy snapshot. One admitted attempt retains the single global slot across every phase.
+2. Author implements and reports concrete criterion/journey receipts plus an exact authored-file manifest. Reports remain claims, not independent proof.
+3. Stop and observe author-child exit. Capture raw file bytes/modes into an exact Git candidate tree through a private index; reject unexpected paths, staging, parent/ref drift and unsupported content.
+4. Host runs only the commissioned argv, with a durable owned process-group identity before the command begins. Receipt records actual exit/times, candidate/recipe hashes, bounded sanitized output/hash, truncation and host platform/architecture/Bun version. It proves that command's execution, not exhaustive acceptance or a reproducible dependency image.
+5. A fresh capability-restricted reviewer has only host-scoped candidate diff/source reads and structured verdict submission. Private audited OMP startup disables discovery/tools/extensions/skills; it does not inherit the author's writable tools. It must inspect diff/source, bind exact tree/session/revision, address every criterion and return Pass / Changes required / Inconclusive. Pass with findings, wrong identity or missing evidence rejects. Insufficient subjective/visual evidence must remain inconclusive.
+6. Demonstrated check failures or review findings return to the original author session for bounded corrections. Earlier author checks are invalidated; changed candidates require fresh host checks and independent review. A non-pass host receipt or inconclusive review cannot publish.
+7. Host records publication intent and the exact commit object before compare-and-swap of the existing local branch. It takes the index lock, preserves foreign staging, disables hooks/signing and verifies parent/tree/workspace before final index synchronization and Done. No changes means a verified no-op Done, never an empty commit.
+
+All roles retain the attempt's original finite deadline and cumulative session-token accounting. Pausing new starts affects admission only. Pause run aborts host/reviewer/author work, waits for owned exit and retains the slot; host-phase resume repeats no-edit verification/review against the same candidate. Saving Human review revokes future privileged phases. No pause can undo an already-published side effect.
+
+### Bounded recovery and exceptions
+
+Ordinary implementation/check fixes stay within the authorized native goal. The only extra autonomous blocker-recovery cause is `incomplete_verification`: exact criterion evidence must already exist, no submitted failed/blocked/not-run checks or missing permission may remain, and the saved bound permits at most one same-session continuation to finish the original checks. It is not a general install/environment-repair engine. Other blockers, unavailable credentials/authority, ambiguous acceptance, drift, bounds or unknown ownership stop with **Needs assistance** and preserved evidence.
+
+The board/list assistance filter shows those exceptional runs; details retain the exact missing prerequisite, attempted outcomes, candidate, role/review/check history and publication state. Existing reviewed recovery/retry and operator reconciliation remain the explicit escape path. A retry is a new authorized attempt, not blind replay or a budget reset within the old attempt.
+
+### Publication recovery and workspace limits
+
+After restart, process identity/exit is reconciled before releasing ownership. An already-published commit with the exact durable intent, parent/tree/ref and safe index can be finalized without another commit or author replay. An unpublished intent does not automatically replay a ref mutation. Ref/index/worktree drift, changed policy/recipe, foreign locks or uncertain partial publication require operator assistance; partial work and commits are preserved.
+
+Conservative opt-in limits: 100 changed paths, 128 KiB per changed/recipe text file, 512 KiB aggregate review content; 8 MiB per unchanged tracked file and 64 MiB aggregate tracked snapshot. Sensitive/binary changed files, symlinks/hardlinks/submodules, custom Git filters/working-tree encodings, conflicted/split/flagged indexes, detached/unborn branches and unsupported content fail closed. Host check output is retained to 60 KiB with explicit truncation. Reviewer reads are bounded UTF-8 candidate blobs, not arbitrary filesystem paths or shell commands.
+
+This is **not an OS sandbox or authorship attestation**. Author/check commands run as the backend user. Clean admission, declared paths and exact no-edit hashes cannot identify a simultaneous external edit to the same declared path during authoring. Keep external writers/Git operations idle. Ignored/external state and arbitrary secret disclosure remain outside Git proof; redact recognized patterns but never supply secrets. Host exit-zero and a model pass cannot establish unexercised browser/provider/security behavior.
+
+
 ## Human review and corrective attempts
 
 **Accept evidence → Done:** accepts only the current revision's run evidence. This releases dependency eligibility, not commit/merge/deploy permission or a workspace handoff gate.
@@ -118,7 +155,7 @@ A new attempt still needs safe workspace handoff, execution permission, satisfie
 
 ## Operator reconciliation
 
-Selected policy: **operator-controlled reconciliation**, not automatic commits or per-ticket worktrees. The app now offers an explicitly confirmed local commit; terminal reconciliation remains available.
+Default/exception policy: **operator-controlled reconciliation**, not blanket automatic commits or per-ticket worktrees. Explicit autonomous completion above is the narrow host-publication exception; the confirmed operator commit remains available for other work.
 
 A project-level gate is recorded when initial admission finds Git changes, a stopped run leaves changes, interrupted-run recovery finds changes, or required Git inspection is unavailable. It blocks that project's new starts without consuming every queued ticket as a synthetic blocked run. Other projects can still use the global slot.
 
@@ -157,10 +194,10 @@ Project/global pause prevents new starts; it does not stop an already active run
 
 ## Safety and current limits
 
-- Human owns final Done. Visual/subjective acceptance is not delegated to a green command.
-- No automatic commits, stashes, resets, pushes, PR creation, merges, deployments or destructive cleanup are authorized by ordinary ticket execution.
-- Owner sessions, CSRF, Host/Origin checks and private storage protect dashboard access. OMP itself runs with the backend OS user's permissions; projects are not sandboxes.
-- Receipt methods, outcomes and recipe identities are agent-reported. Host currently attests storage/time/hash, not actual command execution or exact code/recipe/environment identity.
+- Human-reviewed projects retain human Done. Autonomous projects require commissioned host checks plus exact-candidate independent review and local publication; subjective acceptance without sufficient evidence stops.
+- Ticket agents cannot commit. Only explicit autonomous host publication or a confirmed operator commit grants local commit authority. Stash/reset/push/PR/merge/deploy/destructive actions remain separately unauthorized.
+- Owner sessions, CSRF, Host/Origin checks and private storage protect dashboard access. OMP author/check processes run with backend OS-user permissions; registered projects are not sandboxes.
+- Agent receipts, host execution receipts and independent review judgments have separate provenance. Hashes do not prove semantic correctness or exhaustive coverage.
 - Feature maps cover starter paths, not every feature. Each target project needs its own commissioned recipe.
 
 ## Verification performed
@@ -177,11 +214,24 @@ See [commissioning receipts](../.omp/skills/verify-backlog/features/README.md#co
 
 **Not established by the earlier execution/review checks:** live OMP ticket implementation, exhaustive feature-map coverage, independently observed agent checks, or permanent correctness after later edits. Those earlier delivery checks did not run strict typecheck or production build. The later optional-drafting addition above did pass strict TypeScript and live-provider drafting; that does not verify implementation execution. Passing a protocol-speaking child is not provider availability proof.
 
+### Autonomous lifecycle verification
+
+Implemented path was exercised with an authenticated disposable instance and deterministic OMP protocol peers, not a real provider. Explicit policy commissioning left start permission unchanged; an approved ticket ran an actual host check, a fresh restricted nonauthor reviewer, exactly one local publication and host Done. The resulting local commit was `6f9fc92c326a71529f402a201a838e55d843f8ff` in the disposable repository only. A dependent permission-blocked ticket stopped with assistance and no publication. Global starts were paused afterward, completion authority was returned to Human review, both runs had no owned PID, and the owned browser/server were stopped.
+
+Focused regression command covered `server/autonomy.test.ts`, `server/autonomy-runtime.test.ts`, `server/autonomy-policy.test.ts`, `server/transcript.test.ts`, `src/completionPolicy.test.ts` and `src/lifecyclePresentation.test.ts`: **53 passed, 0 failed, 333 assertions**. Coverage includes exact-tree publication/no-op, drift/staging/recipe changes, policy revocation, bounded corrections/recovery, same-author continuation, independent review validation, cumulative role limits, host-phase pause, process-group shutdown and publication crash reconciliation. Full-project ESLint and strict TypeScript passed. No production build ran.
+
+Full Bun suite was **169 passed, 5 failed**; it is not green. Three existing tests (`execution`, `recovery`, `board-api`) supply descriptions rejected by current ticket validation; two assisted-publication assertions compare LF strings against multipart values normalized to CRLF by Bun 1.4.4. The initial run also exposed a real quadratic redaction path on long output; token-boundary matching fixed it without weakening redaction, and the focused regression passed. Restricted fixture launchers explicitly select embedded Bun runtime mode, preserving the audited OMP version gate.
+
+Actual browser checks covered canceled opt-in, committed policy persistence, normal modal dismissal, canceled unsaved-close with retained draft, reachable mobile actions, keyboard evidence expansion, assistance filtering, and cross-tab revocation/stale-form protection. Kanagawa/Light at 1440px and 390px were inspected. Browser-discovered duplicate sibling keys and mobile grid clipping were corrected and rechecked. This is exercised UI/protocol behavior, not live-provider execution, exhaustive accessibility or acceptance coverage.
+
+Original private captures were written under `/tmp/omp-autonomous-browser-5EJXDe/proof`; that scratch path was unavailable after session resumption. Screenshots and observed results remain in the session transcript; no currently retained filesystem artifact or live-provider proof is claimed. No registered project was enabled and no commit was made in this application repository.
+
+
 ## Next adoption stages
 
-1. Independently observed verification: approved check execution, exit status, bounded output and run/code/recipe identity. Failed or missing required checks must block completion without treating agent claims as host observations.
+1. Broader commissioned verification/environment provenance: current host-command receipts establish actual execution and candidate/recipe identity, not exhaustive coverage or a reproducible dependency image.
 2. Explicitly authorized real OMP/provider smoke in a disposable project.
 3. Full feature-map maintenance, with unverified prerequisites clearly recorded.
 4. Opt-in onboarding and proven verification recipes for other registered projects.
 
-Broader playbooks, independent reviewers and external automation remain separately scoped candidates. This guide grants no new execution or external-write permissions.
+Broader playbooks and external automation remain separately scoped. Autonomous completion is implemented only under the explicit local policy above; this guide grants no additional execution or external-write permission.

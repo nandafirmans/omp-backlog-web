@@ -26,17 +26,17 @@
 - Ticket creation, project initialization and skill mentions do not authorize execution. When asked to prepare only, do not install dependencies, launch apps, approve tickets, enable scheduling or run agents.
 - Keep the existing scheduler and native OMP within-ticket continuation; do not add another loop or scheduler. One active ticket globally; paused work retains ownership.
 - Approvals bind to exact requirement revisions; edits invalidate approval. Automatic mode grants standing execution permission, not exemption from safety or acceptance gates.
-- Completion requires reported passing checks for every criterion with no unresolved submitted failed/blocked/not-run checks. Owned work must settle and stop before Needs review; only a human accepts Done. Dependencies require Done.
+- Completion requires passing criterion reports with no unresolved submitted failed/blocked/not-run checks. Human-reviewed projects settle and stop before Needs review; a human accepts Done. Explicitly opted-in autonomous projects instead require exact-candidate host checks, fresh restricted nonauthor review, guarded local publication and stopped owned work before host Done. Dependencies require Done.
 - Request changes requires durable feedback linked to the reviewed run/revision and passed to later authorized attempts. Ready does not bypass scheduling gates.
-- Blocked work retains partial evidence and actionable unblock instructions; never ask an agent to falsely complete an unmet goal. Retry is explicit, not automatic replay.
+- Blocked work retains partial evidence and actionable unblock instructions; never falsely complete an unmet goal. Autonomous attempts permit only bounded same-session corrections and one commissioned incomplete-verification recovery; other blocked/failed/interrupted attempts require explicit retry, never automatic replay.
 
 ## Evidence and workspace safety
 
-- Structured receipts are agent claims. Host-recorded storage/time/artifact hashes do not independently prove command execution, recipe identity or correctness. Keep host observations distinct from agent reports.
+- `backlog_evidence` receipts remain agent claims. Autonomous host-command receipts attest the actual argv/exit/times and pinned candidate/recipe; independent reviews remain model judgments. Storage/artifact hashes alone do not establish execution or correctness. Keep all three provenance classes distinct.
 - Store sanitized verification artifacts as private run proof, never requirement attachments that change the approved revision. Never include credentials or sessions.
-- Selected handoff policy: operator-controlled reconciliation, not automatic commits or per-ticket worktrees. Preserve partial and unrelated edits. The explicit Review & commit action is a human-authorized exception: selected reviewed working-tree versions only, unselected staging preserved, no hooks/signing/push/reset/stash, and no automatic gate release. Ticket agents still have no commit authority.
+- Human-reviewed and exceptional handoffs use operator-controlled reconciliation, preserving partial and unrelated edits. Explicit Review & commit selects reviewed working-tree versions and preserves unselected staging. Opted-in autonomous publication requires clean admission, exact authored-path/candidate matching, host verification and independent review; only the host may CAS-publish that tree. Both paths disable hooks/signing/push/reset/stash. Ticket agents still have no commit authority; no per-ticket worktree or shipping grant is implied.
 - Dirty Git or unavailable inspection gates new starts for that project. Done, mode changes and merely becoming clean do not clear a recorded gate; explicit clean Recheck workspace is required, with no active/paused work owning that workspace. Other execution gates still apply.
-- Never commit, stash, reset, push, deploy or delete work merely to advance the queue. These require separate authorization.
+- Outside explicit completion-policy publication or a separately confirmed operator commit, commits require separate authorization. Stash/reset/push/deploy/deletion remain unauthorized merely to advance the queue.
 - Registered projects are not sandboxes: agent processes run with backend OS-user permissions. Skill references never grant credential access or permission to escape project scope.
 
 ## Verification and reporting
@@ -45,4 +45,4 @@
 - Use project-local verification guidance and drive affected entry points independently. Explicitly distinguish passed, blocked and unverified behavior; do not infer alternate journeys passed.
 - Prefer disposable projects, synthetic data and owned-process cleanup for browser/protocol checks. Preserve proof after cleanup; never stop unrelated processes.
 - Protocol-fixture success is not real OMP/provider verification. Never claim live-provider or exhaustive feature-map coverage without actually exercising it.
-- Remaining adoption priorities: host-observed verification/provenance, authorized live-provider smoke, full feature-map maintenance, then opt-in onboarding of other projects. No wholesale pstack import or shipping automation is implied.
+- Remaining adoption priorities: authorized live-provider lifecycle smoke, full feature-map maintenance, then opt-in onboarding with each project's commissioned recipe. Protocol success does not establish those gates; no wholesale pstack import or external shipping automation is implied.

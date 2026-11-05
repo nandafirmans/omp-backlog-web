@@ -71,7 +71,7 @@ React Router supports direct links, reloads, and browser Back/Forward. Unknown p
 3. Paste images or supported files into **Markdown** or **Preview**. Existing tickets upload immediately into their `attachments/` directory and insert relative image/file links without saving your text. New tickets stage files in the current tab until **Create ticket**. Use synthetic examples; explain what each screenshot or document demonstrates.
 4. Save and inspect validation errors. Dependencies use ticket IDs within the same repository.
 5. Approve the exact revision, then choose **Approved tickets only**. Changing Markdown or referenced attachments invalidates approval. **Automatic** is standing permission to execute eligible revisions; enable deliberately.
-6. Watch the run, answer questions, and inspect verification evidence. **Needs review** is not **Done**. Confirm acceptance before dependents can run.
+6. Watch the run, answer questions, and inspect verification evidence. Human review is the default: **Needs review** is not **Done**. Alternatively commission the separate [autonomous completion policy](#autonomous-completion-opt-in). Dependents wait for Done in both modes.
 
 Ticket files remain editable outside the website:
 
@@ -152,6 +152,20 @@ Blocked tickets show **Blocker recovery**: the agent-reported prerequisite, reco
 **Review fix & retry** explicitly approves the current requirements revision and exact saved note for a fresh attempt. Stale source runs, notes or revisions require renewed review; requirement edits require saving a note for the new revision. Board Actions and dragging blocked work toward Ready open its recovery panel rather than silently retrying. The next admitted run snapshots the reviewed context; previous evidence does not count as fresh passing checks. Workspace reconciliation, permissions, pauses, dependencies and the global slot still apply. No automatic retry, installation or expanded execution authority is added.
 
 An observed paused run keeps the global execution slot until explicitly resumed. A resumed run keeps the same session and immutable requirements; canceled questions must be asked again, never treated as consent. Startup reconciles surviving process identities before permitting new work; unresolved work becomes Interrupted rather than replaying automatically.
+### Autonomous completion (opt-in)
+
+Project **Completion: Human review / Autonomous** is separate from **Execution permission** and global new-start pause. Existing projects remain human-reviewed. Enabling requires an attached, committed, clean Git workspace with no recorded handoff or active/paused owner.
+
+Enter the exact verification **argv JSON array**, existing repository-relative recipe files, timeout, and correction/recovery limits. Explicit confirmation authorizes host-executed checks, a fresh restricted nonauthor OMP review, one exact-candidate local commit, and automatic Done—not push, PR, merge, deploy, installs or arbitrary setup. Recipe bytes/configuration are pinned at save; changed recipes require explicit recommissioning. A blank reviewer model inherits the actual attempt model in a distinct session, not necessarily another model family.
+
+Normal path: **Implement → Host verification → Independent review → Local publication → Done**. Author reports alone cannot complete. Demonstrated check/review failures return to the same author session for at most two corrections, with fresh checks/review. Only `incomplete_verification` with complete criterion evidence, no unresolved failed checks and no missing permission permits one same-session recovery. Other blockers, inconclusive review, drift and exhausted limits enter **Needs assistance**, using existing reviewed retry/reconciliation controls.
+
+All roles share one global ownership slot, finite deadline and cumulative token accounting. Pausing new starts leaves the admitted attempt running; **Pause run** stops owned work and retains the slot. Saving Human review revokes future autonomous phases. Interrupted mutation is never replayed. Durable publication intent reconciles an already-published exact commit without creating another; uncertainty requires assistance. Verified no-op tickets become Done without an empty commit. A pre-existing handoff is never automatically released.
+
+Run **Evidence** separates author claims, actual host argv/exit/output receipts, independent reviewer findings, candidate/recipe identities, and publication hash. Board/list stages remain coarse; phase labels and **Needs assistance** filtering expose progress/exceptions.
+
+Scope and limits: [current autonomous workflow](docs/current-agent-workflow.md#autonomous-completion). Author commands and commissioned checks retain backend OS permissions; neither a clean tree nor a declared author-file list proves OS-level authorship. Keep external editors/Git idle during autonomous work. Unsupported/sensitive/binary changes, Git filters/links/submodules, flagged indexes and oversized snapshots fail closed rather than being swept into a commit. Every target project needs its own trusted acceptance recipe.
+
 
 ### Live run conversation
 
@@ -173,9 +187,9 @@ The conversation follows new output only while at the bottom. Scroll up to inspe
 
 Display retention is bounded: 10,000 characters per field, 256 entries and 192,000 serialized characters, with omission/truncation notices. Recognized credential values are redacted and image/evidence bytes omitted before new transcript persistence. This is not a complete secret scanner; never instruct agents to read or print credentials. Private reasoning is not displayed.
 
-Git workspaces use **operator reconciliation**, not automatic commits or per-ticket worktrees. Git changes outside `.omp-backlog/` or unavailable Git inspection persist a project-level handoff gate and stop new starts in that project, without consuming each queued ticket as a blocked run. Dirty changes left after a run or interrupted-run recovery also require handoff. Home shows the warning; the project page keeps a compact **New starts blocked** notice with actions and a recorded-path count. Expand **Details & recovery** for the exact reason, affected paths, source run and recovery steps. Other projects can still use the global slot.
+Human-reviewed Git workspaces and exceptional autonomous stops use **operator reconciliation**, not blanket auto-commits or per-ticket worktrees. Git changes outside `.omp-backlog/` or unavailable inspection persist a project handoff gate and stop new starts without consuming each queued ticket. Home/project notices expose the reason, paths and source run. Other projects can still use the global slot. Successful autonomous publication needs no operator handoff when its exact workspace is clean; it never clears a pre-existing gate.
 
-Review evidence/partial work and preserve unrelated edits. Reconcile in your terminal, or use the operator-controlled **Review & commit** action below. No automatic commits, pushes, stashes, resets or worktree cleanup. Choose **Recheck workspace** and confirm: authenticated inspection uses Git status with optional locks disabled; only a clean observed tree outside `.omp-backlog/` and no active/paused work can release the current gate. Dirty/unavailable Git stays blocked. Git ignore rules still apply; this is not sandboxing or proof about ignored files. Done, switching execution modes, and merely becoming clean do not clear a recorded gate. Clearing it may let eligible queued work start under existing permissions/dependencies/global pause; previously blocked tickets still need explicit retry. Non-Git workspaces have no Git handoff/changed-file guarantee.
+Review partial work and preserve unrelated edits. Reconcile in your terminal, or use the explicitly confirmed **Review & commit** action below. Handoff does not grant automatic publication, push, stash, reset or cleanup. **Recheck workspace** clears only the current gate after a clean observed tree outside `.omp-backlog/` and no active/paused owner. Dirty/unavailable inspection stays blocked. Done, mode changes and merely becoming clean do not release it. Other start/dependency/retry rules still apply. Non-Git workspaces have no Git handoff/changed-file guarantee.
 
 ### Operator-controlled local commits
 
@@ -215,7 +229,7 @@ Fresh admission snapshots the effective model, thinking, budget and deadline set
 
 Loopback-only HTTP transport, owner sessions, CSRF protection, Host/Origin checks, authenticated attachment routes, and private storage protect dashboard access. `OMP_BACKLOG_ORIGIN` permits one exact HTTPS remote origin; the [private deployment](docs/private-tailnet-https.md) restricts remote connectivity to Tailscale without opening Bun or Caddy to the LAN. These controls do **not** sandbox OMP: it runs with the backend OS user's permissions. Repository separation is organizational. Agent commands and attachments must be reviewed accordingly.
 
-This is a local Vite development website, not an Internet deployment. Do not bind it to a LAN address or reverse-proxy it publicly. Vite serves project source; keep secrets outside this project. No automatic commits, pushes, deployments, or destructive cleanup are authorized by ticket scheduling.
+This is a local Vite development website, not an Internet deployment. Do not bind it to a LAN address or reverse-proxy it publicly. Vite serves project source; keep secrets outside this project. Scheduling alone grants no commit authority. Explicit autonomous completion permits only the guarded host local publication above; push, deployment and destructive cleanup remain unauthorized.
 
 Markdown preview skips raw HTML and unsafe URL protocols. Mermaid uses strict security mode. Uploaded attachments are references, never executable validation scripts.
 

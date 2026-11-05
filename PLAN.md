@@ -14,9 +14,9 @@ Approved defaults:
 - One active ticket globally, with fair rotation between repositories.
 - Fresh OMP session per ticket.
 - Human completion review by default.
-- No automatic commits, pushes, deployments, or destructive cleanup.
+- No automatic publication by default. Explicit project autonomy may authorize guarded host local commits and Done (section 12); push, deployment and destructive cleanup remain unauthorized.
 
-One backend process and one database are sufficient. Scheduling is a module inside the backend, not a separate service. No Redis, Docker, or multi-agent orchestration is needed.
+One backend process and one database remain sufficient. Scheduling is a backend module, not another service. Opt-in independent reviewer sessions run serially under the same global ticket owner; no Redis, Docker or second scheduler is required.
 
 The initial project setup is runnable development tooling and a project overview only. Login, repository management, tickets, scheduling, and execution controls must not be presented as operational before implementation and verification.
 
@@ -351,7 +351,7 @@ These checks establish the exercised scenarios, not sandboxing or universal prov
 
 Status: partially implemented; delivery boundaries below. Research and primary sources: [Agent completion and autonomous ticket loops](docs/agent-completion-loop-research.md) and [Cursor pstack verification workflow](docs/cursor-verification-skill-research.md). Section 11 expands the verification and workflow adoption scope.
 
-Keep the existing ownership model: scheduler selects tickets; native OMP goal mode continues work within one ticket. No additional `/loop`, mandatory completion skill, or multi-agent orchestration. Preserve human acceptance before Done, revision-bound requirements, time/token limits, and explicit retry permission.
+Keep the existing ownership model: scheduler selects tickets; native OMP goal mode continues within one ticket. No additional `/loop` or mandatory completion skill. Preserve revision guards, fixed lifetime limits and explicit interrupted retry. Human acceptance remains default; section 12 adds the separately authorized exact-candidate autonomous path.
 
 Implement in this priority order:
 
@@ -360,13 +360,13 @@ Implement in this priority order:
 - Link each acceptance criterion to observed verification: command/check, exit status or outcome, relevant output, and artifact paths. Distinguish host-recorded observations from agent-written claims.
 - Capture results from supported verification paths; do not label unsupported or unobserved checks as independently verified.
 - Run only explicitly permitted checks under repository policy. Never execute arbitrary ticket attachments or uploaded validation code as trusted checks.
-- Keep visual/subjective acceptance and final Done decisions under human review. A passing command alone does not prove every criterion.
+- Human-reviewed projects keep human final acceptance. Explicit autonomous policy requires host checks plus a separate restricted reviewer; insufficient visual/subjective evidence stops inconclusive. A passing command alone never proves every criterion.
 - Acceptance: reviewer can trace each completion claim to its evidence source and run revision; failed, missing, or unperformed required checks cannot be presented as passing.
 
 ### 2. Safe working-tree handoff
 
 - Address the current constraint: agents cannot commit, while pre-existing Git changes block new ticket execution. Acceptance alone does not clean the working tree.
-- Selected policy: operator-controlled reconciliation, through a separately confirmed local commit in the app or the terminal. Git changes or unavailable inspection persist a project-level handoff gate; staged/unstaged/untracked files reported by Git outside `.omp-backlog/` block new starts. No per-ticket isolation or automatic commit authority.
+- Default/exception policy: operator-controlled reconciliation through a confirmed local commit or terminal. Dirty/unavailable Git persists a handoff gate; existing gates require explicit clean recheck. Section 12 allows only clean-admitted, exact-candidate host publication under separate standing authority, not broad agent commits or per-ticket isolation.
 - Operator preserves/reconciles work under their own authorization, then explicitly chooses Recheck workspace. Authenticated/CSRF-protected recheck inspects Git with optional locks disabled and clears only the reviewed gate if clean and no run owns that workspace. A stale gate, dirty state, inspection failure, or active/paused work cannot be bypassed. Merely becoming clean or marking Done does not release a recorded gate. Existing permissions/dependencies/global pause still apply; previously blocked tickets still require explicit retry.
 - Preserve unrelated changes and partial work. Never reset, discard, or automatically commit changes to advance the queue.
 - Acceptance: prior-ticket changes produce an actionable handoff state; subsequent work starts only under the selected safe policy, with existing changes preserved.
@@ -397,9 +397,9 @@ Status: partially implemented; delivery boundaries below. Adopt the useful workf
 
 - Separate two deliverables: project-local workflows for developing this application, and application support for equivalent workflows in each registered target repository. Proving this app's skill does not prove another project's skill.
 - Compare every upstream component with current behavior before adoption. Record its purpose, dependencies, portability, gaps, policy conflicts, and proposed acceptance checks. Distinguish prompt instructions from executable enforcement and implemented features from recommendations.
-- Keep one active ticket globally, revision-bound approval, native OMP goal continuation, time/token limits, explicit blocker/recovery handling, and human acceptance before Done.
+- Keep one active ticket globally, revision-bound approval, native continuation, fixed lifetime limits and explicit blocker/recovery handling. Human acceptance remains default; section 12 defines the sole autonomous local-completion exception.
 - Do not replace the scheduler, add a competing backlog loop, or automatically import Cursor-specific agents/hooks/configuration. Any future multi-agent work must preserve execution ownership and verification-instance isolation; parallel ticket execution remains out of scope unless separately approved.
-- Commits, pushes, PR creation, deployments, branch changes, and destructive cleanup remain unauthorized by ordinary ticket execution. Upstream workflow instructions cannot override these restrictions. Choose any shipping or isolation policy explicitly before implementation.
+- Ticket agents have no commit, push, PR, deployment, branch-change or destructive authority. Explicit completion policy allows only deterministic host local publication; upstream playbooks cannot grant broader shipping permission.
 
 ### A. Commission a verification skill per project
 
@@ -443,7 +443,7 @@ Status: partially implemented; delivery boundaries below. Adopt the useful workf
 
 ### Broader component candidates, not blanket parity
 
-- Next candidates: small OMP-compatible investigation, bug-fix, feature/refactoring and verification recipes; optional risk-scaled independent review; concise decision trails and catch-up. Reviewers require actual permission/tool isolation, exact reviewed work identity and retained findings. No always-on multi-model fan-out is implied.
+- Current opt-in independent review is implemented in section 12. Broader investigation, bug-fix, feature/refactoring recipes and risk-scaled panels remain candidates; no always-on multi-model fan-out is implied.
 - Specialized candidates: measured performance/hillclimb recipes, competing designs for uncertain interfaces, and targeted formal/property checks for costly lifecycle invariants. A model must stay synchronized with code and demonstrate sensitivity to a deliberate scratch failure; model/diagram success is not whole-app proof. Tool installation needs separate approval.
 - Defer PR watching/shipping, multiday orchestration, autonomous landing, Benny Slack/tracker integrations and webhook control until separately scoped and approved. Existing human Done remains ticket acceptance, not external-write or merge permission.
 - Review upstream helpers before invoking them: some install dependencies on first use, watcher timeout defaults can be unbounded, and executable mapping files are trusted code. Impose explicit host budgets/ownership and preserve existing network, secret and destructive-action restrictions.
@@ -456,7 +456,7 @@ Status: partially implemented; delivery boundaries below. Adopt the useful workf
 - Added deterministic evidence/access/integrity/feedback and protocol shutdown/handoff coverage. Focused suite passed (14 tests); this is not live-provider verification. Browser coverage and recipe receipts distinguish real UI from protocol fixtures.
 - Operator reconciliation delivered: project-level handoff persists after dirty run shutdown, initial dirty admission, and interrupted-run recovery; queued tickets are not consumed as synthetic blocked runs. Home/project UI exposes gate, source run and affected paths. Explicit clean recheck releases only that gate; no workspace mutation/commit/stash/reset. Focused suite passed (15 tests); isolated Git/browser/protocol-fixture recheck journey passed with proof retained at `/tmp/opencode/backlog-verify-qanhuh/proof/result.json`.
 - Later approved extension: operator-only Review & commit with selected-file diffs/modes, message and explicit confirmation. Commits use exact reviewed raw file bytes, private indexes and compare-and-swap branch publication; preserve unselected staging, exclude sensitive/unsupported files, reject stale reviews/owned runs, and disable hooks/signing. Commit does not clear handoff or wake execution; Recheck stays separate. This grants no automatic agent commit or shipping authority. See README for limits and failure recovery.
-- Pending: independently observed command execution/provenance; host-attested code/recipe/environment identity; full feature-map maintenance/live-provider journeys; other-project onboarding and broader playbook/reviewer integration. No automatic commit/worktree/shipping authority granted. Conservative dirty-tree inspection remains mandatory before every new start.
+- At this historical slice, independent command/code/recipe provenance and reviewer integration were pending; section 12 now delivers the narrow autonomous path. Full feature-map/live-provider journeys and other-project onboarding remain unproven. Conservative dirty-tree admission still applies.
 
 This extends section 10 rather than replacing its remaining handoff/proof requirements. No full pstack parity or complete-plan delivery is claimed. Deferred components still need individual approval and verification evidence.
 
@@ -475,6 +475,20 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 - Verification: changed-code ESLint, synthetic-API browser journeys and installed metadata discovery passed. Backend/API/runtime/guard regression tests added or extended but not run under lint-only policy. No live-provider/native compaction or current strict-typecheck/build claim. [Current workflow and proof boundaries](docs/current-agent-workflow.md#ticket-model-overrides-and-context-compaction).
 
 - Later explicit extension: global and per-ticket **No cumulative token limit** with cost warning/save confirmation. `null` is uncapped; omitted ticket cap inherits; numeric cap still bounds usage. Native goal omits `token_budget` and host skips only that token check; accounting, native compaction, fixed finite deadline, ownership and acceptance gates remain. Existing defaults/runs are not silently changed. Legacy resumes retain recorded progress limits when available. Browser/UI and lint verification only; additional backend/protocol tests added, not run. No guarantee of automatic completion or waived provider/account limits.
+
+## 12. Opt-in autonomous local completion
+
+Authorized implementation extends the existing OMP scheduler, not Cursor/Codex execution or an imported pstack loop. Current operating contract: [Autonomous completion](docs/current-agent-workflow.md#autonomous-completion); original pre-implementation design: [lifecycle research](docs/autonomous-ticket-lifecycle-research.md).
+
+- Separate revisioned Completion policy, Human review by default; explicit owner commissioning binds actual recipe bytes/argv, reviewer choice and bounded corrections/recovery. Start permission remains independent. Disabling revokes future autonomous phases, while pausing new starts leaves admitted work running.
+- Clean baseline → author criterion reports/exact path declaration → stopped owned author → immutable candidate → actual commissioned host command → fresh restricted nonauthor review → bounded original-session correction if demonstrated findings → guarded local CAS publication → stopped-work host Done.
+- One global slot and fixed whole-attempt deadline/cumulative tokens across roles. Host receipts, author claims and independent review judgments remain distinct. Missing checks, stale recipe/candidate/requirements, identity mismatch, inconclusive review or exhausted bounds cannot publish.
+- One optional `incomplete_verification` continuation finishes only the original checks when complete criterion evidence and existing authority permit it. No general install/setup repair, credential invention or automatic interrupted mutation replay.
+- Durable publication intent recognizes the existing exact commit after crash, preserves unrelated staging/foreign locks and does not duplicate commits. Verified no-op Done creates no empty commit. Existing handoff gates are never implicitly cleared.
+- UI separates project start/completion settings, commissioned policy confirmation, run stages/host proof/review/publication, and assistance count/filter. Default human review and operator Review & commit remain.
+- Verification uses disposable Git/protocol children plus actual authenticated browser surfaces, not a real provider. No registered project was enabled, no production repository commit was made and no build was run. Current check results and private proof are recorded in the workflow/design-language verification entries; full-suite limitations remain explicit.
+
+This does not claim pstack parity, OS sandboxing/authorship attestation, live-provider readiness, exhaustive acceptance coverage, or push/PR/merge/deploy authority. Each project needs its own commissioned meaningful recipe; unsupported workspace/file modes require assistance.
 
 ## Initialization delivery
 
