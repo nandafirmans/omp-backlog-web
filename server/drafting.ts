@@ -62,7 +62,7 @@ function launchEnv(directory: string): NodeJS.ProcessEnv {
     BUN_CONFIG_NO_CLEAR_TERMINAL: '1', BUN_CONFIG_NO_ENV: '1' };
 }
 
-async function installProfile(directory: string): Promise<NodeJS.ProcessEnv> {
+export async function installProfile(directory: string): Promise<NodeJS.ProcessEnv> {
   const env = launchEnv(directory);
   const agent = env.PI_CODING_AGENT_DIR!;
   await mkdir(agent, { recursive: true, mode: 0o700 });
@@ -93,7 +93,7 @@ async function installProfile(directory: string): Promise<NodeJS.ProcessEnv> {
   return env;
 }
 
-async function checkVersion(executable: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
+export async function checkVersion(executable: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
   const { promise, resolve: resolveVersion, reject } = Promise.withResolvers<void>();
   const child = spawn(executable, ['--version'], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'] });
   let output = ''; let exceeded = false;
@@ -109,7 +109,7 @@ async function checkVersion(executable: string, cwd: string, env: NodeJS.Process
   await promise;
 }
 
-const privateArgs = (directory: string) => ['--mode', 'rpc', '--no-ui', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir', join(directory, 'sessions')];
+export const privateArgs = (directory: string) => ['--mode', 'rpc', '--no-ui', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir', join(directory, 'sessions')];
 let discoveries = 0;
 
 export async function discoverExecutionModels(executable: string, requested: string): Promise<{ models: { provider: string; id: string; name: string }[]; model: string; thinkingLevels: string[] }> {

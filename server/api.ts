@@ -15,6 +15,7 @@ import { handleAssistedCreation } from './assisted-creation';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
+import { saveCompletionPolicy } from './autonomy-policy';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
 interface Owner { username: string; hash: string }
@@ -198,6 +199,13 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           return json(await completions(path, repo.git, store.dataDir, url.searchParams.get('kind'), url.searchParams.get('q') || ''));
         }
         if (segments.length === 3 && request.method === 'PATCH') { const input = await body(request); if (!['paused', 'approved', 'automatic'].includes(String(input.mode))) throw new HttpError(400, 'Invalid execution mode'); const mode = input.mode as Repo['mode']; const updated = { ...(store.get('repos', repo.id) ?? repo), mode }; store.save('repos', updated); runtime.wake(); return json(updated); }
+        if (segments.length === 4 && segments[3] === 'completion' && request.method === 'PATCH') {
+          const input = await body(request);
+          await permittedPath(store, repo.path);
+          const updated = await saveCompletionPolicy(store, repo, input);
+          runtime.wake();
+          return json(updated);
+        }
         if (segments.length === 4 && ['workspace-review', 'workspace-commit'].includes(segments[3]) && request.method === 'POST') {
           const input = await body(request);
           await permittedPath(store, repo.path);
@@ -277,6 +285,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
         else if (action === 'done' || action === 'changes') {
           const run = ticket.runId ? store.get('runs', ticket.runId) : undefined;
           if (ticket.status !== 'needs_review' || !run || run.revision !== ticket.revision) throw new HttpError(409, 'Only evidence for this revision may be reviewed');
+          if (run.lifecycle && !['assistance', 'complete'].includes(run.lifecycle.phase)) throw new HttpError(409, 'Autonomous lifecycle still owns this candidate; pause or disable completion authority before operator review');
           if (action === 'done') { if (!run.evidence.length) throw new HttpError(409, 'Review requires recorded acceptance evidence'); ticket.status = 'done'; run.status = 'done'; }
           else {
             const feedback = string(input.feedback, 'review feedback', 4000).trim();

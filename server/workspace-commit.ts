@@ -9,7 +9,8 @@ import { HttpError, safePath } from './tickets';
 const LIMIT = 128 * 1024;
 const AGE = 10 * 60 * 1000;
 interface Entry { path: string; mode: string; bytes: Uint8Array | null }
-interface Review { result: WorkspaceReview; entries: Entry[]; fingerprint: string; expires: number; head: string; ref: string; index: string; handoffId?: unknown }
+export interface WorkspaceCapture { result: WorkspaceReview; entries: Entry[]; fingerprint: string; expires: number; head: string; ref: string; index: string; handoffId?: unknown }
+type Review = WorkspaceCapture;
 const reviews = new WeakMap<Store, Map<string, Review>>();
 const locks = new WeakMap<Store, Set<string>>();
 
@@ -31,7 +32,7 @@ function guard(store: Store, repo: Repo, handoffId: unknown) {
 async function git(repo: Repo, args: string[], index?: string, input?: Uint8Array): Promise<{ text: string; code: number }> {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
   const child = Bun.spawn(['git', '--no-optional-locks', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', '-c', 'core.untrackedCache=false', '-C', repo.path, ...args], {
-    env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_LITERAL_PATHSPECS: '1', ...(index ? { GIT_INDEX_FILE: index } : {}) },
+    env: { ...env, GIT_TERMINAL_PROMPT: '0', GIT_LITERAL_PATHSPECS: '1', GIT_NO_REPLACE_OBJECTS: '1', ...(index ? { GIT_INDEX_FILE: index } : {}) },
     stdin: input ? new Blob([Buffer.from(input)]) : 'ignore', stdout: 'pipe', stderr: 'ignore',
   });
   let timedOut = false;
@@ -228,3 +229,6 @@ export async function commitWorkspace(store: Store, repo: Repo, input: Record<st
     if (scratch) await rm(scratch, { recursive: true, force: true }); // Only this operation's private temporary indexes.
   }
 }
+
+// Internal plumbing shared by the native autonomous publisher; operator API stays unchanged.
+export const workspaceInternals = { capture, checked, git, indexBytes, worktreeBytes, safeName, text };

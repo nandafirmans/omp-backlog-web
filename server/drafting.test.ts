@@ -20,7 +20,7 @@ async function fixture(run: (context: { repo: Repo; call(path?: string, method?:
     process.env.NODE_OPTIONS = '--require /must-not-be-loaded.js'; process.env.BUN_OPTIONS = '--preload /must-not-be-loaded.js'; process.env.PI_CONFIG_FILES = '/must-not-be-read.yml';
     const executable = join(root, 'omp-fixture');
     const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
-    await writeFile(executable, `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/drafting-child.ts'))} ${quote(mode)} --fixture-log ${quote(join(root, 'child.jsonl'))} "$@"\n`);
+    await writeFile(executable, `#!/bin/sh\nBUN_BE_BUN=1 exec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/drafting-child.ts'))} ${quote(mode)} --fixture-log ${quote(join(root, 'child.jsonl'))} "$@"\n`);
     await chmod(executable, 0o700);
     store.setSettings({ ...store.settings(), executable, roots: [repo.path] }); store.save('repos', repo);
     const call = async (path = '', method = 'GET', value?: unknown) => {

@@ -11,6 +11,8 @@ import { assertVerifiedCriteria, recordEvidence } from './evidence';
 import { redactTranscript, RunConversation, settleConversation, transcriptValue } from './transcript';
 import { blockerDetails, recoveryContext, recoveryObjective } from './recovery';
 import { resolveRunConfiguration, sampleRunState } from './execution';
+import { assertCandidate, captureBaseline, captureCandidate, publishCandidate, recipeIdentity, reconcilePublication, verifyCandidate } from './autonomy';
+import { reviewCandidate } from './autonomy-review';
 
 const CLAIMED: Status[] = ['running', 'stopping', 'paused'];
 const QUIET_MS = 1_000;
@@ -35,6 +37,9 @@ interface Execution {
   polling: boolean;
   deadline: NodeJS.Timeout | undefined;
   hostWork: Promise<void>;
+  abort: AbortController;
+  phaseWork: Promise<boolean> | null;
+  continuation?: string;
 }
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -155,6 +160,32 @@ export function parseResult(value: unknown, ticket: Ticket): Result {
   return { status: result.status, evidence: ticket.criteria.filter((criterion) => evidence.has(criterion)).map((criterion) => `${criterion}\nEvidence: ${evidence.get(criterion)}`), blocker, ...(details ? { details } : {}) };
 }
 
+export function assertAutonomyAuthority(store: Store, run: Run) {
+  const lifecycle = run.lifecycle;
+  const repo = store.get('repos', run.repoId);
+  const ticket = store.get('tickets', `${run.repoId}/${run.ticketId}`);
+  if (!lifecycle || !repo || repo.completion?.mode !== 'autonomous' || repo.completion.revision !== lifecycle.policy.revision
+    || repo.completion.recipeHash !== lifecycle.recipeHash
+    || ticket?.runId !== run.id || ticket.revision !== run.revision || ticket.removed || ticket.error
+    || (lifecycle.authorSessionId !== undefined && lifecycle.authorSessionId !== run.sessionId)
+    || run.status !== 'running' || store.list('runs').some(other => other.id !== run.id && CLAIMED.includes(other.status))) {
+    throw new Error('Autonomous authority revoked, requirements changed, or execution ownership lost; assistance required');
+  }
+  if (run.progress && Date.now() >= run.progress.deadline) throw new Error('Whole-attempt execution deadline exhausted');
+  const total = lifecycle.authorTokens + (lifecycle.reviewerTokens ?? 0);
+  if (run.progress?.tokenBudget !== null && run.progress?.tokenBudget !== undefined && total >= run.progress.tokenBudget) throw new Error('Whole-attempt token budget exhausted');
+}
+
+export function safeIncompleteVerificationRecovery(run: Run, ticket: Ticket, value: unknown) {
+  const input = object(value);
+  const lifecycle = run.lifecycle;
+  return !!lifecycle && lifecycle.recoveries < Math.min(1, lifecycle.policy.maxRecoveries)
+    && input.recoverableCause === 'incomplete_verification' && input.status === 'blocked'
+    && !String(input.permission ?? '').trim() && !run.dialog
+    && Array.isArray(input.evidence) && ticket.criteria.every(criterion => (input.evidence as unknown[]).some(raw => object(raw).criterion === criterion))
+    && !(run.verification ?? []).some(receipt => receipt.outcome === 'failed' || receipt.outcome === 'blocked');
+}
+
 export async function createRuntime(store: Store): Promise<Runtime> {
   if (process.platform !== 'linux') throw new Error('Safe process recovery currently requires Linux /proc identity support');
   const watchers = new Map<string, FSWatcher>();
@@ -212,6 +243,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     if (execution.stopping) return execution.stopping;
     if (error) error = redact(error);
     execution.stopping = (async () => {
+      execution.abort.abort();
       clearInterval(execution.poll);
       clearTimeout(execution.deadline);
       execution.run.status = 'stopping';
@@ -222,6 +254,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       persist(execution);
       try {
         await execution.initialized;
+        await execution.phaseWork?.catch(() => {});
         await execution.hostWork;
         if (execution.rpc) {
           // Both commands are best effort; shutdown below is mandatory even if the command channel failed.
@@ -245,6 +278,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         const stderr = execution.conversation.text('system', 'stderr');
         if (stderr) transcript(execution, stderr);
         settleConversation(execution.run);
+        if (execution.run.lifecycle && status !== 'done' && status !== 'paused') {
+          execution.run.lifecycle.phase = 'assistance';
+          execution.run.lifecycle.exception = error || execution.run.blocker || 'Autonomous lifecycle stopped before publication; review partial evidence and reconcile before retry';
+        }
         if (error) execution.conversation.add('system', error, 'error');
         execution.run.status = status;
         if (execution.run.progress) execution.run.progress.phase = status === 'paused' ? 'Paused; execution slot retained' : 'Owned child work stopped';
@@ -271,6 +308,128 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     if (!execution.setup && !execution.stopping) void stop(execution, 'failed', execution.failed);
   }
 
+
+  function guard(execution: Execution) {
+    if (active !== execution || execution.stopping || execution.abort.signal.aborted || execution.failed) throw new Error('Autonomous phase no longer owns execution');
+    assertAutonomyAuthority(store, execution.run);
+  }
+
+  async function freshAuthority(execution: Execution) {
+    await reconcileTickets(store, true);
+    guard(execution);
+  }
+
+  async function recoverIncompleteVerification(execution: Execution): Promise<boolean> {
+    const lifecycle = execution.run.lifecycle!;
+    lifecycle.recoveries++;
+    lifecycle.phase = 'recovering';
+    persist(execution);
+    await freshAuthority(execution);
+    await authorStopped(execution);
+    guard(execution);
+    execution.result = null;
+    execution.run.verification = [];
+    execution.run.blocker = null;
+    execution.run.blockerDetails = undefined;
+    execution.continuation = 'One host-authorized recovery for incomplete_verification: finish ONLY the original missing verification and concrete criterion reports. No installs, new permissions, credentials, new product decisions, setup retries or unrelated repairs are authorized. Previously blocked work is not complete. If the original checks cannot run safely, submit the exact blocker again without a recoverableCause; assistance is required.';
+    await launch(execution.run, execution.repo, execution.ticket, true, execution);
+    return false;
+  }
+
+  async function authorStopped(execution: Execution) {
+    clearInterval(execution.poll);
+    if (execution.rpc) {
+      const stats = await execution.rpc.command('get_session_stats');
+      const tokens = object(stats.tokens);
+      const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+      if (!Object.keys(tokens).length || !Number.isFinite(total) || total < 0) throw new Error('Author did not expose valid cumulative token accounting');
+      execution.run.lifecycle!.authorTokens = Math.max(execution.run.lifecycle!.authorTokens, total);
+      const rpc = execution.rpc;
+      execution.rpc = null;
+      await rpc.command('goal', { op: 'pause' }, 3000).catch(() => {});
+      if (await rpc.shutdown() !== 0) throw new Error('Author did not shut down cleanly');
+    }
+    if (!await processGone(execution.run)) throw new Error('Author child work still exists');
+    execution.run.pid = null;
+    persist(execution);
+  }
+
+  async function autonomous(execution: Execution, resumeHost = false): Promise<boolean> {
+    const { run, repo, ticket } = execution;
+    const lifecycle = run.lifecycle!;
+    await freshAuthority(execution);
+    if (resumeHost && lifecycle.publication && await reconcilePublication(store, repo, run, () => guard(execution))) {
+      lifecycle.phase = 'complete'; persist(execution); return true;
+    }
+    lifecycle.phase = 'verifying';
+    persist(execution);
+    if (!resumeHost) {
+      await authorStopped(execution);
+      guard(execution);
+      lifecycle.candidate = await captureCandidate(store, repo, lifecycle.baseline, lifecycle.authorFiles);
+    } else if (!lifecycle.candidate) throw new Error('Paused host phase has no durable candidate; assistance required');
+    persist(execution);
+    if (run.progress) run.progress.phase = 'Host verification executing';
+    await freshAuthority(execution);
+    const verification = await verifyCandidate(store, repo, run, execution.abort.signal, () => guard(execution));
+    lifecycle.verification.push(verification);
+    persist(execution);
+    guard(execution);
+    let findings: string[];
+    if (verification.outcome !== 'passed') {
+      if (verification.outcome === 'blocked') throw new Error(`Host verification blocked: ${verification.output}`);
+      findings = [`Actual host verification failed (exit ${verification.exitCode}): ${verification.output}. Fix the demonstrated cause within this ticket; no installs or generic retries.`];
+    } else {
+      lifecycle.phase = 'reviewing';
+      persist(execution);
+      const previousTokens = lifecycle.reviewerTokens ?? 0;
+      await freshAuthority(execution);
+      const review = await reviewCandidate(store, repo, run, ticket, {
+        signal: execution.abort.signal, guard: () => guard(execution),
+        onSpawn: async pid => {
+          run.pid = pid; persist(execution);
+          await writeFile(join(privateDir(store, run.id), 'identity.json'), JSON.stringify(await identity(pid)), { mode: 0o600 });
+        },
+        onRpc: rpc => { execution.rpc = rpc; },
+        onTokens: total => {
+          lifecycle.reviewerTokens = previousTokens + total;
+          if (run.progress) run.progress.tokens = { total: lifecycle.authorTokens + lifecycle.reviewerTokens, sampled: Date.now(), basis: 'Cumulative OMP author session plus independent reviewer sessions' };
+          persist(execution); guard(execution);
+        },
+      });
+      execution.rpc = null;
+      if (!await processGone(run)) throw new Error('Reviewer child work still exists');
+      run.pid = null;
+      lifecycle.reviews.push(review);
+      persist(execution);
+      guard(execution);
+      if (review.verdict === 'inconclusive') throw new Error(`Independent review inconclusive: ${review.findings.join('\\n') || 'Acceptance evidence is insufficient'}`);
+      if (review.verdict === 'pass') {
+        lifecycle.phase = 'publishing';
+        persist(execution);
+        await freshAuthority(execution);
+        await assertCandidate(store, repo, lifecycle.candidate);
+        await publishCandidate(store, repo, run, () => guard(execution));
+        guard(execution);
+        lifecycle.phase = 'complete';
+        persist(execution);
+        return true;
+      }
+      findings = review.findings;
+    }
+    if (lifecycle.corrections >= Math.min(2, lifecycle.policy.maxCorrections)) throw new Error('Autonomous correction bound reached; assistance required');
+    lifecycle.corrections++;
+    lifecycle.phase = 'correcting';
+    execution.result = null;
+    run.verification = [];
+    run.evidence = [];
+    delete lifecycle.candidate;
+    execution.continuation = `Host-authorized correction ${lifecycle.corrections}; resume ONLY the original author session. Earlier agent verification is invalidated. Independently recheck every criterion and resubmit backlog_evidence and backlog_result. Address these exact findings, without expanding scope or weakening checks:\\n${findings.join('\\n')}`;
+    persist(execution);
+    guard(execution);
+    await launch(run, repo, ticket, true, execution);
+    return false;
+  }
   async function settled(execution: Execution) {
     if (execution.setup || execution.stopping || execution.settling || !execution.rpc) return;
     execution.settling = true;
@@ -282,7 +441,12 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       if (!execution.result) { await stop(execution, 'failed', 'OMP settled without a valid backlog_result submission; no completion was inferred'); return; }
       execution.run.evidence = execution.result.evidence;
       execution.run.blocker = execution.result.blocker;
-      await stop(execution, execution.result.status === 'complete' ? 'needs_review' : 'blocked');
+      if (execution.run.lifecycle && execution.result.status === 'complete') {
+        execution.phaseWork = autonomous(execution);
+        const complete = await execution.phaseWork;
+        execution.phaseWork = null;
+        if (complete && !execution.stopping) await stop(execution, 'done');
+      } else await stop(execution, execution.result.status === 'complete' ? 'needs_review' : 'blocked');
     } catch (error) { fail(execution, message(error)); }
     finally { execution.settling = false; }
   }
@@ -337,28 +501,46 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       execution.hostWork = execution.hostWork.then(async () => {
         try {
           if (typeof frame.id !== 'string' || execution.stopping) throw new Error('Run no longer accepts host tool submissions');
+          if (execution.run.lifecycle) {
+            await freshAuthority(execution);
+            if (!['implementing', 'correcting', 'recovering'].includes(execution.run.lifecycle.phase)) throw new Error('Author submissions are closed during host-owned phases');
+            const state = await execution.rpc?.command('get_state');
+            if (state?.sessionId !== execution.run.lifecycle.authorSessionId) throw new Error('Author submission came from a different session');
+          }
           let response: string;
           if (frame.toolName === 'backlog_evidence') {
+            execution.result = null;
             const receipt = await recordEvidence(store, execution.run, execution.ticket, frame.arguments);
             execution.run.verification = [...(execution.run.verification ?? []), receipt];
             if (execution.run.progress) execution.run.progress.phase = 'Verification submitted (agent report)';
             execution.result = null;
             response = `Receipt ${receipt.id} stored. Source: agent report; host recorded artifact bytes/hash only, not semantic correctness.`;
           } else if (frame.toolName === 'backlog_result') {
+            execution.result = null;
             const result = parseResult(frame.arguments, execution.ticket);
             if (result.status === 'complete') assertVerifiedCriteria(execution.ticket, execution.run.verification ?? []);
+            if (execution.run.lifecycle) {
+              const files = object(frame.arguments).files;
+              if (!Array.isArray(files) || files.length > 500 || files.some(path => typeof path !== 'string' || !path || path.length > 1000) || new Set(files).size !== files.length) throw new Error('Autonomous results require the exact authored file list (files), including deletions; use [] for no-op');
+              execution.run.lifecycle.authorFiles = files as string[];
+            }
             execution.result = result;
             execution.run.evidence = result.evidence;
             execution.run.blocker = result.blocker;
             execution.run.blockerDetails = result.details;
-            response = result.status === 'blocked' ? 'Blocker recorded. Host will pause and stop goal continuation; do not complete an unmet goal.' : 'Result recorded for human review, not marked Done. Complete your achieved goal and settle; do not start another ticket.';
+            response = result.status === 'blocked' ? 'Blocker recorded. Host will stop goal continuation; do not complete an unmet goal.' : execution.run.lifecycle ? 'Author report recorded, not Done. Settle now; the host independently verifies, reviews and publishes. You have no commit authority.' : 'Result recorded for human review, not marked Done. Complete your achieved goal and settle; do not start another ticket.';
           } else throw new Error('Unknown host tool');
           execution.conversation.hostResult(frame, response);
           persist(execution);
           execution.rpc?.send({ type: 'host_tool_result', id: frame.id, result: { content: [{ type: 'text', text: response }] } });
           if (execution.result?.status === 'blocked') {
-            // Stop after the serialized submission returns, never ask the model to complete an unmet goal.
-            void stop(execution, 'blocked');
+            if (safeIncompleteVerificationRecovery(execution.run, execution.ticket, frame.arguments)) {
+              execution.run.lifecycle!.phase = 'recovering';
+              queueMicrotask(() => {
+                execution.phaseWork = recoverIncompleteVerification(execution);
+                void execution.phaseWork.catch(error => fail(execution, message(error)));
+              });
+            } else void stop(execution, 'blocked');
           }
         } catch (error) {
           execution.conversation.hostResult(frame, message(error), true);
@@ -374,10 +556,22 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     if (frame.type === 'session_settled' || (frame.type === 'prompt_result' && frame.sessionSettled === true)) void settled(execution);
   }
 
-  async function launch(run: Run, repo: Repo, ticket: Ticket, resume = false) {
+  async function launch(run: Run, repo: Repo, ticket: Ticket, resume = false, continuing?: Execution) {
     const initialized = Promise.withResolvers<void>();
-    const execution: Execution = { run, repo, ticket, rpc: null, result: null, setup: true, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: false, failed: null, conversation: new RunConversation(run), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve() };
+    const execution: Execution = continuing ?? { run, repo, ticket, rpc: null, result: null, setup: true, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: false, failed: null, conversation: new RunConversation(run), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve(), abort: new AbortController(), phaseWork: null };
+    if (continuing) {
+      execution.initialized = initialized.promise;
+      execution.initializedResolve = initialized.resolve;
+      execution.setup = true;
+      execution.polling = false;
+      clearTimeout(execution.deadline);
+    }
     active = execution;
+    if (run.lifecycle && !continuing) {
+      run.lifecycle.phase = 'implementing';
+      delete run.lifecycle.candidate;
+      execution.result = null;
+    }
     if (!resume) execution.conversation.add('user', `Execute ticket ${ticket.id}: ${ticket.title}\n\n${ticket.markdown}`);
     else {
       if (!run.conversation) execution.conversation.add('system', `Earlier activity was recorded only as a legacy transcript; no structured details were recovered.\n\n${run.transcript}`);
@@ -389,6 +583,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     const remaining = settings.timeLimitMinutes * 60_000 - (Date.now() - run.started);
     execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Execution time budget exhausted; explicit review required'); }, Math.max(1, remaining));
     try {
+      if (run.lifecycle) guard(execution);
+      if (run.lifecycle && !resume) await assertCandidate(store, repo, run.lifecycle.baseline);
       const directory = privateDir(store, run.id);
       await mkdir(directory, { recursive: true, mode: 0o700 });
       await chmod(directory, 0o700);
@@ -414,12 +610,12 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         },
         onFrame: (frame) => onFrame(execution, frame),
         onStderr: (text) => { execution.conversation.stderr(text); persist(execution); },
-        onFailure: (error) => fail(execution, message(error)),
+        onFailure: (error) => { if (execution.rpc && (!run.lifecycle || ['implementing', 'correcting', 'recovering'].includes(run.lifecycle.phase))) fail(execution, message(error)); },
       });
       execution.rpc = rpc;
       if (execution.stopping) { execution.setup = false; execution.initializedResolve(); return; }
       void rpc.exited.then(() => {
-        if (!execution.stopping) fail(execution, 'OMP exited unexpectedly; its session was not inferred complete');
+        if (!execution.stopping && execution.rpc === rpc) fail(execution, 'OMP exited unexpectedly; its session was not inferred complete');
       });
       const state = await rpc.command('get_state');
       if (typeof state.sessionId !== 'string' || typeof state.sessionFile !== 'string') throw new Error('OMP did not expose a durable session identity');
@@ -430,6 +626,16 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       }
       run.sessionId = state.sessionId;
       run.sessionFile = state.sessionFile;
+      if (run.lifecycle) {
+        if (run.lifecycle.authorSessionId && state.sessionId !== run.lifecycle.authorSessionId) throw new Error('Autonomous correction must resume the original author session');
+        run.lifecycle.authorSessionId = state.sessionId;
+        run.lifecycle.authorSessionFile = state.sessionFile;
+        if (!run.lifecycle.reviewerModel) {
+          const authorModel = object(state.model);
+          if (typeof authorModel.provider !== 'string' || !authorModel.provider || typeof authorModel.id !== 'string' || !authorModel.id) throw new Error('Author must expose the exact model for independent reviewer inheritance');
+          run.lifecycle.reviewerModel = run.lifecycle.policy.reviewerModel || `${authorModel.provider}/${authorModel.id}`;
+        }
+      }
       persist(execution);
       if (!resume && settings.thinking) {
         const supported = await rpc.command('get_available_thinking_levels');
@@ -453,6 +659,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             permission: { type: 'string', description: 'Required permission or operator-only prerequisite; recommendation is not authorization. Max 2000 characters.' },
             verification: { type: 'string', description: 'Original checks to perform after recovery. Max 2000 characters.' },
             recoveryPrompt: { type: 'string', description: 'Suggested recovery instructions for operator review, never permission to bypass policy. No secrets. Max 8000 characters.' },
+            files: { type: 'array', items: { type: 'string' }, description: 'Autonomous only: exact repository-relative authored paths, including deleted files. [] for no-op.' },
+            recoverableCause: { type: 'string', enum: ['incomplete_verification'], description: 'Autonomous only: exact blocker is unfinished original verification, not missing permissions/setup/credentials. One bounded original-author continuation; never generic retry.' },
           }, required: ['revision', 'status', 'evidence'], additionalProperties: false,
         },
       }, {
@@ -485,9 +693,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         'Before completion, call backlog_evidence for each criterion and affected journey: exact criterion, feature, entryPoint, method/command, outcome, details including observed exit status/side effects, and recipe path+hash (or explicit missing-recipe reason). Submit failures/not-run honestly. Recheck the same journey/method after fixes. Optional sanitized png/jpg/txt/json artifacts are base64 bytes, not filesystem paths; never include credentials, cookies, sessions or secrets. All current reported checks must pass for completion; host storage does not attest their truth.',
         ...store.list('runs').filter(previous => previous.id !== run.id && previous.repoId === repo.id && previous.ticketId === ticket.id && previous.reviewFeedback).sort((a, b) => b.started - a.started).slice(0, 5).map(previous => `Human change request on run ${previous.id}, revision ${previous.revision}${previous.revision !== run.revision ? ' (older requirements; reconcile against current ticket)' : ''}:\n${previous.reviewFeedback!.message}`),
         ...recoveryObjective(run),
-        'On completion call backlog_result with the exact revision, status:"complete", and one {criterion,evidence} per exact criterion below. Evidence must state observed verification, commands/results and relevant files; never claim unperformed checks passed. Visual/subjective criteria remain for human review.',
+        run.lifecycle ? 'On completion submit backlog_result with exact revision, status:"complete", exact authored files array (including deletions; [] for no-op) and concrete evidence for every criterion. This is an author report ONLY, not acceptance. Then settle. The host independently executes the authorized recipe, launches a fresh restricted reviewer and may publish. Never commit or claim Done. Insufficient subjective evidence stays inconclusive.' : 'On completion call backlog_result with the exact revision, status:"complete", and one {criterion,evidence} per exact criterion below. Evidence must state observed verification, commands/results and relevant files; never claim unperformed checks passed. Visual/subjective criteria remain for human review.',
         'If blocked call backlog_result with status:"blocked", partial observed evidence, prerequisite and unblock (each at most 2000 characters). Include attempted fixes/outcomes, permission needed, verification to recheck (attempted/permission/verification: each at most 2000 characters) and a suggested recoveryPrompt (at most 8000 characters). Never include secrets. Suggestions are not authorization. Host pauses goal continuation and stops owned child work. Do NOT complete an unmet goal. A successful command, agent yield or exit alone is NOT completion.',
         `Revision: ${run.revision}\nAcceptance criteria:\n${ticket.criteria.map((criterion) => `- ${criterion}`).join('\n')}`,
+        ...(execution.continuation ? [execution.continuation] : []),
         `\nSelected ticket snapshot:\n${ticket.markdown}`,
       ].join('\n\n');
       if (execution.stopping) { execution.setup = false; execution.initializedResolve(); return; }
@@ -495,7 +704,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       if (resume) {
         // Prompt before automatic continuation so cancelled dialogs cannot become permission.
         await rpc.command('prompt', {
-          message: `The operator explicitly resumed this same ticket/session. Any question or approval cancelled by the pause remains UNANSWERED, not authorized. Ask it again and wait for an explicit new response before the gated action. The backlog_result host tool is available again; submit exact criterion evidence through it, not an xd:// device.\n\n${objective}`,
+          message: `${execution.continuation || 'The operator explicitly resumed this same ticket/session. Any question or approval cancelled by the pause remains UNANSWERED, not authorized. Ask it again and wait for an explicit new response before the gated action.'} The backlog_result host tool is available again; submit exact criterion evidence through it, not an xd:// device.\n\n${objective}`,
         });
         if (!execution.failed && !execution.stopping) await rpc.command('goal', { op: 'resume' });
       } else {
@@ -526,24 +735,30 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         execution.polling = true;
         void (async () => {
           const stats = await rpc.command('get_session_stats');
+          if (run.lifecycle) guard(execution);
           const tokens = object(stats.tokens);
           const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+          if (run.lifecycle && (!Object.keys(tokens).length || !Number.isFinite(total) || total < 0)) throw new Error('Author did not expose valid cumulative token accounting');
           if (execution.run.progress && Number.isFinite(total) && total >= 0 && Object.keys(tokens).length) {
-            execution.run.progress.tokens = { total, sampled: Date.now(), basis: 'OMP get_session_stats session total (includes input/output/cache; not goal-only or a spending limit)' };
+            if (run.lifecycle) run.lifecycle.authorTokens = Math.max(run.lifecycle.authorTokens, total);
+            execution.run.progress.tokens = { total: run.lifecycle ? run.lifecycle.authorTokens + (run.lifecycle.reviewerTokens ?? 0) : total, sampled: Date.now(), basis: run.lifecycle ? 'Cumulative OMP author session plus independent reviewer sessions' : 'OMP get_session_stats session total (includes input/output/cache; not goal-only or a spending limit)' };
             persist(execution);
           }
-          if (settings.tokenBudget !== null && total >= settings.tokenBudget) { await stop(execution, 'failed', 'Execution token budget exhausted; explicit review required'); return; }
+          if (settings.tokenBudget !== null && (run.progress?.tokens?.total ?? total) >= settings.tokenBudget) { await stop(execution, 'failed', 'Execution token budget exhausted; explicit review required'); return; }
           const current = await rpc.command('get_state');
           if (current.sessionId !== run.sessionId) throw new Error('OMP changed session identity during execution');
           sampleRunState(run, current);
           persist(execution);
           if (current.isSettled === true) await settled(execution);
-        })().catch((error: unknown) => fail(execution, message(error))).finally(() => { execution.polling = false; });
+        })().catch((error: unknown) => {
+          if (!run.lifecycle || ['implementing', 'correcting', 'recovering'].includes(run.lifecycle.phase)) fail(execution, message(error));
+        }).finally(() => { execution.polling = false; });
       }, 3_000);
       await settled(execution);
     } catch (error) {
       execution.setup = false;
       execution.initializedResolve();
+      if (continuing) throw error;
       await stop(execution, 'failed', redact(message(error)));
     } finally {
       execution.setup = false;
@@ -583,7 +798,25 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         run.status = 'stopping'; run.error = uncertain; run.dialog = null;
         store.save('runs', run); updateTicket(run, 'stopping');
       } else {
+        const publicationRepo = store.get('repos', run.repoId);
+        if (run.lifecycle?.publication && publicationRepo) {
+          try {
+            await reconcileTickets(store, true);
+            const reconciled = await reconcilePublication(store, publicationRepo, run, () => assertAutonomyAuthority(store, { ...run, status: 'running' }));
+            if (reconciled) {
+              run.lifecycle.phase = 'complete';
+              run.status = 'done'; run.error = null; run.pid = null; run.finished = Date.now(); run.dialog = null;
+              settleConversation(run);
+              store.save('runs', run); updateTicket(run, 'done'); store.notify();
+              continue;
+            }
+          } catch (error) { run.lifecycle.exception = `Publication reconciliation requires assistance: ${redact(message(error))}`; }
+        }
         run.status = 'interrupted'; run.error = 'Backend or process interrupted this run. Review partial changes and explicitly retry; no actions were replayed.';
+        if (run.lifecycle) {
+          run.lifecycle.phase = 'assistance';
+          run.lifecycle.exception ||= run.error;
+        }
         settleConversation(run);
         run.pid = null; run.finished = Date.now(); run.dialog = null;
         const repo = store.get('repos', run.repoId);
@@ -615,6 +848,9 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     await reconcileTickets(store);
     syncWatchers();
     await recover();
+    if (active?.run.lifecycle && !active.stopping) {
+      try { guard(active); } catch (error) { await stop(active, 'blocked', message(error)); }
+    }
     if (active?.run.status === 'stopping' && !active.stopping) {
       await stop(active, 'interrupted', active.run.error);
     }
@@ -638,13 +874,29 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             break; // One project gate, not a blocked synthetic run for every queued ticket.
           }
         }
+        let lifecycle: Run['lifecycle'];
+        if (repo.completion?.mode === 'autonomous') {
+          try {
+            const policy = structuredClone(repo.completion);
+            const baseline = await captureBaseline(store, repo);
+            const recipeHash = await recipeIdentity(repo, policy.verification);
+            if (recipeHash !== policy.recipeHash) throw new Error('Authorized verification recipe changed; explicitly review and save completion policy again');
+            lifecycle = { policy, phase: 'implementing', baseline, recipeHash, corrections: 0, recoveries: 0, authorTokens: 0, reviewerTokens: 0, verification: [], reviews: [] };
+          } catch (error) {
+            const current = store.get('repos', repo.id);
+            if (current) store.save('repos', { ...current, handoff: { id: crypto.randomUUID(), runId: null, detected: Date.now(), files: [], reason: `Autonomous admission blocked: ${redact(message(error))}` } });
+            break;
+          }
+        }
         const claimed = store.transaction(() => {
           const freshRepo = store.get('repos', repo.id);
           const fresh = store.get('tickets', key(candidate));
           if (!fresh || !freshRepo || store.settings().paused || !eligible(store, freshRepo, fresh) || fresh.revision !== candidate.revision || store.list('runs').some((run) => CLAIMED.includes(run.status))) return null;
+          if (lifecycle && (freshRepo.completion?.mode !== 'autonomous' || freshRepo.completion.revision !== lifecycle.policy.revision)) return null;
           const run: Run = { id: crypto.randomUUID(), repoId: repo.id, ticketId: fresh.id, revision: fresh.revision, status: 'running', started: Date.now(), finished: null, pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
           run.recoveryContext = recoveryContext(store, fresh);
           run.configuration = resolveRunConfiguration(store.settings(), fresh);
+          if (lifecycle) run.lifecycle = lifecycle;
           store.save('runs', run);
           store.save('tickets', { ...fresh, status: 'running', runId: run.id });
           store.save('repos', { ...freshRepo, lastStarted: run.started });
@@ -695,6 +947,20 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     const ticket = JSON.parse(await readFile(join(privateDir(store, run.id), 'ticket.json'), 'utf8')) as Ticket;
     run.status = 'running'; run.finished = null; run.error = null;
     store.transaction(() => { store.save('runs', run); updateTicket(run, 'running'); });
+    if (run.lifecycle && ['verifying', 'reviewing', 'publishing'].includes(run.lifecycle.phase)) {
+      const initialized = Promise.withResolvers<void>(); initialized.resolve();
+      const execution: Execution = { run, repo, ticket, rpc: null, result: null, setup: false, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: true, failed: null, conversation: new RunConversation(run), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve(), abort: new AbortController(), phaseWork: null };
+      active = execution;
+      execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Whole-attempt execution deadline exhausted'); }, Math.max(1, (run.progress?.deadline ?? run.started) - Date.now()));
+      execution.phaseWork = autonomous(execution, true);
+      try {
+        const complete = await execution.phaseWork;
+        execution.phaseWork = null;
+        if (complete && !execution.stopping) await stop(execution, 'done');
+      } catch (error) { fail(execution, message(error)); }
+      finally { execution.settling = false; }
+      return;
+    }
     await launch(run, repo, ticket, true);
   }
 
