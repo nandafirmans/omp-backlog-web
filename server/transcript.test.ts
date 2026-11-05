@@ -4,6 +4,13 @@ import { redactTranscript, RunConversation, settleConversation, transcriptValue 
 
 function run() { return { transcript: 'Old plain transcript\n', status: 'running' } as Run; }
 
+test('large command output remains bounded work without leaking long credential fields', () => {
+  const ordinary = 'x'.repeat(60000);
+  expect(redactTranscript(ordinary)).toBe(ordinary);
+  const field = 'project.'.repeat(8000) + 'api_token';
+  expect(redactTranscript(`${field}="synthetic-value"`)).toBe(`${field}=[redacted]`);
+});
+
 test('consumer correlates tool snapshots, stream previews and final errors without appending duplicates', () => {
   const value = run();
   const conversation = new RunConversation(value);

@@ -14,8 +14,8 @@ function bounded(text: string, limit = FIELD_LIMIT) { return text.length > limit
 export function redactTranscript(text: string) {
   return text.replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g, '[redacted private key]')
     .replace(/\b(?:sk-[A-Za-z0-9_-]*|(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]*|xox[baprs]-[A-Za-z0-9-]*|(?:AKIA|ASIA)[A-Z0-9]{16}|eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*|Bearer\s+[^\s"'\\,;}]+)/gi, '[redacted]')
-    .replace(/((?:[\w.-]*(?:api[_-]?key|token|authorization|password|passwd|secret|private[_-]?key|credential|cookie|session[_-]?(?:id|key|token))|auth|session)["'\\]*\s*[=:]\s*)(?:\\?"(?:\\.|[^"\\])*(?:"|$)|'[^']*(?:'|$)|[^\s,;}]+)/gi, '$1[redacted]')
-    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, '$1[redacted]@')
+    .replace(/(?<![\w.-])((?:[\w.-]*(?:api[_-]?key|token|authorization|password|passwd|secret|private[_-]?key|credential|cookie|session[_-]?(?:id|key|token))|auth|session)["'\\]*\s*[=:]\s*)(?:\\?"(?:\\.|[^"\\])*(?:"|$)|'[^']*(?:'|$)|[^\s,;}]+)/gi, '$1[redacted]')
+    .replace(/(?<![\w+.-])([a-z][a-z0-9+.-]*:\/\/)[^\s/:@]+:[^\s/@]+@/gi, '$1[redacted]@')
     .replace(/data:[\w/+.-]+;base64,[A-Za-z0-9+/=\s]*/gi, '[base64 bytes omitted]')
     .replace(/((?:base64|image_data|bytes)["'\\]*\s*[=:]\s*)(?:\\?"(?:\\.|[^"\\])*(?:"|$)|'[^']*(?:'|$)|[^\s,;}]+)/gi, '$1[base64 bytes omitted]');
 }
