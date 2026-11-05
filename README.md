@@ -8,7 +8,7 @@ UI conventions and consistency checks: [Workspace design language](docs/design-l
 
 ## Start
 
-Requires Linux (process recovery uses `/proc`), Bun 1.3+, and an installed, configured `omp` for agent execution.
+Requires Linux (process recovery uses `/proc`), Bun 1.3+, and an installed, configured `omp` for agent execution. Ticket implementation also requires the installed [pstack-pi fork](https://github.com/nandafirmans/oh-my-pstack), with native `poteto-mode` and `pstack-pi` skill commands enabled and the native `task` tool available. The app does not install plugins or change global OMP settings.
 
 ```bash
 cd ~/Development/omp-backlog-web
@@ -103,6 +103,20 @@ Reference: [Synthetic records](attachments/records.json)
 
 `depends_on: []` means no prerequisites. Use `[T001, T002]` only when those tickets must be Done before this one starts. Existing tickets with an **Acceptance criteria** heading remain supported; separate Goal, Requirements, Scope, and Verification sections are optional.
 
+### Default engineering workflow
+
+Every fresh ticket implementation invokes the installed `poteto-mode` router automatically. Tickets do not need a `/skill:poteto-mode` mention. The router selects the relevant engineering playbook and uses the installed `pstack-pi` adapter, native OMP delegation, and the target project's verification guidance.
+
+Before prompting, the author RPC session must expose both native skill commands through `get_available_commands` and `task` through `get_state`. Missing or disabled skills reject execution with setup diagnostics and require explicit retry. Startup submits one native `/skill:poteto-mode` prompt and observes its actual `skill-prompt` message before creating the native goal. The bounded startup observation sends no second prompt. It is not an implementation retry loop.
+
+Pause/resume, bounded correction, and incomplete-verification recovery preserve the same author session and do not initialize another router run. Each new author process checks skill availability again. Model/thinking overrides, the original deadline, cumulative token accounting, and native compaction remain unchanged.
+
+pstack supplies methodology, not permissions. The author system prompt and ticket objective keep imported shipping/autonomy instructions subordinate to host policy. Scheduling, revision-bound acceptance, evidence contracts, host verification, restricted independent review, local publication, and Done remain host-controlled. Human-reviewed completion still stops at Needs review. Create with agent drafting and the restricted acceptance reviewer do not load the router.
+
+Run conversation/transcript records the router path reported by OMP's native invocation message. Skill/playbook reads remain ordinary tool observations; loading text does not prove adherence or acceptance. Package version or revision is not inferred from a skill name.
+
+Optional installed-environment discovery checks use `OMP_BACKLOG_NATIVE_TESTS=1 bun test server/engineering-native.test.ts`. They exercise the author RPC launch profile with installed, disabled, and isolated missing-plugin controls plus a synthetic project-local verification skill. They submit no inference and do not prove live-provider completion.
+
 ### Create with agent (optional)
 
 **New ticket** opens the manual Markdown/import drawer and creates tickets directly, without an agent. The sibling **Create with agent** action opens a dedicated page; the board and manual drawer are not stacked behind the conversation.
@@ -118,7 +132,7 @@ Reference: [Synthetic records](attachments/records.json)
 
 Drafts/uploads remain tab-local until creation; reload discards the conversation and staged files. Changing views preserves them. Assisted publication retries within the ten-minute confirmation lifetime return the same unchanged ticket, not a duplicate. Backend restart/expiry requires renewed review; existing IDs are never overwritten. Atomic assisted publication requires Linux/glibc `renameat2(RENAME_NOREPLACE)` and filesystem support; unsupported environments fail closed while manual creation remains available.
 
-Drafting and execution-model discovery support audited **OMP v18.12.6, v18.13.1 and v18.13.3** ([18.13.3 compatibility scope](docs/omp-18.13.3-compatibility.md)). They use a private HOME/config/discovery namespace and working directory, no model tools or executable project discovery, and bounded host-selected context. Existing local OMP authentication stays inside OMP; executable config-based credential resolution and custom model/plugin configuration are not inherited. Configure provider authentication outside this website. This capability restriction is **not an OS sandbox**. Explicit metadata/model selection can make discovery/auth requests and OMP's credential-less connection probe; no drafting inference runs before Send.
+Drafting, execution-model discovery, and restricted acceptance review support audited **OMP v18.12.6, v18.13.1, v18.13.3, and v18.16.0** ([18.16.0 compatibility and namespace isolation](docs/omp-18.16.0-compatibility.md)). They use a private HOME/config/discovery namespace and working directory, no ambient executable project discovery, and bounded host-selected context. The reviewer receives only its three host acceptance tools; drafting has no model tools. Existing local OMP authentication stays inside OMP; executable config-based credential resolution and custom model/plugin configuration are not inherited. Configure provider authentication outside this website. These capability restrictions are **not an OS sandbox**. Explicit metadata/model selection can make discovery/auth requests and OMP's credential-less connection probe; no drafting inference runs before Send.
 
 Drafting limits: four live conversations; 32 KiB prompt; 128 KiB per text reference; 512 KiB per image subject to 256 KiB combined readable context and the inbound RPC frame limit; 16 turns; 32K accounted session tokens; two minutes/turn; ten-minute idle and 45-minute session expiry. Ordinary ticket attachment limits still apply. Previously transmitted images prevent switching that conversation to a text-only model; start a fresh conversation instead.
 

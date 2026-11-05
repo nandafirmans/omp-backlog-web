@@ -443,7 +443,7 @@ Status: partially implemented; delivery boundaries below. Adopt the useful workf
 
 ### Broader component candidates, not blanket parity
 
-- Current opt-in independent review is implemented in section 12. Broader investigation, bug-fix, feature/refactoring recipes and risk-scaled panels remain candidates; no always-on multi-model fan-out is implied.
+- Current opt-in independent acceptance review is implemented in section 12. Phase 5 now invokes the installed engineering router for investigation, bug-fix, feature/refactoring, and other matching playbooks. This does not import another scheduler or require always-on multi-model fan-out; broader host-specific integrations remain separately scoped.
 - Specialized candidates: measured performance/hillclimb recipes, competing designs for uncertain interfaces, and targeted formal/property checks for costly lifecycle invariants. A model must stay synchronized with code and demonstrate sensitivity to a deliberate scratch failure; model/diagram success is not whole-app proof. Tool installation needs separate approval.
 - Defer PR watching/shipping, multiday orchestration, autonomous landing, Benny Slack/tracker integrations and webhook control until separately scoped and approved. Existing human Done remains ticket acceptance, not external-write or merge permission.
 - Review upstream helpers before invoking them: some install dependencies on first use, watcher timeout defaults can be unbounded, and executable mapping files are trusted code. Impose explicit host budgets/ownership and preserve existing network, secret and destructive-action restrictions.
@@ -476,6 +476,15 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 
 - Later explicit extension: global and per-ticket **No cumulative token limit** with cost warning/save confirmation. `null` is uncapped; omitted ticket cap inherits; numeric cap still bounds usage. Native goal omits `token_budget` and host skips only that token check; accounting, native compaction, fixed finite deadline, ownership and acceptance gates remain. Existing defaults/runs are not silently changed. Legacy resumes retain recorded progress limits when available. Browser/UI and lint verification only; additional backend/protocol tests added, not run. No guarantee of automatic completion or waived provider/account limits.
 
+### Phase 5 default engineering router
+
+- Authorized ticket implementation now requires native `poteto-mode` and `pstack-pi` skill commands plus the native `task` tool in the actual author RPC session. Missing or disabled discovery fails before the implementation prompt with actionable setup diagnostics. No plugin installation or global configuration mutation is performed.
+- Fresh authors invoke the installed router through native `/skill:poteto-mode` dispatch, not an implicit ticket mention. The host observes OMP's prompt-bound native skill record and retains its resolved path in existing run conversation/transcript storage. Playbook and project-verification reads remain observed tool activity, not proof of workflow compliance or acceptance.
+- Same-session resume, bounded correction, and recovery retain the original workflow and do not initialize another router run. Model/thinking overrides, native goal continuation/compaction, budgets, evidence contracts, Human Needs review, and Autonomous host checks/restricted review/publication remain separate.
+- Imported pstack autonomy/shipping instructions are subordinate to the host contract in the author system prompt and immutable objective. No scheduler, generic retry loop, settings UI, copied skills, ticket-agent commit grant, or executable plugin discovery in the restricted reviewer is added.
+- Installed OMP 18.16.0 support includes a reproduced and corrected restricted-startup ancestor-plugin namespace gap. Private `work/.omp` now anchors plugin resolution; executable discovery remains disabled for acceptance review. Exact-version source audit and real positive/negative import controls are documented in [compatibility evidence](docs/omp-18.16.0-compatibility.md).
+- Verification and current installed-version limits are recorded in [Current agent workflow](docs/current-agent-workflow.md#implementation-and-verification). Broader pstack parity, external shipping automation, and exhaustive provider/playbook coverage remain outside this delivery.
+
 ## 12. Opt-in autonomous local completion
 
 Authorized implementation extends the existing OMP scheduler, not Cursor/Codex execution or an imported pstack loop. Current operating contract: [Autonomous completion](docs/current-agent-workflow.md#autonomous-completion); original pre-implementation design: [lifecycle research](docs/autonomous-ticket-lifecycle-research.md).
@@ -486,9 +495,9 @@ Authorized implementation extends the existing OMP scheduler, not Cursor/Codex e
 - One optional `incomplete_verification` continuation finishes only the original checks when complete criterion evidence and existing authority permit it. No general install/setup repair, credential invention or automatic interrupted mutation replay.
 - Durable publication intent recognizes the existing exact commit after crash, preserves unrelated staging/foreign locks and does not duplicate commits. Verified no-op Done creates no empty commit. Existing handoff gates are never implicitly cleared.
 - UI separates project start/completion settings, commissioned policy confirmation, run stages/host proof/review/publication, and assistance count/filter. Default human review and operator Review & commit remain.
-- Verification uses disposable Git/protocol children plus actual authenticated browser surfaces, not a real provider. No registered project was enabled, no production repository commit was made and no build was run. Current check results and private proof are recorded in the workflow/design-language verification entries; full-suite limitations remain explicit.
+- Initial verification used disposable Git/protocol children and authenticated browser surfaces, not a real provider. Phase 5 subsequently exercised real native OMP/provider Human Needs review, autonomous host verification/fresh restricted review/guarded local publication/Done, and dependent Investigation no-op completion. All projects/data were disposable. No production repository commit or build was made; exact results and coverage limits are in the current workflow.
 
-This does not claim pstack parity, OS sandboxing/authorship attestation, live-provider readiness, exhaustive acceptance coverage, or push/PR/merge/deploy authority. Each project needs its own commissioned meaningful recipe; unsupported workspace/file modes require assistance.
+This does not claim full pstack parity, OS sandboxing/authorship attestation, universal provider/environment readiness, exhaustive acceptance coverage, or push/PR/merge/deploy authority. Each project needs its own commissioned meaningful recipe; unsupported workspace/file modes require assistance.
 
 ## Initialization delivery
 

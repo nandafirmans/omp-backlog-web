@@ -89,9 +89,48 @@ Markdown and requirement attachments determine the ticket revision. Changing the
 
 ### Implementation and verification
 
+Fresh implementation sessions now use the installed [pstack-pi fork](https://github.com/nandafirmans/oh-my-pstack) by default. This applies to Human review and Autonomous completion projects, not the separate ticket-drafting conversation or restricted acceptance reviewer.
+
+`server/engineering.ts` checks the actual author RPC session's `get_available_commands` for native `skill:poteto-mode` and `skill:pstack-pi`, and `get_state.dumpTools` for `task`. Missing/disabled discovery stops before the implementation prompt and native goal. No plugin installation, global setting change, filesystem discovery replacement, or fallback methodology is attempted.
+
+`launch()` submits `/skill:poteto-mode` with the immutable objective once per fresh author session. OMP expands the installed router. A bounded, abortable metadata observation waits for the native `custom` / `skill-prompt` record bound to that submitted prompt, then records its resolved router path in the existing run conversation and transcript. Native prompt success alone does not establish skill loading. OMP canonicalizes the recorded prompt's surrounding whitespace.
+
+The router selects and reads its installed engineering playbook; the objective requires an explicit `skill://pstack-pi` read and preserves project-local verification instructions. Observed reads remain tool observations, not proof that a playbook was followed. Package revision/version remains unknown unless separately observed; the app does not derive it from a skill mention.
+
+Same-session resume, bounded correction, and recovery recheck native availability without invoking the router again or resetting investigation, accounting, or limits. Native OMP still owns goal continuation and compaction. The appended author system prompt and immutable objective keep imported playbooks subordinate to host authorization, evidence, independent review, publication, and Done gates. pstack review is never the restricted host acceptance review.
+
 Agent instructions require reading applicable project verification skills and relevant feature-map entries, then exercising affected entry points independently. One convenient UI route does not prove alternate routes. The host does not independently attest that the agent followed those instructions.
 
 Agents must respect target repository check policy and time/token limits. Missing required setup or tools remain blocked/unverified; no automatic dependency installation, credential invention or weakened acceptance is authorized. Commissioning this app's verification skill does not commission a skill for every registered project.
+
+#### Phase 5 verification, November 5, 2026
+
+Baseline was clean `main` at `652d5d746f7c87b395a802dbc35f2c9aee5849f1`. Installed OMP was 18.16.0. Separate installation inspection found enabled `pstack-pi` 0.15.36-pi.1; installed router/adapter bytes matched the local intended fork. Runtime provenance records only OMP's observed invocation path and tool reads, not an invented package revision or adherence claim.
+
+The installed-version audit found and reproduced an existing restricted-startup ancestor-plugin import gap. The private working directory now has its own empty `.omp` namespace anchor as well as `.git`. Exact 18.16.0 support was added only after source review and real positive/negative executable-import controls. Reviewer plugin discovery was not enabled. See [compatibility evidence and source links](omp-18.16.0-compatibility.md).
+
+Executed checks:
+
+- Focused runtime, autonomy, admission, execution-settings, drafting, and API regressions passed **67 tests**, with six opt-in native/live tests skipped in the ordinary run. Exact command files are `runtime-integration`, `autonomy-runtime`, `runtime`, `acceptance`, `execution`, `drafting`, `drafting-api`, `engineering-native`, `engineering-live`, and `restricted-native`, all under `server/` with `.test.ts`.
+- `OMP_BACKLOG_NATIVE_TESTS=1 bun test server/engineering-native.test.ts server/restricted-native.test.ts` passed all five installed-OMP RPC tests. Controls cover installed/disabled/missing pstack, project-local skill compatibility, native task discovery, and ancestor-plugin import isolation.
+- `OMP_BACKLOG_LIVE_TESTS=1 bun test server/engineering-live.test.ts` passed its bounded real-provider implementation test. It independently executed both CLI outputs after the run, in addition to inspecting author receipts and the stopped Human Needs review state.
+- Changed-code ESLint and strict `tsc --noEmit` passed. No production build or new browser/UI check ran. Existing frontend architecture was unchanged.
+
+Real runtime/provider observations used disposable repositories and private data, `openai-codex/gpt-6.1-sol`, thinking low, four-minute per-attempt deadlines, and finite cumulative token caps:
+
+| Journey | Observed playbook read | Final state | Host verification | Fresh restricted acceptance review | Publication |
+| --- | --- | --- | --- | --- | --- |
+| Human-reviewed greeting fix | Bug fix | Needs review, no owned PID | Not commissioned | Not commissioned | None |
+| Autonomous T001 greeting fix | Bug fix | Done, no owned PID | Passed, exit 0 | Pass on exact candidate, distinct session | One guarded local commit |
+| Dependent autonomous T002 read-only explanation | Investigation | Done, no owned PID | Passed, exit 0 | Pass on exact candidate, distinct session | Verified no-op, no empty commit |
+
+Human proof is retained at `/tmp/omp-engineering-live-tucYP2/proof.json`. Autonomous proof is `/tmp/backlog-pstack-autonomous-live-8pQ0nH/proof.json`. T002 admission occurred after T001's recorded finish. The disposable completion commit is `0b0255f545b3bdf288a87e8bd79a773dccc79a53`, on candidate tree `9af3890cabba49e65aa8bc4daa9b97515ac484af`; the final worktree was clean. The application repository was not committed, and no push, PR, merge, deployment, installation, or production-ticket execution occurred.
+
+The runtime review passed its implementation/lifecycle slice. The later security/compatibility review passed the corrected private-namespace and exact-version changes. Final test-contract and evidence reviews covered their assigned test/proof scopes. These are complementary scoped judgments, not independent full-generation audits or a claim of model diversity. Parent-executed checks remain separate from those judgments and from author claims.
+
+Earlier experiments caught an incorrect prompt-acknowledgement assumption and native whitespace normalization before delivery. A 120,000-token synthetic attempt reached its existing cumulative accounting limit and stopped; successful later experiments used fresh disposable attempts capped at 600,000. The unchanged new-store default is 100,000 cumulative tokens, including cache accounting. These successful smokes do not establish that the default cap is sufficient for pstack. Review the existing ticket budget explicitly before regular execution; no automatic increase was made. No failed attempt was silently replayed or had its budget reset.
+
+This does not establish every playbook, provider, browser acceptance journey, real native-compaction trigger, live pause/correction/blocker scenario, or exhaustive feature-map coverage. Those continuation and exception paths have protocol coverage, not live-provider proof. The full Bun suite was not rerun for Phase 5. The historical full-suite result below remains separate; this work repaired the invalid execution-settings fixture and removed the incidental pre-multipart Markdown equality assertion from the drafting scheduling test without changing application validation.
 
 ### Completion and evidence gates
 
@@ -230,7 +269,7 @@ Original private captures were written under `/tmp/omp-autonomous-browser-5EJXDe
 ## Next adoption stages
 
 1. Broader commissioned verification/environment provenance: current host-command receipts establish actual execution and candidate/recipe identity, not exhaustive coverage or a reproducible dependency image.
-2. Explicitly authorized real OMP/provider smoke in a disposable project.
+2. Broader live-provider coverage beyond the bounded Phase 5 Bug fix and Investigation journeys above, including real pause/correction/blocker and native-compaction scenarios.
 3. Full feature-map maintenance, with unverified prerequisites clearly recorded.
 4. Opt-in onboarding and proven verification recipes for other registered projects.
 
