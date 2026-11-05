@@ -44,7 +44,7 @@ test('ticket execution saves are stale-safe and cannot approve, retry or change 
     const path = join(root, 'repo'); await mkdir(path);
     const repo = { id: 'repo', path, name: 'Execution fixture', git: false, mode: 'paused' as const, lastStarted: 0 };
     store.save('repos', repo);
-    const original = await writeTicket(store, repo, '---\nid: T001\ntitle: Model selection\ndepends_on: []\n---\n\nDone when:\n- Original behavior works.\n');
+    const original = await writeTicket(store, repo, '---\nid: T001\ntitle: Model selection\ndepends_on: []\n---\n\nPreserve original behavior while selecting execution settings.\n\nDone when:\n- Original behavior works.\n');
     const failed = { ...original, status: 'failed' as const }; store.save('tickets', failed);
     const defaults = store.settings(); let wakes = 0;
     const runtime: Runtime = { wake() { wakes++; }, async reconcile() {}, async control() {}, async answer() {}, async close() {} };

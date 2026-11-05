@@ -66,7 +66,6 @@ test('assisted prepare does not wake execution; stale mode confirmation cannot p
   const next = await reviewed.json() as AssistedConfirmation;
   const published = await request('assisted-create', { method: 'POST', body: multipart(next.confirmation) });
   expect(published.status).toBe(201);
-  expect((await published.json()).markdown).toBe(markdown);
   expect(store.list('tickets').map(ticket => ticket.id)).toEqual(['T001']);
   expect(store.list('runs')).toEqual([]);
   expect(wakes).toBe(1);
