@@ -391,6 +391,22 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
 .ant-btn-primary:not(:disabled) { background: linear-gradient(120deg, var(--accent), color-mix(in srgb, var(--accent) 82%, white)); box-shadow: 0 3px 16px color-mix(in srgb, var(--accent) 15%, transparent); }
 .ant-input-affix-wrapper:focus-within, .ant-input:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent); }
 .theme-option { display: inline-flex; align-items: center; gap: 9px; }
+.completion-policy-modal .ant-modal-body { max-height: calc(100dvh - 120px); overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.completion-policy-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.completion-policy-form > * { min-width: 0; }
+.completion-policy-form > p { margin: 0; }
+.completion-policy-form > label { margin-top: 8px; }
+.completion-policy-form .ant-select, .completion-policy-form .ant-input-number { width: 100%; }
+.completion-policy-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.completion-policy-limits label { display: grid; align-content: start; gap: 8px; }
+.completion-policy-actions { margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); }
+.completion-policy-actions .ant-btn-primary:not(:disabled) { background: var(--accent); }
+.lifecycle-stages { display: flex; flex-wrap: wrap; gap: 8px; padding: 0; list-style-position: inside; font: 13px/1.7 var(--font-mono); }
+.lifecycle-stages li { padding: 6px 10px; border: 1px solid var(--line); color: var(--muted); background: var(--surface-inset); }
+.lifecycle-stages [aria-current='step'] { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
+.lifecycle-progress > h4 { margin-top: 24px; }
+.lifecycle-progress .run-record > .run-metadata { margin: 16px; }
+.board-toolbar { flex-wrap: wrap; }
 @media (max-width: 1200px) {
   main { padding-inline: 20px; }
   .topbar { padding-inline: 20px; }
@@ -430,6 +446,9 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
   .execution-control { grid-column: 1 / -1; }
   .execution-control .ant-select { min-width: 0; width: 100%; }
   .project-controls .new-ticket-link { align-self: end; }
+  .project-controls .completion-policy-trigger { grid-column: 1 / -1; width: 100%; }
+  .completion-policy-limits { grid-template-columns: minmax(0, 1fr); }
+  .completion-policy-actions { display: grid; grid-template-columns: minmax(0, 1fr); }
   .board-toolbar { flex-wrap: wrap; gap: 12px; }
   .ticket-search { order: 3; max-width: none; width: 100%; }
   .ticket-list-view .ticket-card { flex-wrap: wrap; gap: 8px 12px; }

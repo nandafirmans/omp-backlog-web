@@ -18,6 +18,9 @@ import RunTranscript from './RunTranscript';
 import BlockedRecovery from './BlockedRecovery';
 import TicketExecution from './TicketExecution';
 import RunUsage from './RunUsage';
+import CompletionPolicy from './CompletionPolicy';
+import LifecycleProgress from './LifecycleProgress';
+import { lifecycleLabels, lifecycleOwnsCompletion } from './lifecyclePresentation';
 
 const RichMarkdownEditor = lazy(() => import('./RichMarkdownEditor'));
 
@@ -51,6 +54,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const [notice, setNotice] = useState('');
   const [modal, modalContext] = Modal.useModal();
   const [expanded, setExpanded] = useState(false);
+  const [completionOpen, setCompletionOpen] = useState(false);
   const returnFocus = useRef<HTMLAnchorElement | null>(null);
   const newTicketLink = useRef<HTMLAnchorElement | null>(null);
   const repo = snapshot.repos.find(value => value.id === repoId);
@@ -79,7 +83,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
 
   async function changeMode(mode: Mode) {
     if (!repo || mode === repo.mode) return;
-    if (mode === 'automatic' && !await modal.confirm({ title: 'Enable automatic execution?', content: 'New valid tickets and eligible requirement or attachment revisions may run without individual approval. OMP can execute commands with your filesystem permissions. Nothing is sandboxed; completed tickets still require revision review.', okText: 'Enable automatic execution', cancelText: 'Keep current permission' })) return;
+    if (mode === 'automatic' && !await modal.confirm({ title: 'Enable automatic execution?', content: 'New valid tickets and eligible requirement or attachment revisions may run without individual approval. OMP can execute commands with your filesystem permissions. Nothing is sandboxed. Completion authority is configured separately; the saved project completion policy still applies.', okText: 'Enable automatic execution', cancelText: 'Keep current permission' })) return;
     await execute('Repository permission saved.', async () => { await api(`/api/repos/${encode(repo.id)}`, json('PATCH', { mode })); });
   }
 
@@ -105,6 +109,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
             <strong>{project.name}</strong>
             <span className="path" title={project.path}>{project.path}</span>
             <span className="project-folder-meta"><span>{modes[project.mode]}</span><span>Tickets: {summary?.total ?? 0}</span></span>
+            <span className="project-folder-meta">Completion: {project.completion?.mode === 'autonomous' ? 'Autonomous local commit & Done' : 'Human review'}</span>
             {project.handoff && <span className="warning-text">Operator reconciliation required · new starts blocked</span>}
             <span className="project-queue" aria-label="Ticket status counts">{summary ? queueStatuses.map(status => summary.counts[status] ? <span key={status}><Status value={status} /> <span>{summary.counts[status]}</span></span> : null) : <span>No tickets</span>}</span>
           </Link>
@@ -117,11 +122,13 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
         <div className="project-title"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Projects</Link> }, { title: <span aria-current="page">{repo.name}</span> }]} /><h1 title={repo.path}>{repo.name}</h1></div>
         <div className="project-controls">
           <div className="execution-control" title="Execution permission"><Select aria-label="Execution permission" popupMatchSelectWidth={280} disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={modeOptions} /></div>
+          <Button className="completion-policy-trigger" disabled={busy || !!ticketId || creating} onClick={() => setCompletionOpen(true)}>Completion: {repo.completion?.mode === 'autonomous' ? 'Autonomous' : 'Human review'}</Button>
           <Link className="new-ticket-link" ref={newTicketLink} onClick={event => { returnFocus.current = event.currentTarget; }} to={`/projects/${encode(repo.id)}/tickets/new`}><PlusIcon size={16} aria-hidden="true" />New ticket</Link>
           <Link className="agent-ticket-link" to={`/projects/${encode(repo.id)}/tickets/new/agent`}>Create with agent</Link>
         </div>
       </header>
       <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. A current run continues.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and the global slot still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'}</p>
+      {completionOpen && !ticketId && !creating && <CompletionPolicy key={`completion-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} owned={snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClose={() => setCompletionOpen(false)} />}
       {!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}
       {repo.handoff && <section className="workspace-handoff" aria-label="Workspace handoff">
         <div className="workspace-handoff-summary">
@@ -403,6 +410,7 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
 
   async function action(value: 'approve' | 'retry' | 'done' | 'changes' | 'reorder', order?: number) {
     if (!ticket || uploading || stagedCount > 0) return;
+    if ((value === 'done' || value === 'changes') && lifecycleOwnsCompletion(currentRun)) return;
     if ((value === 'retry' || value === 'approve') && currentRun?.status === 'blocked') { document.querySelector<HTMLElement>('.blocked-recovery')?.scrollIntoView({ block: 'start' }); return; }
     if (value === 'retry' && ticket.status === 'interrupted' && !await modal.confirm({ title: 'Retry interrupted run?', content: 'Have you reviewed this interrupted run and its partial filesystem changes? Retrying starts a fresh session and may repeat actions.', okText: 'Retry reviewed run', cancelText: 'Cancel' })) return;
     if (value === 'done' && !await modal.confirm({ title: 'Mark this revision Done?', content: 'Confirm every acceptance criterion has revision-bound evidence and any visual or subjective requirements have been reviewed.', okText: 'Mark revision Done', cancelText: 'Keep in review' })) return;
@@ -425,9 +433,10 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
       <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar">
         <Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || currentRun?.status === 'blocked' || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>
         {['blocked', 'failed', 'interrupted'].includes(ticket.status) && <Button disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onClick={() => void action('retry')}>{ticket.status === 'blocked' ? 'Review recovery' : 'Review & retry'}</Button>}
-        {ticket.status === 'needs_review' && <><Button type="primary" className="primary" disabled={actionsBusy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={actionsBusy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}
+        {ticket.status === 'needs_review' && !lifecycleOwnsCompletion(currentRun) && <><Button type="primary" className="primary" disabled={actionsBusy || dirty || stale} onClick={() => void action('done')}>Accept evidence · Done</Button><Button disabled={actionsBusy || dirty || stale} onClick={() => void action('changes')}>Request changes</Button></>}
         {tickets.length > 1 && <><Button disabled={actionsBusy || tickets[0]?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i - 1]?.order ?? ticket.order) - 0.5); }}>Move up</Button><Button disabled={actionsBusy || tickets.at(-1)?.id === ticket.id || working} onClick={() => { const i = tickets.findIndex(value => value.id === ticket.id); void action('reorder', (tickets[i + 1]?.order ?? ticket.order) + 0.5); }}>Move down</Button></>}
       </div><p className="muted">Approval is revision-bound, not a command to bypass dependencies or pauses. Dependencies wait for Done, not Needs review.</p>{ticket.status === 'interrupted' && <p className="warning-text">Recovery required: inspect the previous transcript and partial changes before explicitly retrying. No mutating action is replayed automatically.</p>}{working && <p className="warning-text">To stop active work, open its run and pause it. Repository pause only prevents future starts.</p>}</section>
+      {currentRun?.lifecycle && <p className={currentRun.lifecycle.phase === 'assistance' ? 'warning-text' : 'muted'}><Tag>{lifecycleLabels[currentRun.lifecycle.phase]}</Tag> {lifecycleOwnsCompletion(currentRun) ? 'The autonomous lifecycle owns completion; routine human Done is unavailable.' : currentRun.lifecycle.exception} <Button type="link" onClick={() => onRun(currentRun.id)}>Review lifecycle evidence</Button></p>}
     </>}
     {ticket && currentRun?.status === 'blocked' && <BlockedRecovery key={ticket.runId} repo={repo} ticket={ticket} run={currentRun} api={api} execute={execute} disabled={actionsBusy || dirty || stale || ticket.removed || !!ticket.error} onDirtyChange={setRecoveryDirty} />}
     {ticket && settings && <TicketExecution ticket={ticket} settings={settings} api={api} execute={execute} disabled={busy || uploading || stagedCount > 0 || dirty || stale || working || ticket.removed || !!ticket.error} onDirtyChange={setExecutionDirty} />}
@@ -649,12 +658,15 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
     </nav>
     <div className="run-summary-line">
       <span>{run.verification?.length ?? 0} checks reported · {run.evidence.length} evidence notes</span>
+      {run.lifecycle && <><Tag className={run.lifecycle.phase === 'assistance' ? 'attention' : ''}>{lifecycleLabels[run.lifecycle.phase]}</Tag><Button type="link" onClick={() => setView('evidence')}>{run.lifecycle.verification.length} host checks · {run.lifecycle.reviews.length} independent reviews</Button></>}
       {!!run.verification?.some(receipt => receipt.outcome !== 'passed') && <Button type="link" onClick={() => setView('evidence')}>Review unresolved checks</Button>}
-      {run.status === 'needs_review' && <span className="warning-text">Awaiting human review · not accepted</span>}
+      {run.status === 'needs_review' && !lifecycleOwnsCompletion(run) && <span className="warning-text">Awaiting human review · not accepted</span>}
     </div>
+    {run.lifecycle?.phase === 'assistance' && <p className="error-banner" role="alert"><strong>Needs assistance.</strong> {run.lifecycle.exception || 'Autonomous completion stopped without establishing Done.'} <Button type="link" onClick={() => setView('evidence')}>Inspect lifecycle &amp; recovery evidence</Button></p>}
     <Tabs className="run-views" activeKey={view} onChange={setView} tabBarGutter={20} aria-label="Run sections" items={[
       { key: 'transcript', label: 'Transcript', forceRender: true, children: <RunTranscript key={run.id} run={run} /> },
-      { key: 'evidence', label: `Evidence (${run.verification?.length ?? 0})`, children: <>
+      { key: 'evidence', label: `Evidence (${(run.verification?.length ?? 0) + (run.lifecycle?.verification.length ?? 0) + (run.lifecycle?.reviews.length ?? 0)})`, children: <>
+        <LifecycleProgress run={run} />
         <section className="detail-section"><h3>Acceptance evidence</h3><p className="muted">Agent claims, not independent verification. Review every criterion before accepting this revision.</p>
           {ticket && !old && ticket.criteria.length > 0 && <details className="run-record"><summary>Requirements · {ticket.criteria.length} criteria</summary><ol className="criteria-list">{ticket.criteria.map((criterion, i) => <li key={`${i}-${criterion}`}>{criterion}</li>)}</ol></details>}
           {run.evidence.length ? <div className="run-records">{run.evidence.map((item, i) => <details className="run-record" key={i}><summary><span className="run-record-index">{i + 1}.</span> {item.split('\n').find(line => line.trim()) || 'Recorded evidence'}</summary><pre tabIndex={0}>{item}</pre></details>)}</div> : <p className="muted">No verification evidence recorded.</p>}
