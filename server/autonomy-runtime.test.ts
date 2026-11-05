@@ -22,7 +22,7 @@ async function until<T>(observe: () => T | undefined | false | Promise<T | undef
   throw new Error('Autonomous protocol fixture timed out');
 }
 interface Harness { root: string; store: Store; repo: Repo; config: string; runtime: Runtime | null; start(): Promise<void> }
-async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; inheritReviewer?: boolean } = {}) {
+async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; inheritReviewer?: boolean; dependent?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'omp-autonomous-protocol-'));
   const store = createStore(join(root, 'private'));
   const path = join(root, 'project'); await mkdir(path);
@@ -45,6 +45,10 @@ async function fixture(scenario: string, run: (h: Harness) => Promise<void>, opt
   }
   const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Disposable proof\ndepends_on: []\n---\n\nImplement the disposable proof only.\n\nDone when:\n- proof.txt contains verified.\n');
   store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision });
+  if (options.dependent) {
+    const dependent = await writeTicket(store, repo, '---\nid: T002\ntitle: Dependent disposable proof\ndepends_on: [T001]\n---\n\nCheck the prerequisite is actually Done.\n\nDone when:\n- proof.txt contains verified.\n');
+    store.save('tickets', { ...dependent, status: 'ready', approvedRevision: dependent.revision });
+  }
   const harness: Harness = { root, store, repo, config, runtime: null, async start() { this.runtime = await createRuntime(store); await this.runtime.reconcile(); } };
   try { await run(harness); }
   finally {
@@ -54,6 +58,28 @@ async function fixture(scenario: string, run: (h: Harness) => Promise<void>, opt
   }
 }
 const terminal = (h: Harness) => until(() => h.store.list('runs').find(run => ['done', 'failed', 'blocked', 'needs_review', 'interrupted'].includes(run.status)));
+interface ProtocolEvent { event: string; pid: number; sessionId: string; reviewer: boolean; resumed?: boolean; command?: string; op?: string; message?: string; objective?: string; tools?: string[]; id?: string; rejected?: boolean }
+async function protocolEvents(h: Harness): Promise<ProtocolEvent[]> {
+  return (await readFile(`${h.config}.events`, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as ProtocolEvent);
+}
+function expectNativeAuthorLifecycle(events: ProtocolEvent[], attempts: number) {
+  const authors = events.filter(event => !event.reviewer);
+  const prompts = authors.filter(event => event.event === 'prompt');
+  expect(prompts.map(event => event.message?.startsWith('/skill:poteto-mode\n'))).toEqual(Array.from({ length: attempts }, (_, index) => index === 0));
+  expect(authors.filter(event => event.command === 'get_available_commands')).toHaveLength(attempts);
+  expect(authors.filter(event => event.command === 'get_messages')).toHaveLength(2);
+  expect(authors.filter(event => event.event === 'native-skill-record')).toHaveLength(1);
+  expect(authors.filter(event => event.command === 'goal' && event.op === 'create')).toHaveLength(1);
+  expect(authors.find(event => event.command === 'goal' && event.op === 'create')?.objective?.startsWith('/skill:')).toBe(false);
+  for (const spawn of authors.filter(event => event.event === 'spawn')) {
+    const commands = authors.filter(event => event.pid === spawn.pid && event.event === 'command');
+    expect(commands.findIndex(event => event.command === 'get_available_commands')).toBeLessThan(commands.findIndex(event => event.command === 'set_host_tools'));
+    if (spawn.resumed) expect(commands.some(event => event.command === 'get_messages')).toBe(false);
+  }
+  const reviewers = events.filter(event => event.reviewer);
+  expect(reviewers.some(event => ['get_available_commands', 'get_messages', 'goal'].includes(String(event.command)) || event.message?.startsWith('/skill:'))).toBe(false);
+  for (const registration of reviewers.filter(event => event.command === 'set_host_tools')) expect(registration.tools).toEqual(['candidate_diff', 'candidate_source', 'backlog_review']);
+}
 
 test('autonomous author report alone never accepts; host recipe, independent session and local publication complete Done', async () => {
   await fixture('pass', async h => {
@@ -63,6 +89,9 @@ test('autonomous author report alone never accepts; host recipe, independent ses
     expect(run.lifecycle?.reviews[0]?.sessionId).not.toBe(run.lifecycle?.authorSessionId);
     expect(run.lifecycle?.publication?.parent).toBe(before); expect(await git(h.repo.path, 'status', '--porcelain', '--', 'proof.txt')).toBe('');
     expect(run.lifecycle?.authorTokens).toBe(11); expect(run.lifecycle?.reviewerTokens).toBe(7);
+    const events = await protocolEvents(h);
+    expectNativeAuthorLifecycle(events, 1);
+    expect(events.filter(event => event.event === 'prompt' && event.reviewer)).toHaveLength(1);
   });
 }, 30000);
 
@@ -76,6 +105,7 @@ test('review findings resume exactly original author session, invalidate reports
     const authors = events.filter(event => event.event === 'spawn' && !event.reviewer);
     expect(authors).toHaveLength(2); expect(authors[0].sessionId).toBe(authors[1].sessionId); expect(authors[1].resumed).toBe(true);
     expect(run.verification).toHaveLength(1);
+    expectNativeAuthorLifecycle(await protocolEvents(h), 2);
   });
 }, 30000);
 
@@ -84,13 +114,37 @@ test('corrections are bounded and unresolved findings require assistance without
 }, 30000);
 
 test('one incomplete-original-verification recovery is scoped, while permission blockers require assistance', async () => {
-  await fixture('recovery', async h => { await h.start(); const run = await terminal(h); expect(run.status).toBe('done'); expect(run.lifecycle?.recoveries).toBe(1); expect(run.lifecycle?.authorTokens).toBe(22); });
-  await fixture('blocked', async h => { await h.start(); const run = await terminal(h); expect(run.status).toBe('blocked'); expect(run.lifecycle?.phase).toBe('assistance'); expect(run.lifecycle?.recoveries).toBe(0); });
+  await fixture('recovery', async h => {
+    await h.start(); const run = await terminal(h);
+    expect(run.status).toBe('done'); expect(run.lifecycle?.recoveries).toBe(1); expect(run.lifecycle?.authorTokens).toBe(22);
+    const events = await protocolEvents(h);
+    const authors = events.filter(event => event.event === 'spawn' && !event.reviewer);
+    expect(authors).toHaveLength(2); expect(authors[1]?.sessionId).toBe(authors[0]?.sessionId); expect(authors[1]?.resumed).toBe(true);
+    expectNativeAuthorLifecycle(events, 2);
+  });
+  await fixture('blocked', async h => {
+    const head = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start(); const run = await terminal(h);
+    expect(run.status).toBe('blocked'); expect(run.lifecycle?.phase).toBe('assistance'); expect(run.lifecycle?.recoveries).toBe(0);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(head);
+    await h.runtime!.reconcile();
+    expect(h.store.list('runs')).toHaveLength(1);
+    expect(h.store.get('tickets', `${h.repo.id}/T002`)?.runId).toBeNull();
+    expect((await protocolEvents(h)).some(event => event.reviewer)).toBe(false);
+  }, { dependent: true });
 }, 30000);
 
 test('completion policy is independent of approved start mode and human default remains Needs review', async () => {
   await fixture('pass', async h => { await h.start(); expect((await terminal(h)).status).toBe('done'); }, { mode: 'approved' });
-  await fixture('pass', async h => { await h.start(); const run = await terminal(h); expect(run.status).toBe('needs_review'); expect(run.lifecycle).toBeUndefined(); }, { human: true });
+  await fixture('pass', async h => {
+    await h.start(); const run = await terminal(h);
+    expect(run.status).toBe('needs_review'); expect(run.lifecycle).toBeUndefined();
+    expectNativeAuthorLifecycle(await protocolEvents(h), 1);
+    await h.runtime!.reconcile();
+    expect(h.store.list('runs')).toHaveLength(1);
+    expect(h.store.get('tickets', `${h.repo.id}/T002`)?.runId).toBeNull();
+  }, { human: true, dependent: true });
 }, 30000);
 
 test('blank reviewer choice inherits the actual attempt model in a separate session', async () => {
@@ -195,3 +249,98 @@ test('interrupted author mutation is never automatically replayed after restart'
     expect(events.filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(1);
   }, { holdAuthor: true });
 }, 30000);
+
+test('autonomous missing or disabled pstack and stale native invocation metadata never mutate proof or enter host acceptance', async () => {
+  for (const scenario of ['missing-router', 'missing-adapter', 'disabled-plugin', 'missing-invocation']) await fixture(scenario, async h => {
+    const head = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start(); const run = await terminal(h);
+    expect(run.status).toBe('failed'); expect(run.pid).toBeNull();
+    expect(run.error).toContain(scenario === 'missing-invocation' ? 'native poteto-mode skill-prompt record' : 'Required pstack engineering workflow unavailable');
+    expect(await readFile(join(h.repo.path, 'proof.txt'), 'utf8')).toBe('pending\n');
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(head);
+    expect(run.verification ?? []).toEqual([]);
+    expect(run.lifecycle?.verification).toEqual([]);
+    expect(run.lifecycle?.reviews).toEqual([]);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    const events = await protocolEvents(h);
+    expect(events.filter(event => event.command === 'get_available_commands')).toHaveLength(1);
+    expect(events.some(event => event.command === 'goal' && ['create', 'resume'].includes(String(event.op)) || event.reviewer)).toBe(false);
+    expect(events.filter(event => event.event === 'prompt')).toHaveLength(scenario === 'missing-invocation' ? 1 : 0);
+    expect(events.filter(event => event.command === 'get_messages')).toHaveLength(scenario === 'missing-invocation' ? 2 : 0);
+    if (scenario !== 'missing-invocation') expect(events.some(event => event.command === 'set_host_tools')).toBe(false);
+    await h.runtime!.reconcile();
+    expect(h.store.list('runs')).toHaveLength(1);
+  });
+}, 30_000);
+
+test('a native-routed malicious author cannot claim Done or self-review past host lifecycle gates', async () => {
+  await fixture('author-bypass', async h => {
+    const head = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await until(() => h.store.list('runs').find(value => value.dialog?.id === 'bypass-held'));
+    const events = await protocolEvents(h);
+    expectNativeAuthorLifecycle(events, 1);
+    expect(events.filter(event => event.event === 'bypass-result').map(event => ({ id: event.id, rejected: event.rejected }))).toEqual([{ id: 'bypass-done', rejected: true }, { id: 'bypass-review', rejected: true }]);
+    expect(run.status).toBe('running'); expect(run.lifecycle?.phase).toBe('implementing');
+    expect(run.lifecycle?.verification).toEqual([]); expect(run.lifecycle?.reviews).toEqual([]);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(h.store.get('tickets', `${h.repo.id}/T001`)?.status).toBe('running');
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(head);
+    expect(await readFile(join(h.repo.path, 'proof.txt'), 'utf8')).toBe('pending\n');
+    await h.runtime!.control(run.id, 'pause');
+    expect(h.store.get('runs', run.id)?.status).toBe('paused');
+  });
+}, 30_000);
+
+test('inconclusive independent review blocks publication and never releases a dependent ticket', async () => {
+  await fixture('inconclusive', async h => {
+    const head = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start(); const run = await terminal(h);
+    expect(run.status).toBe('failed'); expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.error).toContain('Independent review inconclusive');
+    expect(run.lifecycle?.verification[0]?.outcome).toBe('passed');
+    expect(run.lifecycle?.reviews.map(review => review.verdict)).toEqual(['inconclusive']);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(head);
+    await h.runtime!.reconcile();
+    expect(h.store.list('runs')).toHaveLength(1);
+    expect(h.store.get('tickets', `${h.repo.id}/T002`)?.runId).toBeNull();
+    expectNativeAuthorLifecycle(await protocolEvents(h), 1);
+  }, { dependent: true });
+}, 30_000);
+
+test('dependent execution starts only after prerequisite host verification, independent review and actual Done', async () => {
+  await fixture('pass', async h => {
+    const premature: string[] = [];
+    let observedReviewBeforeDone = false;
+    let prerequisiteDoneAtDependentStart = false;
+    const unsubscribe = subscribe(h.store, () => {
+      const first = h.store.list('runs').find(run => run.ticketId === 'T001');
+      const dependent = h.store.list('runs').find(run => run.ticketId === 'T002');
+      if (first?.lifecycle?.phase === 'reviewing' && first.status !== 'done') observedReviewBeforeDone = true;
+      if (!dependent) return;
+      if (first?.status !== 'done' || h.store.get('tickets', `${h.repo.id}/T001`)?.status !== 'done') premature.push(dependent.id);
+      else prerequisiteDoneAtDependentStart = true;
+    });
+    try {
+      await h.start();
+      const dependent = await until(() => h.store.list('runs').find(run => run.ticketId === 'T002' && run.status === 'done'));
+      const first = h.store.list('runs').find(run => run.ticketId === 'T001')!;
+      expect(observedReviewBeforeDone).toBe(true);
+      expect(prerequisiteDoneAtDependentStart).toBe(true);
+      expect(premature).toEqual([]);
+      expect(first.status).toBe('done');
+      expect(first.lifecycle?.verification[0]?.outcome).toBe('passed');
+      expect(first.lifecycle?.reviews[0]?.verdict).toBe('pass');
+      expect(first.lifecycle?.publication?.state).toBe('complete');
+      expect(first.lifecycle?.authorFiles).toEqual(['proof.txt']);
+      expect(dependent.lifecycle?.authorFiles).toEqual([]);
+      expect(dependent.lifecycle?.publication?.noChanges).toBe(true);
+      expect(dependent.lifecycle?.verification[0]?.outcome).toBe('passed');
+      expect(dependent.lifecycle?.reviews[0]?.verdict).toBe('pass');
+      expect(dependent.started).toBeGreaterThanOrEqual(first.finished!);
+      expect(h.store.list('runs')).toHaveLength(2);
+      expect(h.store.list('tickets').every(ticket => ticket.status === 'done')).toBe(true);
+    } finally { unsubscribe(); }
+  }, { dependent: true });
+}, 30_000);

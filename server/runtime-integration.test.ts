@@ -13,7 +13,7 @@ import { createApi } from './api';
 
 // These are process/protocol acceptance tests. The child verifies a disposable
 // proof file; it does not exercise a real OMP installation, model, or credentials.
-interface Event { event: string; pid: number; sessionId: string; command?: string; op?: string; resumed?: boolean; revision?: string; sessionFile?: string; level?: string; thinking?: string; tokenBudget?: number }
+interface Event { event: string; pid: number; sessionId: string; command?: string; op?: string; resumed?: boolean; revision?: string; sessionFile?: string; level?: string; thinking?: string; tokenBudget?: number; message?: string; objective?: string }
 interface Harness { root: string; store: Store; executable: string; runtime: Runtime | null }
 
 // Real timers are intentional: detached children and fs.watch run outside the
@@ -131,6 +131,103 @@ test('Run Live persists sanitized structured tool snapshots, settlement and same
     expect(log).toContain('Checking the **proof**');
     expect(log).not.toContain('fixture-secret');
     expect(log).not.toContain('fixture-nested-secret');
+  });
+}, 15_000);
+
+test('missing native router, adapter or task and disabled pstack fail before prompt, goal or proof mutation', async () => {
+  for (const [scenario, error] of [['missing-router', 'poteto-mode'], ['missing-adapter', 'pstack-pi'], ['missing-task', 'native task tool unavailable'], ['disabled-plugin', 'missing native skill commands']] as const) {
+    await withHarness(async harness => {
+      const repo = await repository(harness, scenario, 0, scenario);
+      await ticket(harness, repo);
+      await start(harness);
+      const failed = await waitFor('engineering preflight failure and child exit', () => harness.store.list('runs').find(run => run.status === 'failed' && run.pid === null));
+      expect(failed.error).toContain('Required pstack engineering workflow unavailable');
+      expect(failed.error).toContain(error);
+      expect(failed.evidence).toEqual([]);
+      expect(failed.verification ?? []).toEqual([]);
+      const log = await events(repo);
+      expect(log.filter(event => event.command === 'get_available_commands')).toHaveLength(1);
+      expect(log.some(event => event.command === 'set_host_tools' || event.command === 'prompt' || event.command === 'goal' && ['create', 'resume'].includes(String(event.op)))).toBe(false);
+      await expect(readFile(join(repo.path, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await harness.runtime!.reconcile();
+      expect(harness.store.list('runs')).toHaveLength(1);
+    });
+  }
+}, 20_000);
+
+test('stale native router invocation metadata fails without goal creation or fallback proof mutation', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'missing-invocation', 0, 'missing-invocation');
+    await ticket(harness, repo);
+    await start(harness);
+    const failed = await waitFor('native router invocation metadata rejection', () => harness.store.list('runs').find(run => run.status === 'failed' && run.pid === null));
+    expect(failed.error).toContain('native poteto-mode skill-prompt record');
+    const log = await events(repo);
+    expect(log.filter(event => event.command === 'prompt').map(event => event.message?.startsWith('/skill:poteto-mode\n'))).toEqual([true]);
+    expect(log.filter(event => event.command === 'get_messages')).toHaveLength(2);
+    expect(log.some(event => event.command === 'goal' && ['create', 'resume'].includes(String(event.op)))).toBe(false);
+    expect(failed.verification ?? []).toEqual([]);
+    await expect(readFile(join(repo.path, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+}, 15_000);
+
+test('fresh native router initializes once; same-session resume rediscovers without routing or changing human completion', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'native-router');
+    await ticket(harness, repo);
+    await start(harness);
+    const first = await running(harness);
+    await harness.runtime!.control(first.id, 'pause');
+    await harness.runtime!.control(first.id, 'resume');
+    const resumed = await running(harness);
+    expect(resumed.sessionId).toBe(first.sessionId);
+    const complete = await finish(harness, resumed);
+    expect(complete.status).toBe('needs_review');
+    expect(harness.store.get('tickets', `${repo.id}/T001`)?.status).toBe('needs_review');
+    expect(await readFile(join(repo.path, 'proof.txt'), 'utf8')).toBe('verified\n');
+    const log = await events(repo);
+    const prompts = log.filter(event => event.command === 'prompt');
+    expect(prompts.map(event => event.message?.startsWith('/skill:poteto-mode\n'))).toEqual([true, false]);
+    expect(log.filter(event => event.command === 'get_available_commands')).toHaveLength(2);
+    expect(log.filter(event => event.command === 'get_messages')).toHaveLength(2);
+    expect(log.filter(event => event.event === 'native-skill-record')).toHaveLength(1);
+    const session = JSON.parse(await readFile(complete.sessionFile!, 'utf8'));
+    expect(session.messages).toHaveLength(1);
+    expect(session.messages[0]).toMatchObject({ role: 'custom', customType: 'skill-prompt', details: { name: 'poteto-mode', prompt: prompts[0]!.message!.trim(), lineCount: 1 } });
+    expect(session.messages[0].details.path).toMatch(/^\/.*\/SKILL\.md$/);
+    for (const prompt of prompts) {
+      const processLog = log.filter(event => event.pid === prompt.pid);
+      expect(processLog.findIndex(event => event.command === 'get_available_commands')).toBeLessThan(processLog.findIndex(event => event.command === 'set_host_tools'));
+      if (prompt.pid !== first.pid) expect(processLog.some(event => event.command === 'get_messages')).toBe(false);
+    }
+    const goal = log.find(event => event.command === 'goal' && event.op === 'create');
+    expect(goal?.objective).toContain(first.revision);
+    expect(goal?.objective?.startsWith('/skill:')).toBe(false);
+  });
+}, 15_000);
+
+test('resume rechecks disabled pstack before admitting continuation or mutating the proof', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'disabled-on-resume');
+    await ticket(harness, repo);
+    await start(harness);
+    const first = await running(harness);
+    await harness.runtime!.control(first.id, 'pause');
+    await writeFile(join(repo.path, 'fixture.json'), JSON.stringify({ scenario: 'disabled-plugin' }));
+    await harness.runtime!.control(first.id, 'resume');
+    const failed = await waitFor('resumed engineering preflight failure', () => {
+      const current = harness.store.get('runs', first.id);
+      return current?.status === 'failed' && current.pid === null ? current : undefined;
+    });
+    expect(failed.sessionId).toBe(first.sessionId);
+    expect(failed.error).toContain('Required pstack engineering workflow unavailable');
+    const log = await events(repo);
+    expect(log.filter(event => event.command === 'get_available_commands')).toHaveLength(2);
+    const resumed = log.find(event => event.event === 'spawn' && event.resumed);
+    expect(resumed).toBeDefined();
+    expect(log.filter(event => event.pid === resumed!.pid).some(event => event.command === 'set_host_tools' || event.command === 'prompt' || event.command === 'goal' && ['create', 'resume'].includes(String(event.op)))).toBe(false);
+    expect(failed.verification ?? []).toEqual([]);
+    await expect(readFile(join(repo.path, 'proof.txt'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 }, 15_000);
 

@@ -17,12 +17,12 @@ const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
 }
-const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript' | 'compaction'; tokens?: number; expectedFeedback?: string };
+const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript' | 'compaction' | 'missing-router' | 'missing-adapter' | 'missing-task' | 'disabled-plugin' | 'missing-invocation'; tokens?: number; expectedFeedback?: string };
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
-const session = args.includes('--resume')
-  ? JSON.parse(await readFile(sessionFile, 'utf8')) as { id: string; thinking?: string; model?: string }
+const session: { id: string; thinking?: string; model?: string; messages?: Record<string, unknown>[] } = args.includes('--resume')
+  ? JSON.parse(await readFile(sessionFile, 'utf8'))
   : { id: crypto.randomUUID(), thinking: 'medium', model: args.includes('--model') ? argument('--model') : '' };
 await writeFile(sessionFile, JSON.stringify(session));
 const log = (event: Record<string, unknown>) => appendFile(join(process.cwd(), 'fixture-events.jsonl'), JSON.stringify({ ...event, pid: process.pid, sessionId: session.id }) + '\n');
@@ -32,6 +32,8 @@ let resultId: string | null = null;
 let evidenceId: string | null = null;
 let negotiated = false;
 let toolsRegistered = false;
+let engineeringDiscovered = false;
+let invocationReads = 0;
 let autoCompactionEnabled = false;
 const decoder = new FrameDecoder();
 await log({ event: 'spawn', resumed: args.includes('--resume'), sessionFile });
@@ -40,7 +42,7 @@ send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2], max
 for await (const line of createInterface({ input: process.stdin })) {
   const frame = decoder.decode(Buffer.from(line));
   if (!frame) continue;
-  await log({ event: 'command', command: frame.type, op: frame.op, level: frame.level, ...(Object.hasOwn(frame, 'token_budget') ? { tokenBudget: frame.token_budget } : {}) });
+  await log({ event: 'command', command: frame.type, op: frame.op, level: frame.level, ...(frame.type === 'prompt' ? { message: frame.message } : {}), ...(frame.type === 'goal' && frame.op === 'create' ? { objective: frame.objective } : {}), ...(Object.hasOwn(frame, 'token_budget') ? { tokenBudget: frame.token_budget } : {}) });
   const respond = (data: Record<string, unknown> = {}) => send({ type: 'response', id: frame.id, success: true, data });
   if (frame.type === 'negotiate_protocol' && frame.protocolVersion === 2) {
     negotiated = true;
@@ -50,7 +52,15 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'get_state') {
     const selected = session.model ?? '';
     const slash = selected.indexOf('/');
-    respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, thinkingLevel: session.thinking ?? 'medium', ...(slash > 0 ? { model: { provider: selected.slice(0, slash), id: selected.slice(slash + 1) } } : {}), autoCompactionEnabled, isCompacting: false, contextUsage: { tokens: 400, contextWindow: 1000, percent: 40 } });
+    respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, dumpTools: ['disabled-plugin', 'missing-task'].includes(configuration.scenario) ? [] : [{ name: 'task' }], thinkingLevel: session.thinking ?? 'medium', ...(slash > 0 ? { model: { provider: selected.slice(0, slash), id: selected.slice(slash + 1) } } : {}), autoCompactionEnabled, isCompacting: false, contextUsage: { tokens: 400, contextWindow: 1000, percent: 40 } });
+  } else if (frame.type === 'get_available_commands') {
+    engineeringDiscovered = true;
+    respond({ commands: configuration.scenario === 'disabled-plugin' ? [] : ['poteto-mode', 'pstack-pi'].filter(name => !(configuration.scenario === 'missing-router' && name === 'poteto-mode') && !(configuration.scenario === 'missing-adapter' && name === 'pstack-pi')).map(name => ({ name: `skill:${name}`, source: 'skill' })) });
+  } else if (frame.type === 'get_messages') {
+    invocationReads++;
+    if (configuration.scenario === 'missing-invocation' && invocationReads > 1) {
+      send({ type: 'response', id: frame.id, success: false, error: 'Fixture history unavailable after missing native poteto-mode skill-prompt record' });
+    } else respond({ messages: invocationReads === 1 && configuration.scenario !== 'missing-invocation' ? [] : session.messages ?? [] });
   } else if (frame.type === 'get_available_thinking_levels') {
     respond({ levels: ['off', 'medium', 'high'] });
   } else if (frame.type === 'set_thinking_level') {
@@ -58,6 +68,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     await writeFile(sessionFile, JSON.stringify(session));
     respond();
   } else if (frame.type === 'set_host_tools') {
+    if (!engineeringDiscovered) throw new Error('Host registered author tools before native engineering preflight');
     if (!Array.isArray(frame.tools) || !frame.tools.some((tool) => tool.name === 'backlog_result')) throw new Error('Missing backlog_result registration');
     toolsRegistered = true;
     respond();
@@ -68,11 +79,19 @@ for await (const line of createInterface({ input: process.stdin })) {
     respond();
   } else if (frame.type === 'prompt') {
     if (!toolsRegistered || typeof frame.message !== 'string' || !frame.message.includes(ticket.revision)) throw new Error('Prompt lacks registered tool or immutable revision');
+    const routed = frame.message.startsWith('/skill:poteto-mode\n');
+    if (routed === args.includes('--resume')) throw new Error('Only a fresh author prompt may initialize the native router');
     if (configuration.expectedFeedback && !frame.message.includes(configuration.expectedFeedback)) throw new Error('Prompt lost human review feedback');
+    if (routed) {
+      session.messages = [{ role: 'custom', customType: 'skill-prompt', details: { name: 'poteto-mode', path: join(directory, 'fixture-skills/poteto-mode/SKILL.md'), prompt: configuration.scenario === 'missing-invocation' ? 'Stale prior prompt, not the submitted invocation' : String(frame.message).trim(), lineCount: 1 }, content: 'Deterministic fixture native router expansion, not an installed playbook.' }];
+      await writeFile(sessionFile, JSON.stringify(session));
+      await log({ event: 'native-skill-record' });
+    }
     await log({ event: 'prompt-admitted', revision: ticket.revision, thinking: session.thinking ?? 'medium' });
     respond();
   } else if (frame.type === 'goal') {
     if (frame.token_budget !== undefined && (typeof frame.token_budget !== 'number' || !Number.isInteger(frame.token_budget) || frame.token_budget <= 0)) throw new Error('Native goal token_budget must be omitted or a positive integer');
+    if (frame.op === 'create' && String(frame.objective).startsWith('/skill:')) throw new Error('Goal continuation must not reinvoke a skill command');
     respond();
     if (frame.op === 'create' || frame.op === 'resume') {
       await log({ event: 'executing' });
