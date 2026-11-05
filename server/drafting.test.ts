@@ -96,7 +96,7 @@ test('execution model discovery has no invented default and rejects unsafe or st
 }, 20000);
 
 test('execution discovery permits the audited newer release but rejects unknown isolation profiles', async () => {
-  for (const release of ['18.13.1', '18.13.3']) await fixture(async ({ executable }) => {
+  for (const release of ['18.13.1', '18.13.3', '18.16.0']) await fixture(async ({ executable }) => {
     expect((await discoverExecutionModels(executable, '')).model).toBe('fixture/vision');
   }, `release-${release}`);
   await fixture(async ({ executable }) => {

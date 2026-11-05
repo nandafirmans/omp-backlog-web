@@ -29,7 +29,7 @@ interface Draft {
 }
 interface Prepared extends DraftPreparation { message: string; images: { type: 'image'; mimeType: string; data: string }[]; bytes: number; prompt: string }
 
-// Audited against official v18.12.6, v18.13.1 and v18.13.3 CLI/main, SDK, discovery and plugin loaders.
+// Audited startup controls for v18.12.6, v18.13.1, v18.13.3 and v18.16.0.
 // Empty namespaces are established BEFORE loading OMP; --no-tools alone is unsafe.
 // Local provider auth stays inside OMP through its existing DB, not application code.
 // This reduces capabilities, not OS permissions; it is deliberately not a sandbox.
@@ -47,7 +47,7 @@ const profile = {
   startup: { checkUpdate: false, setupWizard: false, showSplash: false, quiet: true },
   marketplace: { autoUpdate: 'off' }, power: { sleepPrevention: 'off' }, magicKeywords: { enabled: false },
 };
-const auditedVersions = ['18.12.6', '18.13.1', '18.13.3'];
+const auditedVersions = ['18.12.6', '18.13.1', '18.13.3', '18.16.0'];
 const auditedVersionLabel = auditedVersions.map(version => `v${version}`).join(', ');
 
 function launchEnv(directory: string): NodeJS.ProcessEnv {
@@ -67,8 +67,9 @@ export async function installProfile(directory: string): Promise<NodeJS.ProcessE
   const agent = env.PI_CODING_AGENT_DIR!;
   await mkdir(agent, { recursive: true, mode: 0o700 });
   await mkdir(join(directory, 'work'), { mode: 0o700 });
-  // A local anchor prevents ancestor/project discovery outside the private cwd.
+  // OMP's plugin namespace search prefers ancestor .omp directories over a Git anchor.
   await mkdir(join(directory, 'work', '.git'), { mode: 0o700 });
+  await mkdir(join(directory, 'work', '.omp'), { mode: 0o700 });
   await writeFile(join(agent, 'config.yml'), JSON.stringify(profile), { mode: 0o600 });
   const home = homedir();
   const selectedProfile = process.env.OMP_PROFILE ?? process.env.PI_PROFILE;
