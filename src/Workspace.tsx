@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Breadcrumb, Button, Checkbox, Drawer, Input, InputNumber, Modal, Segmented, Select, Tabs, Tag } from 'antd';
 import { ArrowsInIcon, ArrowsOutIcon, FolderIcon, LightningIcon, PauseIcon, PlusIcon, ShieldCheckIcon } from '@phosphor-icons/react';
@@ -61,7 +61,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const tickets = snapshot.tickets.filter(value => value.repoId === repo?.id).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
   const ticket = tickets.find(value => value.id === ticketId);
   const selectedRun = snapshot.runs.find(value => value.id === runId);
-  const activeRun = snapshot.runs.find(value => activeStatuses.includes(value.status));
+  const claimedRuns = snapshot.runs.filter(value => activeStatuses.includes(value.status));
   const busy = !!pending;
   const queueSummaries = new Map<string, { total: number; counts: Partial<Record<Ticket['status'], number>> }>();
   for (const item of snapshot.tickets) {
@@ -88,14 +88,13 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   }
 
   const scheduler = <div className={`execution-strip${snapshot.settings.paused ? ' scheduler-paused' : ''}`} aria-label="Scheduler">
-    <div><strong>Scheduler: {snapshot.settings.paused ? 'all new starts paused' : 'following repository permissions'}</strong><small>One active ticket globally. Pausing new starts lets the current run continue.</small></div>
-    <Button disabled={busy} onClick={() => void execute(snapshot.settings.paused ? 'New starts enabled.' : 'All new starts paused. Current run continues.', async () => { await api('/api/settings', json('PATCH', { paused: !snapshot.settings.paused })); })}>{snapshot.settings.paused ? 'Allow new starts' : 'Pause all new starts'}</Button>
+    <div><strong>Scheduler: {snapshot.settings.paused ? 'all new starts paused' : 'following repository permissions'}</strong><small>{claimedRuns.length}/{snapshot.settings.maxConcurrentTickets} ticket slots occupied, including paused and stopping runs. One run per project. Pausing new starts lets current runs continue.{claimedRuns.length > snapshot.settings.maxConcurrentTickets && ' Above saved capacity; no new starts until slots are available.'}</small></div>
+    <Button disabled={busy} onClick={() => void execute(snapshot.settings.paused ? 'New starts enabled.' : 'All new starts paused. Current runs continue.', async () => { await api('/api/settings', json('PATCH', { paused: !snapshot.settings.paused })); })}>{snapshot.settings.paused ? 'Allow new starts' : 'Pause all new starts'}</Button>
   </div>;
 
   return <>
     {modalContext}
-    {activeRun && <section className="active-run" aria-label="Current run"><div><Status value={activeRun.status} /><strong>{snapshot.repos.find(value => value.id === activeRun.repoId)?.name} / {activeRun.ticketId}</strong>{activeRun.dialog && <Tag className="attention">Answer needed</Tag>}</div><div className="toolbar"><Button onClick={() => setRunId(activeRun.id)}>Open current run</Button>{activeRun.status === 'running' && <Button disabled={busy} onClick={() => void execute('Pause requested. Wait for the run to stop.', async () => { await api(`/api/runs/${encode(activeRun.id)}/control`, json('POST', { action: 'pause' })); })}>Pause current run</Button>}{activeRun.status === 'paused' && <Button disabled={busy} onClick={() => void execute('Run resume requested.', async () => { await api(`/api/runs/${encode(activeRun.id)}/control`, json('POST', { action: 'resume' })); })}>Resume current run</Button>}</div></section>}
-    {activeRun?.dialog && runId !== activeRun.id && <DialogForm key={activeRun.dialog.id} dialog={activeRun.dialog} runId={activeRun.id} repoId={activeRun.repoId} api={api} execute={execute} busy={busy} />}
+    {claimedRuns.map(run => <section key={run.id} className="active-run" aria-label={`Claimed run ${run.ticketId} in ${snapshot.repos.find(value => value.id === run.repoId)?.name ?? run.repoId}`}><div><Status value={run.status} /><strong>{snapshot.repos.find(value => value.id === run.repoId)?.name} / {run.ticketId}</strong>{run.dialog && <Tag className="attention">Answer needed</Tag>}</div><div className="toolbar"><Button onClick={() => setRunId(run.id)}>Open run</Button><RunControls run={run} api={api} execute={execute} busy={busy} /></div>{run.dialog && runId !== run.id && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}</section>)}
     <p className="operation-status" role="status" aria-live="polite">{pending ? 'Working...' : notice}</p>
     {home || picking ? <section className="home-view" aria-labelledby="home-heading">
       <div className="section-heading"><div><h1 id="home-heading">Projects</h1><p className="muted">Choose a project to manage tickets and review runs.</p></div><Link className="home-action" to="/projects/new">Add project +</Link></div>
@@ -110,6 +109,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
             <span className="path" title={project.path}>{project.path}</span>
             <span className="project-folder-meta"><span>{modes[project.mode]}</span><span>Tickets: {summary?.total ?? 0}</span></span>
             <span className="project-folder-meta">Completion: {project.completion?.mode === 'autonomous' ? 'Autonomous local commit & Done' : 'Human review'}</span>
+            <span className="project-folder-meta">Active runs: {claimedRuns.filter(run => run.repoId === project.id).map(run => `${run.ticketId} (${run.status})`).join(', ') || 'None'}</span>
             {project.handoff && <span className="warning-text">Operator reconciliation required · new starts blocked</span>}
             <span className="project-queue" aria-label="Ticket status counts">{summary ? queueStatuses.map(status => summary.counts[status] ? <span key={status}><Status value={status} /> <span>{summary.counts[status]}</span></span> : null) : <span>No tickets</span>}</span>
           </Link>
@@ -127,7 +127,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
           <Link className="agent-ticket-link" to={`/projects/${encode(repo.id)}/tickets/new/agent`}>Create with agent</Link>
         </div>
       </header>
-      <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. A current run continues.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and the global slot still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'}</p>
+      <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. Current runs continue.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and global capacity still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'} {claimedRuns.length}/{snapshot.settings.maxConcurrentTickets} global slots occupied. One run per project.</p>
       {completionOpen && !ticketId && !creating && <CompletionPolicy key={`completion-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} owned={snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClose={() => setCompletionOpen(false)} />}
       {!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}
       {repo.handoff && <section className="workspace-handoff" aria-label="Workspace handoff">
@@ -155,6 +155,15 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
     {selectedRun && <RunPanel key={selectedRun.id} run={selectedRun} ticket={snapshot.tickets.find(value => value.repoId === selectedRun.repoId && value.id === selectedRun.ticketId)} repo={snapshot.repos.find(value => value.id === selectedRun.repoId)} api={api} execute={execute} busy={busy} onClose={() => { void navigate(`/projects/${encode(selectedRun.repoId)}/tickets/${encode(selectedRun.ticketId)}`); }} />}
     {picking && <FolderPicker api={api} execute={execute} busy={busy} onClose={() => { void navigate('/'); }} onRegistered={id => { void navigate(`/projects/${encode(id)}`); }} />}
   </>;
+}
+
+function RunControls({ run, api, execute, busy }: { run: Run; api: RequestApi; execute: Execute; busy: boolean }) {
+  const [modal, modalContext] = Modal.useModal();
+  async function cancel() {
+    if (!await modal.confirm({ title: `Cancel run ${run.ticketId}?`, autoFocusButton: 'cancel', okText: 'Cancel selected run', okButtonProps: { danger: true }, cancelText: 'Keep run', content: 'This stops only the selected run. Partial work remains in its project; completed actions are not rolled back. Other runs and new-start permissions are unchanged.' })) return;
+    await execute('Cancellation requested for selected run. Partial work remains; no rollback.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'cancel' })); });
+  }
+  return <>{modalContext}{run.status === 'running' && <Button disabled={busy} onClick={() => void execute('Pause requested. Wait for the selected run to stop.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'pause' })); })}>Pause run</Button>}{run.status === 'paused' && <Button disabled={busy} onClick={() => void execute('Explicit run resume requested.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'resume' })); })}>Resume run</Button>}{['running', 'paused'].includes(run.status) && <Button danger disabled={busy} onClick={() => void cancel()}>Cancel run</Button>}</>;
 }
 
 interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; settings?: Settings; api: RequestApi; execute: Execute; busy: boolean; runs: Run[]; onCreated: (id: string) => void; onRun: (id: string) => void; assisted?: boolean }
@@ -565,9 +574,10 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
   if (draft.thinking && !thinkingOptions.some(option => option.value === draft.thinking)) thinkingOptions.push({ value: draft.thinking, label: `${draft.thinking} · ${currentDiscovery ? 'unsupported' : 'not verified'}` });
   const executionChanged = draft.executable !== settings.executable || draft.model !== settings.model;
   const thinkingNeedsDiscovery = !!draft.thinking && !currentDiscovery?.thinkingLevels.includes(draft.thinking) && (executionChanged || draft.thinking !== (settings.thinking ?? ''));
-  const dirty = draft.executable !== settings.executable || draft.model !== settings.model || (draft.thinking ?? '') !== (settings.thinking ?? '') || draft.timeLimitMinutes !== settings.timeLimitMinutes || draft.tokenBudget !== settings.tokenBudget || roots !== settings.roots.join('\n');
+  const dirty = draft.executable !== settings.executable || draft.model !== settings.model || (draft.thinking ?? '') !== (settings.thinking ?? '') || draft.timeLimitMinutes !== settings.timeLimitMinutes || draft.tokenBudget !== settings.tokenBudget || draft.maxConcurrentTickets !== settings.maxConcurrentTickets || roots !== settings.roots.join('\n');
   const timeInvalid = !Number.isInteger(draft.timeLimitMinutes) || draft.timeLimitMinutes < 1 || draft.timeLimitMinutes > 1440;
   const tokensInvalid = draft.tokenBudget !== null && (!Number.isInteger(draft.tokenBudget) || draft.tokenBudget < 1 || draft.tokenBudget > 10000000);
+  const capacityInvalid = !Number.isInteger(draft.maxConcurrentTickets) || draft.maxConcurrentTickets < 1 || draft.maxConcurrentTickets > 4;
 
   function changeModel(model: string) {
     setDraft(current => ({ ...current, model }));
@@ -575,10 +585,10 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
   }
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid) return;
+    if (!dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid || capacityInvalid) return;
     if (draft.tokenBudget === null && settings.tokenBudget !== null && !await modal.confirm({ title: 'Remove the workspace cumulative token limit?', autoFocusButton: 'cancel', okText: 'Save uncapped default', cancelText: 'Keep editing', content: <p>New attempts inheriting workspace settings will have no cumulative token cap. Usage and cost may keep growing until the run finishes or another stop condition applies. Ticket-specific caps still override this default. Existing runs keep their recorded limits. Native auto-compaction, the time limit, pause controls and human acceptance remain.</p> })) return;
     await execute('Settings saved. Existing runs are not restarted.', async () => {
-      const saved = await api<Settings>('/api/settings', json('PATCH', { executable: draft.executable, model: draft.model, thinking: draft.thinking ?? '', roots: roots.split('\n').map(value => value.trim()).filter(Boolean), timeLimitMinutes: draft.timeLimitMinutes, tokenBudget: draft.tokenBudget }));
+      const saved = await api<Settings>('/api/settings', json('PATCH', { executable: draft.executable, model: draft.model, thinking: draft.thinking ?? '', roots: roots.split('\n').map(value => value.trim()).filter(Boolean), timeLimitMinutes: draft.timeLimitMinutes, tokenBudget: draft.tokenBudget, maxConcurrentTickets: draft.maxConcurrentTickets }));
       setDraft(saved); setRoots(saved.roots.join('\n'));
     });
   }
@@ -611,8 +621,9 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
         </div>
       </section>
       <section className="settings-section" aria-labelledby="settings-limits-heading">
-        <div className="settings-section-intro"><h2 id="settings-limits-heading">Run limits</h2><p>Per-run guardrails, not spending limits. Exhaustion requires review and explicit retry.</p></div>
+        <div className="settings-section-intro"><h2 id="settings-limits-heading">Run limits</h2><p>Global capacity across independent projects and per-run guardrails, not spending limits. Exhaustion requires review and explicit retry.</p></div>
         <div className="settings-fields">
+          <label htmlFor="settings-concurrency">Concurrent tickets<InputNumber id="settings-concurrency" type="number" min={1} max={4} step={1} required disabled={busy} status={capacityInvalid ? 'error' : undefined} aria-invalid={capacityInvalid} aria-describedby="settings-concurrency-help" value={Number.isNaN(draft.maxConcurrentTickets) ? null : draft.maxConcurrentTickets} onChange={value => setDraft({ ...draft, maxConcurrentTickets: value ?? NaN })} /><small id="settings-concurrency-help" className={capacityInvalid ? 'warning-text' : undefined}>{capacityInvalid ? 'Enter a whole number from 1 to 4.' : '1–4 tickets across independent projects; never more than one per project. Paused and stopping runs retain their slots. Lowering capacity does not stop existing runs.'}</small></label>
           <div className="form-columns">
             <label htmlFor="settings-time">Time limit (minutes)<InputNumber id="settings-time" type="number" min={1} max={1440} step={1} required disabled={busy} status={timeInvalid ? 'error' : undefined} aria-invalid={timeInvalid} aria-describedby="settings-time-help" value={Number.isNaN(draft.timeLimitMinutes) ? null : draft.timeLimitMinutes} onChange={value => setDraft({ ...draft, timeLimitMinutes: value ?? NaN })} /><small id="settings-time-help" className={timeInvalid ? 'warning-text' : undefined}>{timeInvalid ? 'Enter a whole number from 1 to 1,440.' : '1-1,440 minutes per run.'}</small></label>
             <label htmlFor="settings-tokens">Token budget<InputNumber<number> id="settings-tokens" min={1} max={10000000} step={10000} required={draft.tokenBudget !== null} disabled={busy || draft.tokenBudget === null} placeholder={draft.tokenBudget === null ? 'No cumulative token limit' : undefined} status={tokensInvalid ? 'error' : undefined} aria-invalid={tokensInvalid} aria-describedby="settings-tokens-help" formatter={(value, info) => info.userTyping ? info.input : value === undefined || value === null || String(value) === '' ? '' : Number(value).toLocaleString('en-US')} value={Number.isNaN(draft.tokenBudget) ? null : draft.tokenBudget} onChange={value => setDraft({ ...draft, tokenBudget: value ?? NaN })} /><small id="settings-tokens-help" className={tokensInvalid ? 'warning-text' : undefined}>{tokensInvalid ? 'Enter a whole number from 1 to 10,000,000.' : draft.tokenBudget === null ? 'No cumulative cap for inheriting new attempts. Context-window capacity is separate.' : 'Input, output and repeated context/cache tokens count.'}</small></label>
@@ -623,7 +634,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
           }}>No cumulative token limit</Checkbox>
           {draft.tokenBudget === null && <p className="warning-text">Usage and cost have no cumulative token cap. Native OMP auto-compaction remains enabled; the time limit and all safety/review gates still apply. Completion is not guaranteed.</p>}
           <p className="settings-safety">Limits stop work; they never restart it. Pausing does not roll back changes. Human evidence review is still required before Done.</p>
-          <details className="settings-details"><summary>Pause and restart controls</summary><p>Use Pause all new starts on Projects to prevent new sessions. Pause the current run separately to interrupt active execution. Saving these settings does neither.</p></details>
+          <details className="settings-details"><summary>Pause and restart controls</summary><p>Use Pause all new starts on Projects to prevent new sessions. Pause a selected run separately to interrupt its execution. Saving these settings does neither.</p></details>
         </div>
       </section>
       <section className="settings-section" aria-labelledby="settings-folders-heading">
@@ -636,7 +647,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
           setDraft(settings); setRoots(settings.roots.join('\n'));
           finiteTokenBudget.current = settings.tokenBudget ?? 100000;
           void discover(settings.executable, settings.model);
-        }}>Load saved settings</Button><Button type="primary" htmlType="submit" disabled={busy || !dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid}>Save settings</Button></div>
+        }}>Load saved settings</Button><Button type="primary" htmlType="submit" disabled={busy || !dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid || capacityInvalid}>Save settings</Button></div>
       </div>
     </form>
   </section>;
@@ -647,7 +658,7 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
   useEffect(() => { section.current?.scrollIntoView({ block: 'start', behavior: 'instant' }); section.current?.focus({ preventScroll: true }); }, [run.id]);
   const old = !!ticket && run.revision !== ticket.revision;
   const [view, setView] = useState('transcript');
-  return <section ref={section} className="panel run-panel" tabIndex={-1} aria-labelledby="run-heading"><div className="section-heading"><div><p className="run-reference">{repo?.name ?? run.repoId} / {run.ticketId}</p><h1 id="run-heading">Run details</h1></div><Button onClick={onClose}>Close run</Button></div><div className="toolbar"><Status value={run.status} /><span className="muted">{new Date(run.started).toLocaleString()}</span>{run.status === 'running' && <Button disabled={busy} onClick={() => void execute('Pause requested. Stopping is not yet stopped.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'pause' })); })}>Pause run</Button>}{run.status === 'paused' && <Button type="primary" className="primary" disabled={busy} onClick={() => void execute('Explicit run resume requested.', async () => { await api(`/api/runs/${encode(run.id)}/control`, json('POST', { action: 'resume' })); })}>Resume run</Button>}</div>{run.status === 'stopping' && <p className="notice" role="status">Stopping... Waiting for the agent and its child work to actually stop. Completed actions are not rolled back.</p>}{old && <p className="warning-text">Requirements changed during or after this run. This evidence belongs to an older revision and cannot complete the current ticket.</p>}{run.error && <p role="alert" className="error-banner">{run.error}</p>}{run.blocker && <section className="blocker-box"><h3>Blocked · prerequisite needed</h3><p>{run.blocker}</p></section>}{run.dialog && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}
+  return <section ref={section} className="panel run-panel" tabIndex={-1} aria-labelledby="run-heading"><div className="section-heading"><div><p className="run-reference">{repo?.name ?? run.repoId} / {run.ticketId}</p><h1 id="run-heading">Run details</h1></div><Button onClick={onClose}>Close run</Button></div><div className="toolbar"><Status value={run.status} /><span className="muted">{new Date(run.started).toLocaleString()}</span><RunControls run={run} api={api} execute={execute} busy={busy} /></div>{run.status === 'stopping' && <p className="notice" role="status">Stopping... Waiting for the agent and its child work to actually stop. Completed actions are not rolled back.</p>}{old && <p className="warning-text">Requirements changed during or after this run. This evidence belongs to an older revision and cannot complete the current ticket.</p>}{run.error && <p role="alert" className="error-banner">{run.error}</p>}{run.blocker && <section className="blocker-box"><h3>Blocked · prerequisite needed</h3><p>{run.blocker}</p></section>}{run.dialog && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}
     {run.reviewFeedback && <section className="detail-section"><h3>Human change request</h3><p>Linked to this run and revision; supplied to the next authorized attempt.</p><pre tabIndex={0}>{run.reviewFeedback.message}</pre></section>}
     {run.blocker && <p><Link to={`/projects/${encode(run.repoId)}/tickets/${encode(run.ticketId)}`}>Review blocker recovery instructions on ticket</Link></p>}
     {run.recoveryNote && <section className="detail-section"><h3>Recovery note</h3><p>{run.recoveryNote.reviewed ? 'Operator reviewed for retry' : 'Saved only · not approved for execution'} · revision {run.recoveryNote.revision.slice(0, 10)}</p><pre className="recovery-text" tabIndex={0}>{run.recoveryNote.instructions}</pre></section>}
@@ -686,9 +697,10 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
 }
 
 function DialogForm({ dialog, runId, repoId, api, execute, busy }: { dialog: Dialog; runId: string; repoId: string; api: RequestApi; execute: Execute; busy: boolean }) {
+  const headingId = useId();
   const [value, setValue] = useState(typeof dialog.prefill === 'string' ? dialog.prefill : '');
   const method = dialog.method.replace(/^.*\./, '');
   const options = (dialog.options ?? []).filter((option): option is string => typeof option === 'string');
   async function answer(response: Record<string, unknown>) { await execute('Answer sent to this dialog.', async () => { await api(`/api/runs/${encode(runId)}/answer`, json('POST', { id: dialog.id, ...response })); }); }
-  return <section className="agent-dialog" aria-labelledby={`dialog-${dialog.id}`}><h3 id={`dialog-${dialog.id}`}>{dialog.title || 'Agent response required'}</h3>{dialog.message && <pre className="dialog-message">{dialog.message}</pre>}{method === 'confirm' ? <div className="toolbar"><Button type="primary" className="primary" disabled={busy} onClick={() => void answer({ confirmed: true })}>Confirm / allow</Button><Button disabled={busy} onClick={() => void answer({ confirmed: false })}>Decline</Button></div> : ['select', 'input', 'editor'].includes(method) ? <form onSubmit={event => { event.preventDefault(); if (value) void answer({ value }); }}>{method === 'editor' ? <MarkdownEditor label="Your answer" value={value} onChange={setValue} repoId={repoId} api={api} disabled={busy} /> : <label>{method === 'select' ? 'Choose a response' : 'Your answer'}{method === 'select' ? <Select aria-label="Choose a response" placeholder="Select an option" value={value || undefined} onChange={setValue} disabled={busy} options={options.map(option => ({ value: option, label: option }))} /> : <Input.TextArea required value={value} onChange={event => setValue(event.target.value)} rows={3} disabled={busy} />}</label>}<Button type="primary" htmlType="submit" className="primary" disabled={busy || !value}>Send answer</Button></form> : <p className="warning-text">Unsupported interactive request ({dialog.method}). It cannot be silently approved. Cancel this request and review the run.</p>}<Button className="quiet" disabled={busy} onClick={() => void answer({ cancelled: true })}>Cancel request · do not approve</Button><p className="muted">Responses are bound to this dialog. Approval is never assumed if you disconnect.</p></section>;
+  return <section className="agent-dialog" aria-labelledby={headingId}><h3 id={headingId}>{dialog.title || 'Agent response required'}</h3>{dialog.message && <pre className="dialog-message">{dialog.message}</pre>}{method === 'confirm' ? <div className="toolbar"><Button type="primary" className="primary" disabled={busy} onClick={() => void answer({ confirmed: true })}>Confirm / allow</Button><Button disabled={busy} onClick={() => void answer({ confirmed: false })}>Decline</Button></div> : ['select', 'input', 'editor'].includes(method) ? <form onSubmit={event => { event.preventDefault(); if (value) void answer({ value }); }}>{method === 'editor' ? <MarkdownEditor label="Your answer" value={value} onChange={setValue} repoId={repoId} api={api} disabled={busy} /> : <label>{method === 'select' ? 'Choose a response' : 'Your answer'}{method === 'select' ? <Select aria-label="Choose a response" placeholder="Select an option" value={value || undefined} onChange={setValue} disabled={busy} options={options.map(option => ({ value: option, label: option }))} /> : <Input.TextArea required value={value} onChange={event => setValue(event.target.value)} rows={3} disabled={busy} />}</label>}<Button type="primary" htmlType="submit" className="primary" disabled={busy || !value}>Send answer</Button></form> : <p className="warning-text">Unsupported interactive request ({dialog.method}). It cannot be silently approved. Cancel this request and review the run.</p>}<Button className="quiet" disabled={busy} onClick={() => void answer({ cancelled: true })}>Cancel request · do not approve</Button><p className="muted">Responses are bound to this dialog. Approval is never assumed if you disconnect.</p></section>;
 }

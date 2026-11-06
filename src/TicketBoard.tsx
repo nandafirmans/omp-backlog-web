@@ -97,7 +97,8 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
   const visibleColumns = matching.length === 0 && (search.trim() || assistanceOnly) ? [] : columns.filter(group => (assistanceOnly || group.statuses.some(status => !hidden.includes(status))) && (showEmpty || group.tickets.length > 0 || !!dragging && !!transitionFor(dragging, group.id)));
   const hiddenCount = assistanceOnly ? 0 : matching.filter(ticket => hidden.includes(ticket.status)).length;
   const emptyCount = columns.filter(group => group.tickets.length === 0 && group.statuses.some(status => !hidden.includes(status))).length;
-  const activeRun = snapshot.runs.find(run => ['running', 'stopping', 'paused'].includes(run.status));
+  const claimedRuns = snapshot.runs.filter(run => ['running', 'stopping', 'paused'].includes(run.status));
+  const projectRuns = claimedRuns.filter(run => run.repoId === repo.id);
 
   function focusCard(id: string) {
     requestAnimationFrame(() => {
@@ -269,6 +270,6 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
       })}
       {visibleColumns.length === 0 && <div className="board-empty"><FolderIcon size={32} weight="duotone" aria-hidden="true" /><h2>{tickets.length === 0 ? 'A clear board. A place to start.' : matching.length === 0 ? assistanceOnly ? 'No matching tickets need assistance' : 'No matching tickets' : 'All matching tickets are hidden'}</h2><p>{tickets.length === 0 ? 'Create a draft, describe the change, and define what done looks like.' : matching.length === 0 ? 'Clear the assistance filter or try another title or ticket ID.' : 'Open Display to reveal their statuses.'}</p>{tickets.length === 0 ? <Link to={`/projects/${encode(repo.id)}/tickets/new`}>Create your first ticket</Link> : <Button onClick={() => { setSearch(''); setHidden([]); setAttentionFilter(null); setAssistanceOnly(false); }}>Show all tickets</Button>}</div>}
     </div>
-    <footer className="board-footer"><span>{matching.length} of {tickets.length} tickets{assistanceOnly && ' · Needs assistance only'}{hiddenCount > 0 && <span className="warning-text"> · {hiddenCount} hidden by Display</span>}{!showEmpty && emptyCount > 0 && ` · ${emptyCount} empty columns hidden`}{attentionFilter && <> · Attention filtered: {label(attentionFilter)} <button className="board-clear-filter" type="button" onClick={() => setAttentionFilter(null)}>Clear</button></>}</span><span>{confirming ? 'Confirming move · no changes until Yes' : activeRun ? `${activeRun.repoId === repo.id ? 'Active run' : 'Global slot in use'} · ${activeRun.ticketId}` : 'No active run'}</span></footer>
+    <footer className="board-footer"><span>{matching.length} of {tickets.length} tickets{assistanceOnly && ' · Needs assistance only'}{hiddenCount > 0 && <span className="warning-text"> · {hiddenCount} hidden by Display</span>}{!showEmpty && emptyCount > 0 && ` · ${emptyCount} empty columns hidden`}{attentionFilter && <> · Attention filtered: {label(attentionFilter)} <button className="board-clear-filter" type="button" onClick={() => setAttentionFilter(null)}>Clear</button></>}</span><span>{confirming ? 'Confirming move · no changes until Yes' : `${projectRuns.length ? projectRuns.map(run => `${run.ticketId} (${run.status})`).join(', ') : 'No active project run'} · ${claimedRuns.length}/${snapshot.settings.maxConcurrentTickets} global slots occupied (including paused/stopping)`}</span></footer>
   </section>;
 }
