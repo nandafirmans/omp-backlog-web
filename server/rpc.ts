@@ -1,9 +1,19 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export type Frame = Record<string, unknown> & { type: string };
 const PHYSICAL_LIMIT = 1024 * 1024;
 const LOGICAL_LIMIT = 64 * 1024 * 1024;
+
+const RETRYABLE_READS: Record<string, true> = {
+  get_state: true,
+  get_session_stats: true,
+  get_available_commands: true,
+  get_messages: true,
+  get_available_thinking_levels: true,
+};
+class CommandResponseError extends Error {}
 
 export function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -65,6 +75,11 @@ interface Options {
   onFrame(frame: Frame): void;
   onStderr(text: string): void;
   onFailure(error: Error): void;
+  readRetry?: {
+    signal: AbortSignal;
+    beforeRetry(event: { command: string; attempt: number; error: string; delayMs: number }): Promise<void> | void;
+    guard?(): void;
+  };
 }
 
 export class RpcProcess {
@@ -175,7 +190,9 @@ export class RpcProcess {
         clearTimeout(pending.timer);
         this.pending.delete(frame.id);
         if (frame.success === true) pending.resolve(object(frame.data));
-        else pending.reject(new Error(typeof frame.error === 'string' ? frame.error : 'OMP command failed'));
+        else pending.reject(frame.success === false
+          ? new CommandResponseError(typeof frame.error === 'string' ? frame.error : 'OMP command failed')
+          : new Error(typeof frame.error === 'string' ? frame.error : 'OMP command failed'));
       } else if (frame.success === false) {
         this.options.onFailure(new Error(typeof frame.error === 'string' ? frame.error : 'OMP late command failure'));
       }
@@ -191,6 +208,15 @@ export class RpcProcess {
   }
 
   command(type: string, payload: Record<string, unknown> = {}, timeout = 30_000): Promise<Record<string, unknown>> {
+    if (this.options.readRetry && RETRYABLE_READS[type] === true) return this.commandWithReadRetry(type, payload, timeout);
+    return this.commandOnce(type, payload, timeout);
+  }
+
+  finalSessionStats(): Promise<Record<string, unknown>> {
+    return this.commandOnce('get_session_stats', {}, 1000);
+  }
+
+  private commandOnce(type: string, payload: Record<string, unknown>, timeout: number): Promise<Record<string, unknown>> {
     const id = crypto.randomUUID();
     const gate = Promise.withResolvers<Record<string, unknown>>();
     const timer = setTimeout(() => {
@@ -205,6 +231,47 @@ export class RpcProcess {
       gate.reject(error instanceof Error ? error : new Error(String(error)));
     }
     return gate.promise;
+  }
+
+  private async commandWithReadRetry(type: string, payload: Record<string, unknown>, timeout: number): Promise<Record<string, unknown>> {
+    const retry = this.options.readRetry!;
+    const deadline = Date.now() + timeout;
+    const cancelled = Promise.withResolvers<never>();
+    const timeoutError = new Error(`OMP command timed out: ${type}`);
+    let stopped = false;
+    const abort = () => { stopped = true; cancelled.reject(retry.signal.reason ?? new Error('OMP read retry aborted')); };
+    const timer = setTimeout(() => { stopped = true; cancelled.reject(timeoutError); }, timeout);
+    const guard = () => {
+      retry.signal.throwIfAborted();
+      if (stopped || Date.now() >= deadline) throw timeoutError;
+      if (this.ended || this.closedInput || this.failed) throw new Error('OMP transport is not writable');
+      retry.guard?.();
+      retry.signal.throwIfAborted();
+    };
+    const run = async () => {
+      for (let attempt = 0; ; attempt++) {
+        guard();
+        try { return await this.commandOnce(type, payload, Math.max(0, deadline - Date.now())); }
+        catch (error) {
+          if (!(error instanceof CommandResponseError) || attempt >= 2
+            || /auth|permission|forbidden|unauthorized|protocol|invalid (?:request|json|frame)|shutdown|shutting[ -]down|timed? out|timeout|prompt[ _-]?result/i.test(error.message)
+            || !/temporar(?:ily|y) unavailable|service unavailable|rate[ -]limit|too many requests/i.test(error.message)) throw error;
+          const delayMs = attempt === 0 ? 100 : 250;
+          guard();
+          await retry.beforeRetry({ command: type, attempt: attempt + 1, error: error.message, delayMs });
+          guard();
+          await delay(delayMs);
+          guard();
+        }
+      }
+    };
+    retry.signal.addEventListener('abort', abort, { once: true });
+    try { return await Promise.race([run(), cancelled.promise]); }
+    finally {
+      stopped = true;
+      clearTimeout(timer);
+      retry.signal.removeEventListener('abort', abort);
+    }
   }
 
   private rejectPending(error: Error): void {
