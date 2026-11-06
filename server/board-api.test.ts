@@ -1,20 +1,21 @@
 import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createApi } from './api';
 import { closeStore, createStore, database, digest, token } from './store';
 import { writeTicket } from './tickets';
 import type { Runtime } from './contracts';
 
 test('board transitions save position together and reject invalid placement before approval', async () => {
-  const root = await mkdtemp('/tmp/opencode/backlog-board-test-');
+  const root = await mkdtemp(join(tmpdir(), 'backlog-board-test-'));
   const store = createStore(join(root, 'private'));
   try {
     const workspace = join(root, 'repo');
     await mkdir(workspace);
     const repo = { id: 'repo', path: workspace, name: 'Board fixture', git: false, mode: 'paused' as const, lastStarted: 0 };
     store.save('repos', repo);
-    const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Move card\ndepends_on: []\n---\n\nDone when:\n- Position is saved.\n');
+    const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Move card\ndepends_on: []\n---\n\nSave the requested board position without changing execution permission.\n\nDone when:\n- Position is saved.\n');
     const runtime: Runtime = { wake() {}, async reconcile() {}, async control() {}, async answer() {}, async close() {} };
     const api = createApi(store, runtime);
     const cookie = token(); const csrf = token();

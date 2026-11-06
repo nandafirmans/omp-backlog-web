@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createApi } from './api';
 import type { Run, Runtime } from './contracts';
 import { closeStore, createStore, database, digest, token } from './store';
@@ -9,14 +10,14 @@ import { parseResult, eligible } from './runtime';
 import { recoveryContext, recoveryObjective } from './recovery';
 
 test('blocked recovery is durable, stale-safe, separately saved and explicitly reviewed before a fresh objective', async () => {
-  const root = await mkdtemp('/tmp/opencode/backlog-recovery-test-');
+  const root = await mkdtemp(join(tmpdir(), 'backlog-recovery-test-'));
   const directory = join(root, 'private');
   let store = createStore(directory);
   try {
     const workspace = join(root, 'repo'); await mkdir(workspace);
     const repo = { id: 'repo', path: workspace, name: 'Recovery fixture', git: false, mode: 'approved' as const, lastStarted: 0 };
     store.save('repos', repo);
-    const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Recover safely\ndepends_on: []\n---\n\nDone when:\n- Original journey works.\n');
+    const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Recover safely\ndepends_on: []\n---\n\nRestore the original journey using reviewed recovery instructions.\n\nDone when:\n- Original journey works.\n');
     const result = parseResult({ revision: ticket.revision, status: 'blocked', evidence: [], prerequisite: 'Fixture unavailable', unblock: 'Recheck fixture', attempted: 'Read existing setup docs', permission: 'No additional permission', verification: 'Original journey', recoveryPrompt: 'Probe fixture first; preserve partial work.' }, ticket);
     expect(result.details?.attempted).toBe('Read existing setup docs');
     const sanitized = parseResult({ revision: ticket.revision, status: 'blocked', evidence: [], prerequisite: 'password=synthetic-value', unblock: 'Owner provides fixture' }, ticket);

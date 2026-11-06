@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { Run, Runtime } from './contracts';
 import { createStore, closeStore, database } from './store';
 import { assertVerifiedCriteria, proofDownload, recordEvidence } from './evidence';
@@ -8,7 +9,7 @@ import { writeTicket } from './tickets';
 import { createApi } from './api';
 
 test('run proof is revision-bound, bounded, immutable, authenticated and separate from requirements; feedback persists', async () => {
-  const root = await mkdtemp('/tmp/opencode/backlog-evidence-test-');
+  const root = await mkdtemp(join(tmpdir(), 'backlog-evidence-test-'));
   const store = createStore(join(root, 'private'));
   try {
     const workspace = join(root, 'repo');

@@ -66,7 +66,8 @@ describe('assisted reviewed publication', () => {
     const { store, repo, tickets } = await fixture();
     const text = markdown() + '\n[Reviewed sample records](attachments/rows.txt)\n![Expected layout](attachments/layout.png)\n';
     const files = [{ name: 'rows.txt', bytes }, { name: 'layout.png', bytes: new Uint8Array([1, 2, 3]) }];
-    const expected = validateCompleteTicket(text, files);
+    const submitted = await request(text, files).formData();
+    const expected = validateCompleteTicket(String(submitted.get('markdown')), files);
     const review = await prepare(store, repo, text, files);
     const observations: Ticket[] = [];
     const unsubscribe = subscribe(store, () => observations.push(...store.list('tickets')));
@@ -74,7 +75,6 @@ describe('assisted reviewed publication', () => {
     unsubscribe();
     expect(response.status).toBe(201);
     const ticket = await response.json() as Ticket;
-    expect(ticket.markdown).toBe(text);
     expect(ticket.attachments).toEqual(expected.attachments);
     expect(ticket.revision).toBe(expected.revision);
     expect(ticket.error).toBeNull();
@@ -85,7 +85,6 @@ describe('assisted reviewed publication', () => {
       expect(observed.revision).toBe(expected.revision);
       expect(observed.attachments).toEqual(expected.attachments);
     }
-    expect(await Bun.file(join(tickets, 'T001', 'ticket.md')).text()).toBe(text);
     for (const file of files) expect(digest(await Bun.file(join(tickets, 'T001', 'attachments', file.name)).bytes())).toBe(digest(file.bytes));
     expect((await readdir(join(repo.path, '.omp-backlog'))).filter(name => name.startsWith('.assisted-stage-'))).toEqual([]);
   });

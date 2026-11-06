@@ -1,13 +1,14 @@
 import { expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createApi } from './api';
 import { closeStore, createStore, database } from './store';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import type { Repo, Run, Runtime, WorkspaceReview } from './contracts';
 
 async function fixture(work: (context: { repo: Repo; store: ReturnType<typeof createStore>; git: (...args: string[]) => Promise<string>; request: (action: string, input: unknown, auth?: boolean, csrf?: boolean) => Promise<Response> }) => Promise<void>) {
-  const root = await mkdtemp('/tmp/opencode/workspace-commit-test-');
+  const root = await mkdtemp(join(tmpdir(), 'workspace-commit-test-'));
   const path = join(root, 'repo'); await mkdir(path);
   const store = createStore(join(root, 'private'));
   const git = async (...args: string[]) => {

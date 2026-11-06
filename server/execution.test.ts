@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { Run, Runtime } from './contracts';
 import { createApi } from './api';
 import { parseExecutionOverrides, resolveRunConfiguration, sampleRunState } from './execution';
@@ -11,7 +12,7 @@ test('ticket model/budget overrides preserve defaults, explicit OMP default and 
   for (const input of [null, [], { executable: 'other' }, { model: 'no-provider' }, { model: 'provider/id\n' }, { thinking: 'invalid' }, { tokenBudget: 0 }, { tokenBudget: 10000001 }, { tokenBudget: 1.5 }, { tokenBudget: '1000' }, { tokenBudget: false }, { tokenBudget: Infinity }, { tokenBudget: NaN }]) expect(() => parseExecutionOverrides(input)).toThrow();
   expect(parseExecutionOverrides({ model: '', thinking: '', tokenBudget: 1 })).toEqual({ model: '', thinking: '', tokenBudget: 1 });
   expect(parseExecutionOverrides({ tokenBudget: null })).toEqual({ tokenBudget: null });
-  const settings = { executable: 'unused', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30, roots: [], paused: true };
+  const settings = { executable: 'unused', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30, maxConcurrentTickets: 1, roots: [], paused: true };
   const ticket = { execution: undefined };
   expect(resolveRunConfiguration(settings, ticket)).toEqual({ model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30 });
   expect(resolveRunConfiguration(settings, { ...ticket, execution: { model: 'provider/ticket', tokenBudget: 2000 } })).toEqual({ model: 'provider/ticket', thinking: '', tokenBudget: 2000, timeLimitMinutes: 30 });
@@ -38,7 +39,7 @@ test('context telemetry is separate from cumulative consumption and excludes raw
 });
 
 test('ticket execution saves are stale-safe and cannot approve, retry or change active runs', async () => {
-  const root = await mkdtemp('/tmp/opencode/backlog-execution-test-');
+  const root = await mkdtemp(join(tmpdir(), 'backlog-execution-test-'));
   const store = createStore(join(root, 'private'));
   try {
     const path = join(root, 'repo'); await mkdir(path);
