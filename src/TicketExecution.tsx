@@ -6,7 +6,7 @@ import type { RequestApi } from './Workspace';
 interface Models { models: { provider: string; id: string; name: string }[]; model: string; thinkingLevels: string[] }
 interface Props { ticket: Ticket; settings: Settings; api: RequestApi; disabled: boolean; onDirtyChange: (dirty: boolean) => void; execute: (notice: string, work: () => Promise<void>) => Promise<boolean> }
 const inherit = '__workspace__';
-const different = (a: ExecutionOverrides, b: ExecutionOverrides) => a.model !== b.model || a.thinking !== b.thinking || a.tokenBudget !== b.tokenBudget;
+const different = (a: ExecutionOverrides, b: ExecutionOverrides) => a.engineeringMode !== b.engineeringMode || a.model !== b.model || a.thinking !== b.thinking || a.tokenBudget !== b.tokenBudget;
 
 export default function TicketExecution({ ticket, settings, api, disabled, onDirtyChange, execute }: Props) {
   const [base, setBase] = useState({ execution: ticket.execution ?? {}, version: ticket.executionVersion ?? null, revision: ticket.revision });
@@ -60,9 +60,10 @@ export default function TicketExecution({ ticket, settings, api, disabled, onDir
 
   return <section className="detail-section ticket-execution" aria-label="Ticket execution settings">
     {context}<details>
-    <summary><span className="ticket-execution-title">Next attempt · model &amp; budget</span><span className={dirty ? 'warning-text ticket-execution-summary' : 'muted ticket-execution-summary'}>{dirty ? 'Unsaved ticket settings · expand to edit' : hasOverrides ? 'Ticket overrides saved · expand to edit' : 'Using global settings · expand to customize'}</span></summary>
+    <summary><span className="ticket-execution-title">Next attempt · mode, model &amp; budget</span><span className={dirty ? 'warning-text ticket-execution-summary' : 'muted ticket-execution-summary'}>{dirty ? 'Unsaved ticket settings · expand to edit' : hasOverrides ? 'Ticket overrides saved · expand to edit' : 'Using global settings · expand to customize'}</span></summary>
     <p className="muted">Ticket-specific overrides. Existing runs remain unchanged. Save first, then separately review &amp; retry; partial work and workspace gates remain.</p>
     <div className="form-columns">
+      <label>Engineering Mode<Select aria-label="Ticket engineering mode" value={draft.engineeringMode ?? inherit} options={[{ value: inherit, label: `Inherit global · ${settings.engineeringMode === 'standard' ? 'Standard OMP' : 'OMP + pstack'}` }, { value: 'standard', label: 'Standard OMP' }, { value: 'pstack', label: 'OMP + pstack' }]} disabled={disabled} onChange={value => setDraft(draft => ({ ...draft, engineeringMode: value === 'standard' || value === 'pstack' ? value : undefined }))} /><small>Applies to fresh attempts. Existing runs keep their mode and limits; reviewed blocker recovery retains its source run's mode.</small></label>
       <label>Ticket model<Select aria-label="Ticket execution model" showSearch optionFilterProp="label" value={draft.model ?? inherit} options={models} disabled={disabled || loading} onChange={value => {
         const model = value === inherit ? undefined : value;
         setDraft(value => ({ ...value, model, thinking: undefined }));

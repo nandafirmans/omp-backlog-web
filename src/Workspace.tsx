@@ -471,7 +471,7 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
     </form>}
     {ticket && <>
       <section className="detail-section" aria-labelledby="attachment-heading"><h3 id="attachment-heading">Attachments</h3><p className="muted">Paste files into either editor to attach them. References are not executable instructions. Describe each file's purpose in the Markdown. Use synthetic examples, never credentials.</p>{ticket.attachments.length ? <ul className="attachment-list">{ticket.attachments.map(file => <li key={file.name}><Button type="link" href={`${path}/attachments/${encode(file.name)}`} target="_blank" rel="noreferrer">{file.name}</Button><small>{(file.size / 1024).toFixed(1)} KB</small><Button onClick={() => setAttachment(attachment === file.name ? '' : file.name)}>{attachment === file.name ? 'Close preview' : 'Preview'}</Button></li>)}</ul> : <p className="muted">No attachments.</p>}{attachment && ticket.attachments.some(file => file.name === attachment) && <AttachmentPreview key={`${attachment}-${ticket.revision}`} name={attachment} url={`${path}/attachments/${encode(attachment)}`} api={api} />}</section>
-      <section className="detail-section" aria-labelledby="history-heading"><h3 id="history-heading">Run history</h3>{runs.length ? <ul className="run-list">{runs.map(run => <li key={run.id}><Button className="run-history-entry" onClick={() => onRun(run.id)}><span><Status value={run.status} /> <time dateTime={new Date(run.started).toISOString()}>{new Date(run.started).toLocaleString()}</time></span><small>Revision {run.revision.slice(0, 10)}{run.revision !== ticket.revision ? ' · Older requirements' : ' · Current requirements'}</small>{run.dialog && <Tag className="attention">Answer needed</Tag>}</Button></li>)}</ul> : <p className="muted">No runs. A fresh session starts only when this revision is eligible and permitted.</p>}</section>
+      <section className="detail-section" aria-labelledby="history-heading"><h3 id="history-heading">Run history</h3>{runs.length ? <ul className="run-list">{runs.map(run => <li key={run.id}><Button className="run-history-entry" onClick={() => onRun(run.id)}><span><Status value={run.status} /> <time dateTime={new Date(run.started).toISOString()}>{new Date(run.started).toLocaleString()}</time></span><small>Revision {run.revision.slice(0, 10)}{run.revision !== ticket.revision ? ' · Older requirements' : ' · Current requirements'} · {run.configuration?.engineeringMode === 'standard' ? 'Standard OMP' : 'OMP + pstack'}</small>{run.dialog && <Tag className="attention">Answer needed</Tag>}</Button></li>)}</ul> : <p className="muted">No runs. A fresh session starts only when this revision is eligible and permitted.</p>}</section>
     </>}
   </div>;
 }
@@ -532,6 +532,7 @@ interface ExecutionModels {
 
 function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; api: RequestApi; execute: Execute; busy: boolean }) {
   const [draft, setDraft] = useState(settings);
+  const [base, setBase] = useState(settings);
   const finiteTokenBudget = useRef(settings.tokenBudget ?? 100000);
   const [modal, modalContext] = Modal.useModal();
   const [roots, setRoots] = useState(settings.roots.join('\n'));
@@ -574,7 +575,10 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
   if (draft.thinking && !thinkingOptions.some(option => option.value === draft.thinking)) thinkingOptions.push({ value: draft.thinking, label: `${draft.thinking} · ${currentDiscovery ? 'unsupported' : 'not verified'}` });
   const executionChanged = draft.executable !== settings.executable || draft.model !== settings.model;
   const thinkingNeedsDiscovery = !!draft.thinking && !currentDiscovery?.thinkingLevels.includes(draft.thinking) && (executionChanged || draft.thinking !== (settings.thinking ?? ''));
-  const dirty = draft.executable !== settings.executable || draft.model !== settings.model || (draft.thinking ?? '') !== (settings.thinking ?? '') || draft.timeLimitMinutes !== settings.timeLimitMinutes || draft.tokenBudget !== settings.tokenBudget || draft.maxConcurrentTickets !== settings.maxConcurrentTickets || roots !== settings.roots.join('\n');
+  const editableKeys = ['engineeringMode', 'executable', 'model', 'thinking', 'roots', 'timeLimitMinutes', 'tokenBudget', 'maxConcurrentTickets'] as const;
+  const stale = editableKeys.some(key => JSON.stringify(settings[key] ?? (key === 'engineeringMode' ? 'pstack' : '')) !== JSON.stringify(base[key] ?? (key === 'engineeringMode' ? 'pstack' : '')));
+  const dirty = draft.executable !== base.executable || draft.model !== base.model || (draft.thinking ?? '') !== (base.thinking ?? '') || (draft.engineeringMode ?? 'pstack') !== (base.engineeringMode ?? 'pstack') || draft.timeLimitMinutes !== base.timeLimitMinutes || draft.tokenBudget !== base.tokenBudget || draft.maxConcurrentTickets !== base.maxConcurrentTickets || roots !== base.roots.join('\n');
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => dirty && currentLocation.pathname !== nextLocation.pathname);
   const timeInvalid = !Number.isInteger(draft.timeLimitMinutes) || draft.timeLimitMinutes < 1 || draft.timeLimitMinutes > 1440;
   const tokensInvalid = draft.tokenBudget !== null && (!Number.isInteger(draft.tokenBudget) || draft.tokenBudget < 1 || draft.tokenBudget > 10000000);
   const capacityInvalid = !Number.isInteger(draft.maxConcurrentTickets) || draft.maxConcurrentTickets < 1 || draft.maxConcurrentTickets > 4;
@@ -585,21 +589,23 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
   }
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid || capacityInvalid) return;
+    if (!dirty || stale || thinkingNeedsDiscovery || timeInvalid || tokensInvalid || capacityInvalid) return;
     if (draft.tokenBudget === null && settings.tokenBudget !== null && !await modal.confirm({ title: 'Remove the workspace cumulative token limit?', autoFocusButton: 'cancel', okText: 'Save uncapped default', cancelText: 'Keep editing', content: <p>New attempts inheriting workspace settings will have no cumulative token cap. Usage and cost may keep growing until the run finishes or another stop condition applies. Ticket-specific caps still override this default. Existing runs keep their recorded limits. Native auto-compaction, the time limit, pause controls and human acceptance remain.</p> })) return;
     await execute('Settings saved. Existing runs are not restarted.', async () => {
-      const saved = await api<Settings>('/api/settings', json('PATCH', { executable: draft.executable, model: draft.model, thinking: draft.thinking ?? '', roots: roots.split('\n').map(value => value.trim()).filter(Boolean), timeLimitMinutes: draft.timeLimitMinutes, tokenBudget: draft.tokenBudget, maxConcurrentTickets: draft.maxConcurrentTickets }));
-      setDraft(saved); setRoots(saved.roots.join('\n'));
+      const saved = await api<Settings>('/api/settings', json('PATCH', { engineeringMode: draft.engineeringMode ?? 'pstack', executable: draft.executable, model: draft.model, thinking: draft.thinking ?? '', roots: roots.split('\n').map(value => value.trim()).filter(Boolean), timeLimitMinutes: draft.timeLimitMinutes, tokenBudget: draft.tokenBudget, maxConcurrentTickets: draft.maxConcurrentTickets }));
+      setBase(saved); setDraft(saved); setRoots(saved.roots.join('\n'));
     });
   }
   return <section className="settings-view">
     {modalContext}
+    {blocker.state === 'blocked' && <div className="notice" role="alert"><p>Leave execution settings and discard unsaved changes?</p><div className="toolbar"><Button onClick={() => blocker.reset()}>Keep editing settings</Button><Button danger onClick={() => blocker.proceed()}>Discard changes &amp; leave</Button></div></div>}
     <h1>Execution settings</h1>
     <p className="lead">Defaults for new ticket runs. Existing sessions and your global OMP configuration stay unchanged.</p>
     <form className="panel settings-form" onSubmit={event => void save(event)}>
       <section className="settings-section" aria-labelledby="settings-agent-heading">
         <div className="settings-section-intro"><h2 id="settings-agent-heading">OMP &amp; model</h2><p>Choose the agent and reasoning settings used across projects.</p></div>
         <div className="settings-fields">
+          <label htmlFor="settings-engineering-mode">Engineering Mode<Select id="settings-engineering-mode" aria-label="Global engineering mode" value={draft.engineeringMode ?? 'pstack'} options={[{ value: 'standard', label: 'Standard OMP' }, { value: 'pstack', label: 'OMP + pstack' }]} disabled={busy} onChange={engineeringMode => { if (engineeringMode === 'standard' || engineeringMode === 'pstack') setDraft(current => ({ ...current, engineeringMode })); }} aria-describedby="settings-engineering-mode-help" /><small id="settings-engineering-mode-help">Standard OMP uses native implementation without requiring pstack. OMP + pstack requires its installed capabilities. New attempts inherit this choice unless overridden; existing runs retain their mode and limits.</small></label>
           <label htmlFor="settings-executable">OMP executable<Input id="settings-executable" value={draft.executable} disabled={busy} onChange={event => {
             const executable = event.target.value;
             ++sequence.current;
@@ -641,13 +647,15 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
         <div className="settings-section-intro"><h2 id="settings-folders-heading">Folder access</h2><p>Limit which project directories the folder picker can browse.</p></div>
         <div className="settings-fields"><label htmlFor="settings-roots">Permitted folder roots<Input.TextArea id="settings-roots" autoSize={{ minRows: 2, maxRows: 5 }} value={roots} disabled={busy} onChange={event => setRoots(event.target.value)} required spellCheck={false} aria-describedby="settings-roots-help" /><small id="settings-roots-help">One absolute directory per line. Browsing cannot escape these roots, including through symlinks.</small></label><p className="settings-safety">Folder access is not an execution sandbox. Agents retain the backend OS user's permissions.</p></div>
       </section>
+      {stale && <p className="error-banner" role="alert">Saved execution settings changed elsewhere. Your selections are preserved. Load saved settings before saving again.</p>}
       <div className="settings-actions">
         <span role="status" className={dirty ? 'settings-unsaved' : 'muted'}>{busy ? 'Saving settings…' : dirty ? 'Unsaved changes' : 'No unsaved changes'}</span>
-        <div className="toolbar"><Button htmlType="button" disabled={busy || !dirty} onClick={() => {
-          setDraft(settings); setRoots(settings.roots.join('\n'));
+        <div className="toolbar"><Button htmlType="button" disabled={busy || !dirty && !stale} onClick={async () => {
+          if (dirty && !await modal.confirm({ title: 'Replace unsaved execution settings?', okText: 'Load saved settings', cancelText: 'Keep editing' })) return;
+          setBase(settings); setDraft(settings); setRoots(settings.roots.join('\n'));
           finiteTokenBudget.current = settings.tokenBudget ?? 100000;
-          void discover(settings.executable, settings.model);
-        }}>Load saved settings</Button><Button type="primary" htmlType="submit" disabled={busy || !dirty || thinkingNeedsDiscovery || timeInvalid || tokensInvalid || capacityInvalid}>Save settings</Button></div>
+          if (draft.executable !== settings.executable || draft.model !== settings.model) void discover(settings.executable, settings.model);
+        }}>Load saved settings</Button><Button type="primary" htmlType="submit" disabled={busy || !dirty || stale || thinkingNeedsDiscovery || timeInvalid || tokensInvalid || capacityInvalid}>Save settings</Button></div>
       </div>
     </form>
   </section>;
@@ -663,6 +671,7 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
     {run.blocker && <p><Link to={`/projects/${encode(run.repoId)}/tickets/${encode(run.ticketId)}`}>Review blocker recovery instructions on ticket</Link></p>}
     {run.recoveryNote && <section className="detail-section"><h3>Recovery note</h3><p>{run.recoveryNote.reviewed ? 'Operator reviewed for retry' : 'Saved only · not approved for execution'} · revision {run.recoveryNote.revision.slice(0, 10)}</p><pre className="recovery-text" tabIndex={0}>{run.recoveryNote.instructions}</pre></section>}
     {run.recoveryContext && <section className="detail-section"><h3>Reviewed recovery handoff</h3><p>Received from <Link to={`/runs/${encode(run.recoveryContext.sourceRunId)}`}>blocked source run</Link>. Previous evidence is context, not fresh verification.</p><pre className="recovery-text" tabIndex={0}>{run.recoveryContext.note.instructions}</pre></section>}
+      <span>Engineering Mode: {run.configuration?.engineeringMode === 'standard' ? 'Standard OMP' : 'OMP + pstack'}{!run.configuration?.engineeringMode && ' · legacy mode'}</span>
     <nav className="run-context-links" aria-label="Run context">
       {ticket && <Link to={`/projects/${encode(run.repoId)}/tickets/${encode(run.ticketId)}`}>{ticket.id} · {ticket.title}</Link>}
       <span className="muted">Revision {run.revision.slice(0, 10)}</span>
