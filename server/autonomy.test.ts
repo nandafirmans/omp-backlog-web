@@ -1,9 +1,10 @@
 import { expect, test } from 'bun:test';
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, lstat, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Repo, Run, Store, VerificationRecipe } from './contracts';
 import { closeStore, createStore, digest } from './store';
 import { assertCandidate, captureBaseline, captureCandidate, publishCandidate, recipeIdentity, reconcilePublication, verifyCandidate } from './autonomy';
+import { assertWorkspaceIdentity, inspectWorkspaceIdentity } from './workspace-identity';
 
 interface Fixture { repo: Repo; store: Store; run: Run; git: (...args: string[]) => Promise<string>; guard: () => void }
 async function fixture(work: (context: Fixture) => Promise<void>, command = 'console.log("host checked");') {
@@ -27,6 +28,7 @@ async function fixture(work: (context: Fixture) => Promise<void>, command = 'con
     if (repo.completion!.mode !== 'autonomous') throw new Error('fixture policy');
     repo.completion!.recipeHash = await recipeIdentity(repo, recipe); store.save('repos', repo);
     const run: Run = { id: 'run', repoId: repo.id, ticketId: 'ticket', revision: 'ticket-revision', status: 'running', started: Date.now(), finished: null, pid: null, sessionId: 'author', sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null, lifecycle: { policy: repo.completion!, phase: 'implementing', baseline: await captureBaseline(store, repo), recipeHash: repo.completion!.recipeHash, corrections: 0, recoveries: 0, authorSessionId: 'author', authorTokens: 0, verification: [], reviews: [] } };
+    run.workspace = await inspectWorkspaceIdentity(repo);
     store.save('runs', run);
     await work({ repo, store, run, git, guard() { if (store.get('runs', run.id)?.revision !== run.revision) throw new Error('Stale run'); } });
   } finally { closeStore(store); await rm(root, { recursive: true, force: true }); }
@@ -153,6 +155,86 @@ for (const stage of ['published', 'complete'] as const) test(`crash at ${stage} 
     await interrupted(context, stage);
     expect(await reconcilePublication(context.store, context.repo, context.run, context.guard)).toBe(true);
     expect((await context.git('rev-list', '--count', 'HEAD')).trim()).toBe('2'); expect(await context.git('status', '--porcelain')).toBe('');
+  });
+});
+
+async function withReplacementWorkspace(context: Fixture, work: () => Promise<void>) {
+  const original = `${context.repo.path}-admitted`, replacement = `${context.repo.path}-replacement`;
+  await cp(context.repo.path, replacement, { recursive: true, preserveTimestamps: true });
+  await rename(context.repo.path, original);
+  try {
+    await rename(replacement, context.repo.path);
+    await work();
+  } finally {
+    await rm(context.repo.path, { recursive: true, force: true });
+    await rename(original, context.repo.path);
+  }
+}
+
+test('publication identity rejects byte-identical root replacement after durable published intent', async () => {
+  await fixture(async context => {
+    const { repo, store, run } = context;
+    await ready(context);
+    const save = store.save.bind(store);
+    store.save = (kind, value) => {
+      save(kind, value);
+      if (kind === 'runs' && 'lifecycle' in value && value.lifecycle?.publication?.state === 'published') throw new Error('Crash after durable published intent');
+    };
+    try { await expect(publishCandidate(store, repo, run, context.guard)).rejects.toThrow('Crash after durable published intent'); }
+    finally { store.save = save; }
+    context.run = store.get('runs', run.id)!;
+    expect(context.run.lifecycle!.publication!.state).toBe('published');
+    const index = (await context.git('rev-parse', '--path-format=absolute', '--git-path', 'index')).trim();
+    const before = await readFile(index), head = await context.git('rev-parse', 'HEAD');
+    const work = await readFile(join(repo.path, 'work.txt')), recipe = await readFile(join(repo.path, 'check.js'));
+    await withReplacementWorkspace(context, async () => {
+      expect((await inspectWorkspaceIdentity(repo)).rootIno).not.toBe(context.run.workspace!.rootIno);
+      expect(await readFile(index)).toEqual(before); expect(await context.git('rev-parse', 'HEAD')).toBe(head);
+      expect(await readFile(join(repo.path, 'work.txt'))).toEqual(work); expect(await readFile(join(repo.path, 'check.js'))).toEqual(recipe);
+      await expect(reconcilePublication(store, repo, context.run, context.guard)).rejects.toThrow('Workspace identity');
+      expect(await readFile(index)).toEqual(before); expect(await context.git('rev-parse', 'HEAD')).toBe(head);
+      expect(store.get('runs', run.id)!.lifecycle!.publication!.state).toBe('published');
+      expect(store.get('runs', run.id)!.status).toBe('running');
+      expect(await lstat(`${index}.lock`).catch(() => null)).toBeNull();
+    });
+    expect(await readFile(index)).toEqual(before);
+  });
+});
+
+test('publication identity rechecks replacement after caller admission check before publication boundary', async () => {
+  await fixture(async context => {
+    const { repo, store, run } = context;
+    await ready(context);
+    await assertWorkspaceIdentity(repo, run.workspace!);
+    const index = (await context.git('rev-parse', '--path-format=absolute', '--git-path', 'index')).trim();
+    const before = await readFile(index), head = await context.git('rev-parse', 'HEAD');
+    await withReplacementWorkspace(context, async () => {
+      await assertCandidate(store, repo, run.lifecycle!.candidate!);
+      await expect(publishCandidate(store, repo, run, context.guard)).rejects.toThrow('Workspace identity');
+      expect(await readFile(index)).toEqual(before); expect(await context.git('rev-parse', 'HEAD')).toBe(head);
+      expect(store.get('runs', run.id)!.lifecycle!.publication).toBeUndefined();
+      expect(await lstat(`${index}.lock`).catch(() => null)).toBeNull();
+    });
+    expect(await readFile(index)).toEqual(before); expect(await context.git('rev-parse', 'HEAD')).toBe(head);
+  });
+});
+
+for (const operation of ['publication', 'reconciliation'] as const) test(`publication identity fails closed for missing legacy identity during ${operation}`, async () => {
+  await fixture(async context => {
+    const { repo, store, run } = context;
+    if (operation === 'reconciliation') await interrupted(context, 'published');
+    else await ready(context);
+    delete context.run.workspace; store.save('runs', context.run);
+    const index = (await context.git('rev-parse', '--path-format=absolute', '--git-path', 'index')).trim();
+    const before = await readFile(index), head = await context.git('rev-parse', 'HEAD');
+    const publication = structuredClone(context.run.lifecycle!.publication);
+    await expect(operation === 'publication'
+      ? publishCandidate(store, repo, context.run, context.guard)
+      : reconcilePublication(store, repo, context.run, context.guard)).rejects.toThrow('Workspace identity');
+    expect(await readFile(index)).toEqual(before); expect(await context.git('rev-parse', 'HEAD')).toBe(head);
+    expect(store.get('runs', run.id)!.lifecycle!.publication).toEqual(publication);
+    expect(store.get('runs', run.id)!.status).toBe('running');
+    expect(await lstat(`${index}.lock`).catch(() => null)).toBeNull();
   });
 });
 

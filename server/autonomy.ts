@@ -10,6 +10,7 @@ import { HttpError, reconcileTickets, safePath } from './tickets';
 import { redactTranscript } from './transcript';
 import { workspaceInternals as w, workspaceOperation } from './workspace-commit';
 import type { WorkspaceCapture } from './workspace-commit';
+import { assertWorkspaceIdentity } from './workspace-identity';
 
 function reject(message: string): never { throw new HttpError(409, message); }
 function policy(store: Store, repo: Repo, run: Run) {
@@ -101,12 +102,18 @@ export async function recipeIdentity(repo: Repo, recipe: VerificationRecipe): Pr
   }
   return digest(JSON.stringify({ argv: recipe.argv, timeoutSeconds: recipe.timeoutSeconds, files }));
 }
+async function assertRunWorkspace(repo: Repo, run: Run) {
+  if (!run.workspace) reject('Workspace identity is unavailable; inspect the repository before retrying');
+  await assertWorkspaceIdentity(repo, run.workspace);
+}
 async function exact(store: Store, repo: Repo, run: Run, guard: () => void) {
+  await assertRunWorkspace(repo, run);
   const life = policy(store, repo, run);
   if (!life.candidate) reject('No captured candidate');
   await assertCandidate(store, repo, life.candidate);
   if (await recipeIdentity(repo, life.policy.verification) !== life.recipeHash) reject('Verification recipe changed');
   await reconcileTickets(store, true);
+  await assertRunWorkspace(repo, run);
   guard(); policy(store, repo, run);
   return life;
 }
@@ -230,11 +237,14 @@ async function ownsLock(path: string, identity: { dev: number; ino: number }) {
 
 export async function publishCandidate(store: Store, repo: Repo, run: Run, guard: () => void): Promise<Publication> {
   return workspaceOperation(store, repo.id, async () => {
+    await assertRunWorkspace(repo, run);
     const life = approved(store, repo, run);
     if (life.publication) reject('Publication already has durable intent; reconcile instead');
     await exact(store, repo, run, guard);
     const value = life.candidate!, index = await indexPath(repo);
     const lockPath = `${index}.lock`;
+    await assertRunWorkspace(repo, run);
+    guard(); policy(store, repo, run);
     const lock = await open(lockPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
     const lockIdentity = await lock.stat();
     let renamed = false, scratch = '';
@@ -246,7 +256,10 @@ export async function publishCandidate(store: Store, repo: Repo, run: Run, guard
       const commit = noChanges ? null : (await w.checked(repo, ['commit-tree', value.tree, '-p', value.head, '-F', '-'], undefined, Buffer.from(`Complete autonomous ticket ${run.ticketId}\n`))).trim();
       const finalIndex = join(scratch, 'index');
       await w.checked(repo, ['read-tree', value.tree], finalIndex);
-      await lock.writeFile(await readFile(finalIndex)); await lock.sync();
+      const finalBytes = await readFile(finalIndex);
+      await assertRunWorkspace(repo, run);
+      guard(); policy(store, repo, run);
+      await lock.writeFile(finalBytes); await lock.sync();
       await exact(store, repo, run, guard);
       approved(store, repo, run);
       const publication: Publication = { operationId: randomUUID(), state: 'prepared', commit, parent: value.head, tree: value.tree, ref: value.ref, recorded: Date.now(), noChanges };
@@ -255,10 +268,14 @@ export async function publishCandidate(store: Store, repo: Repo, run: Run, guard
       const intent = await open(join(directory, 'publication-lock.json'), 'w', 0o600);
       try { await intent.writeFile(JSON.stringify({ operationId: publication.operationId, dev: lockIdentity.dev, ino: lockIdentity.ino, hash: digest(await readFile(finalIndex)) })); await intent.sync(); }
       finally { await intent.close(); }
+      await assertRunWorkspace(repo, run);
+      guard(); policy(store, repo, run);
       life.publication = publication; store.save('runs', run);
       await exact(store, repo, run, guard);
+      await assertRunWorkspace(repo, run);
       guard(); policy(store, repo, run);
       if (commit) await w.checked(repo, ['update-ref', '-m', 'autonomous ticket completion', value.ref, commit, value.head]);
+      await assertRunWorkspace(repo, run);
       publication.state = 'published'; store.save('runs', run);
       // The real index is untouched until the ref CAS has succeeded.
       const publishedView = await candidate(store, repo);
@@ -266,8 +283,11 @@ export async function publishCandidate(store: Store, repo: Repo, run: Run, guard
       if (digest(await w.indexBytes(index)) !== value.indexHash) reject('Index changed during publication; preserving external edits');
       if (!await ownsLock(lockPath, lockIdentity)) reject('Publication index lock was replaced');
       await reconcileTickets(store, true);
+      await assertRunWorkspace(repo, run);
       guard(); policy(store, repo, run);
       await rename(lockPath, index); renamed = true;
+      await assertRunWorkspace(repo, run);
+      guard(); policy(store, repo, run);
       publication.state = 'complete'; store.save('runs', run);
       return publication;
     } finally {
@@ -279,6 +299,7 @@ export async function publishCandidate(store: Store, repo: Repo, run: Run, guard
 }
 export async function reconcilePublication(store: Store, repo: Repo, run: Run, guard: () => void): Promise<boolean> {
   return workspaceOperation(store, repo.id, async () => {
+    await assertRunWorkspace(repo, run);
     const life = approved(store, repo, run), publication = life.publication, value = life.candidate!;
     if (!publication) return false;
     if (publication.parent !== value.head || publication.tree !== value.tree || publication.ref !== value.ref || publication.noChanges !== (value.tree === life.baseline.tree)) reject('Publication intent does not match admitted candidate');
@@ -290,6 +311,7 @@ export async function reconcilePublication(store: Store, repo: Repo, run: Run, g
       if (exists) {
         const saved = JSON.parse(await readFile(join(store.dataDir, 'runtime', run.id, 'publication-lock.json'), 'utf8'));
         if (saved.operationId !== publication.operationId || !await ownsLock(lockPath, saved) || digest(await w.indexBytes(lockPath)) !== saved.hash) reject('Unpublished index lock belongs to another operation');
+        await assertRunWorkspace(repo, run);
         guard(); policy(store, repo, run);
         await rm(lockPath);
       }
@@ -301,11 +323,15 @@ export async function reconcilePublication(store: Store, repo: Repo, run: Run, g
     if (await recipeIdentity(repo, life.policy.verification) !== life.recipeHash) reject('Recipe changed after publication');
     const index = await indexPath(repo), lockPath = `${index}.lock`;
     let lock;
+    await assertRunWorkspace(repo, run);
+    guard(); policy(store, repo, run);
     try { lock = await open(lockPath, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
     catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       const saved = JSON.parse(await readFile(join(store.dataDir, 'runtime', run.id, 'publication-lock.json'), 'utf8'));
       if (saved.operationId !== publication.operationId || !await ownsLock(lockPath, saved) || digest(await w.indexBytes(lockPath)) !== saved.hash) reject('Index lock belongs to another operation');
+      await assertRunWorkspace(repo, run);
+      guard(); policy(store, repo, run);
       lock = await open(lockPath, constants.O_RDWR | constants.O_NOFOLLOW);
       const actual = await lock.stat();
       if (actual.dev !== saved.dev || actual.ino !== saved.ino) { await lock.close(); reject('Index lock changed during recovery'); }
@@ -329,11 +355,16 @@ export async function reconcilePublication(store: Store, repo: Repo, run: Run, g
       if ((await w.checked(repo, ['rev-parse', 'HEAD'])).trim() !== head) reject('Branch moved during reconciliation');
       if (digest(await w.indexBytes(index)) !== currentHash) reject('Index moved during reconciliation');
       const finalBytes = await readFile(finalIndex);
+      await assertRunWorkspace(repo, run);
+      guard(); policy(store, repo, run);
       await lock.truncate(0); await lock.writeFile(finalBytes); await lock.sync();
       if (!await ownsLock(lockPath, lockIdentity)) reject('Recovery index lock was replaced');
       await reconcileTickets(store, true);
+      await assertRunWorkspace(repo, run);
       guard(); policy(store, repo, run);
       await rename(lockPath, index); renamed = true;
+      await assertRunWorkspace(repo, run);
+      guard(); policy(store, repo, run);
       publication.state = 'complete'; store.save('runs', run);
       return true;
     } finally { await lock.close(); if (!renamed && await ownsLock(lockPath, lockIdentity)) await rm(lockPath, { force: true }); if (scratch) await rm(scratch, { recursive: true, force: true }); }

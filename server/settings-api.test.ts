@@ -20,6 +20,28 @@ test('settings preserve legacy defaults and other values while validating thinki
   try {
     const before = store.settings();
     expect(before.thinking).toBeUndefined();
+    expect(before.maxConcurrentTickets).toBe(1);
+    const { maxConcurrentTickets: omittedCapacity, ...legacy } = before;
+    expect(omittedCapacity).toBe(1);
+    database(store).query('UPDATE config SET value=? WHERE id=1').run(JSON.stringify(legacy));
+    expect(store.settings()).toEqual(before);
+    const legacyReload = createStore(store.dataDir);
+    try { expect(legacyReload.settings()).toEqual(before); } finally { closeStore(legacyReload); }
+    expect((await call('settings', 'PATCH', { maxConcurrentTickets: 2 }, false)).status).toBe(401);
+    expect((await call('settings', 'PATCH', { maxConcurrentTickets: 2 }, true, false)).status).toBe(403);
+    for (const maxConcurrentTickets of [0, -1, 5, 1.5, '2', null, false, NaN, Infinity]) {
+      expect((await call('settings', 'PATCH', { maxConcurrentTickets, paused: true })).status).toBe(400);
+      expect(store.settings()).toEqual(before);
+    }
+    for (const maxConcurrentTickets of [1, 2, 3, 4]) {
+      const response = await call('settings', 'PATCH', { maxConcurrentTickets });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ...before, maxConcurrentTickets });
+      expect(store.settings()).toEqual({ ...before, maxConcurrentTickets });
+    }
+    const capacityReload = createStore(store.dataDir);
+    try { expect(capacityReload.settings()).toEqual({ ...before, maxConcurrentTickets: 4 }); } finally { closeStore(capacityReload); }
+    expect((await call('settings', 'PATCH', { maxConcurrentTickets: 1 })).status).toBe(200);
     expect((await call('settings', 'PATCH', { tokenBudget: null }, false)).status).toBe(401);
     expect((await call('settings', 'PATCH', { tokenBudget: null }, true, false)).status).toBe(403);
     expect((await call('settings/models', 'POST', { executable: 'unused', model: '' }, false)).status).toBe(401);

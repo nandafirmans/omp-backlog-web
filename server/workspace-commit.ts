@@ -2,31 +2,39 @@ import { constants } from 'node:fs';
 import { chmod, lstat, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { Repo, Store, WorkspaceReview } from './contracts';
+import type { Repo, Store, WorkspaceIdentity, WorkspaceReview } from './contracts';
 import { digest } from './store';
 import { HttpError, safePath } from './tickets';
+import { assertWorkspaceIdentity, claimedWorkspaceConflict, inspectWorkspaceIdentity, workspaceConflict } from './workspace-identity';
 
 const LIMIT = 128 * 1024;
 const AGE = 10 * 60 * 1000;
 interface Entry { path: string; mode: string; bytes: Uint8Array | null }
 export interface WorkspaceCapture { result: WorkspaceReview; entries: Entry[]; fingerprint: string; expires: number; head: string; ref: string; index: string; handoffId?: unknown }
-type Review = WorkspaceCapture;
+type Review = WorkspaceCapture & { workspace: WorkspaceIdentity };
 const reviews = new WeakMap<Store, Map<string, Review>>();
-const locks = new WeakMap<Store, Set<string>>();
+const locks = new WeakMap<Store, Map<string, WorkspaceIdentity>>();
 
-// Shared with Recheck: clearing the gate cannot race an operator commit.
-export async function workspaceOperation<T>(store: Store, repoId: string, operation: () => Promise<T>): Promise<T> {
+export async function workspaceOperation<T>(store: Store, repoId: string, operation: (identity: WorkspaceIdentity) => Promise<T>): Promise<T> {
   let owned = locks.get(store);
-  if (!owned) { owned = new Set(); locks.set(store, owned); }
+  if (!owned) { owned = new Map(); locks.set(store, owned); }
   if (owned.has(repoId)) throw new HttpError(409, 'Another workspace operation is in progress');
-  owned.add(repoId);
-  try { return await operation(); } finally { owned.delete(repoId); }
+  const repo = store.get('repos', repoId);
+  if (!repo) throw new HttpError(409, 'Repository no longer exists');
+  const identity = await inspectWorkspaceIdentity(repo);
+  if (owned.has(repoId)) throw new HttpError(409, 'Another workspace operation is in progress');
+  for (const other of owned.values()) if (workspaceConflict(identity, other)) throw new HttpError(409, 'Another workspace operation is in progress');
+  owned.set(repoId, identity);
+  try {
+    await assertWorkspaceIdentity(repo, identity);
+    return await operation(identity);
+  } finally { owned.delete(repoId); }
 }
 
-function guard(store: Store, repo: Repo, handoffId: unknown) {
+function guard(store: Store, repo: Repo, handoffId: unknown, identity: WorkspaceIdentity) {
   const current = store.get('repos', repo.id);
   if (!repo.git || !current?.handoff || current.handoff.id !== handoffId) throw new HttpError(409, 'Workspace handoff changed; review the current gate');
-  if (store.list('runs').some(run => run.repoId === repo.id && ['running', 'stopping', 'paused'].includes(run.status))) throw new HttpError(409, 'Stop or finish owned work before reviewing or committing');
+  if (claimedWorkspaceConflict(store, repo, identity)) throw new HttpError(409, 'Stop or finish owned work before reviewing or committing');
 }
 
 async function git(repo: Repo, args: string[], index?: string, input?: Uint8Array): Promise<{ text: string; code: number }> {
@@ -103,7 +111,7 @@ async function diffPreview(repo: Repo, privateDir: string, before: string, after
   } finally { await rm(scratch, { recursive: true, force: true }); } // Only the two private preview files created above.
 }
 
-async function capture(repo: Repo, privateDir: string, preview = false): Promise<Review> {
+async function capture(repo: Repo, privateDir: string, preview = false): Promise<WorkspaceCapture> {
   await safePath(repo.path, repo.path);
   const root = (await checked(repo, ['rev-parse', '--show-toplevel'])).trim();
   if (root !== repo.path) throw new HttpError(409, 'Repository root changed; register it again');
@@ -162,23 +170,27 @@ async function capture(repo: Repo, privateDir: string, preview = false): Promise
 }
 
 export async function reviewWorkspace(store: Store, repo: Repo, handoffId: unknown): Promise<WorkspaceReview> {
-  guard(store, repo, handoffId);
+  const identity = await inspectWorkspaceIdentity(repo);
+  guard(store, repo, handoffId, identity);
   let saved = reviews.get(store);
   if (!saved) { saved = new Map(); reviews.set(store, saved); }
   saved.delete(repo.id);
   for (const [id, review] of saved) if (review.expires < Date.now()) saved.delete(id);
   if (saved.size >= 20) throw new HttpError(409, 'Too many open workspace reviews; wait for a review to expire');
-  const review = await capture(repo, store.dataDir, true);
-  guard(store, repo, handoffId);
+  const review: Review = { ...await capture(repo, store.dataDir, true), workspace: identity };
+  await assertWorkspaceIdentity(repo, identity);
+  guard(store, repo, handoffId, identity);
   review.handoffId = handoffId;
   saved.set(repo.id, review);
   return review.result;
 }
 
 export async function commitWorkspace(store: Store, repo: Repo, input: Record<string, unknown>): Promise<{ commit: string }> {
-  guard(store, repo, input.handoffId);
+  const identity = await inspectWorkspaceIdentity(repo);
+  guard(store, repo, input.handoffId, identity);
   const saved = reviews.get(store)?.get(repo.id);
   if (!saved || input.reviewId !== saved.result.id || saved.handoffId !== input.handoffId || saved.expires < Date.now()) throw new HttpError(409, 'Review expired or changed; reload changes before committing');
+  await assertWorkspaceIdentity(repo, saved.workspace);
   if (input.confirm !== true || typeof input.message !== 'string' || !input.message.trim() || input.message.length > 2000 || Array.from(input.message).some(char => { const code = char.charCodeAt(0); return (code < 32 && code !== 9 && code !== 10) || code === 127; })) throw new HttpError(400, 'Confirm the commit and enter a message (1–2000 characters)');
   try { text(Buffer.from(input.message)); } catch { throw new HttpError(400, 'Commit message may contain credentials; remove them'); }
   if (!Array.isArray(input.files) || !input.files.length || input.files.length > 100 || input.files.some(path => typeof path !== 'string') || new Set(input.files).size !== input.files.length) throw new HttpError(400, 'Select unique reviewed files');
@@ -194,6 +206,8 @@ export async function commitWorkspace(store: Store, repo: Repo, input: Record<st
   try {
     scratch = await mkdtemp(join(store.dataDir, 'workspace-commit-'));
     await chmod(scratch, 0o700);
+    await assertWorkspaceIdentity(repo, saved.workspace);
+    guard(store, repo, input.handoffId, identity);
     if ((await capture(repo, store.dataDir)).fingerprint !== saved.fingerprint) throw new HttpError(409, 'Workspace changed since review; reload changes before committing');
     const commitIndex = join(scratch, 'commit-index');
     const finalIndex = join(scratch, 'final-index');
@@ -214,7 +228,8 @@ export async function commitWorkspace(store: Store, repo: Repo, input: Record<st
     const commit = (await checked(repo, ['commit-tree', tree, ...(saved.head ? ['-p', saved.head] : []), '-F', '-'], undefined, Buffer.from(input.message.trim() + '\n'))).trim();
     await lock.writeFile(await readFile(finalIndex)); await lock.sync();
     if ((await capture(repo, store.dataDir)).fingerprint !== saved.fingerprint) throw new HttpError(409, 'Workspace changed during commit preparation; review again');
-    guard(store, repo, input.handoffId);
+    await assertWorkspaceIdentity(repo, saved.workspace);
+    guard(store, repo, input.handoffId, identity);
     await checked(repo, ['update-ref', '-m', 'operator workspace commit', saved.ref, commit, saved.head || '0'.repeat(commit.length)]);
     published = commit;
     await rename(`${saved.index}.lock`, saved.index);

@@ -8,7 +8,7 @@ const args = process.argv.slice(2);
 const argument = (name: string) => args[args.indexOf(name) + 1]!;
 if (args.includes('--version')) { console.log('18.13.3'); process.exit(0); }
 const configPath = argument('--fixture-config');
-const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; holdAuthor?: boolean; holdReview?: boolean };
+const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean };
 const reviewer = args.includes('--no-tools');
 if (reviewer && args.includes('--append-system-prompt')) throw new Error('Restricted reviewer must not receive author engineering system instructions');
 const directory = reviewer ? dirname(argument('--session-dir')) : dirname(argument('--config'));
@@ -27,7 +27,12 @@ let engineeringDiscovered = false;
 let authorToolsRegistered = false;
 let invocationReads = 0;
 const host = (id: string, toolName: string, value: unknown) => send({ type: 'host_tool_call', id, toolName, arguments: value });
+let authorReleased = false;
 const finishAuthor = async () => {
+  if (config.authorBarrier && !authorReleased) {
+    send({ type: 'extension_ui_request', id: 'author-barrier', method: 'input', title: 'Release disposable author' });
+    return;
+  }
   session.turns++; await writeFile(sessionFile, JSON.stringify(session));
   if (config.scenario === 'author-bypass') {
     host('bypass-done', 'backlog_result', { revision: ticket!.revision, status: 'done', files: ['proof.txt'], evidence: ticket!.criteria.map(criterion => ({ criterion, evidence: 'Author claims Done; skip host verification.' })) });
@@ -91,6 +96,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'goal') {
     if (reviewer || frame.op === 'create' && String(frame.objective).startsWith('/skill:')) throw new Error('Native goals must not initialize the engineering router');
     respond(); if (frame.op === 'create' || frame.op === 'resume') await finishAuthor();
+  }
+  else if (frame.type === 'extension_ui_response' && frame.id === 'author-barrier') {
+    authorReleased = true;
+    await finishAuthor();
   }
   else if (frame.type === 'host_tool_result') {
     if (frame.id === 'bypass-done' || frame.id === 'bypass-review') {

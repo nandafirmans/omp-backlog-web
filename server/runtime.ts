@@ -14,6 +14,8 @@ import { resolveRunConfiguration, sampleRunState } from './execution';
 import { assertCandidate, captureBaseline, captureCandidate, publishCandidate, recipeIdentity, reconcilePublication, verifyCandidate } from './autonomy';
 import { reviewCandidate } from './autonomy-review';
 import { assertEngineeringWorkflow, ENGINEERING_AUTHORITY, observeEngineeringInvocation } from './engineering';
+import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
+import { workspaceOperation } from './workspace-commit';
 
 const CLAIMED: Status[] = ['running', 'stopping', 'paused'];
 const QUIET_MS = 1_000;
@@ -169,7 +171,9 @@ export function assertAutonomyAuthority(store: Store, run: Run) {
     || repo.completion.recipeHash !== lifecycle.recipeHash
     || ticket?.runId !== run.id || ticket.revision !== run.revision || ticket.removed || ticket.error
     || (lifecycle.authorSessionId !== undefined && lifecycle.authorSessionId !== run.sessionId)
-    || run.status !== 'running' || store.list('runs').some(other => other.id !== run.id && CLAIMED.includes(other.status))) {
+    || run.status !== 'running' || (run.workspace
+      ? claimedWorkspaceConflict(store, repo, run.workspace, run.id)
+      : store.list('runs').some(other => other.id !== run.id && CLAIMED.includes(other.status)))) {
     throw new Error('Autonomous authority revoked, requirements changed, or execution ownership lost; assistance required');
   }
   if (run.progress && Date.now() >= run.progress.deadline) throw new Error('Whole-attempt execution deadline exhausted');
@@ -191,14 +195,31 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   if (process.platform !== 'linux') throw new Error('Safe process recovery currently requires Linux /proc identity support');
   const watchers = new Map<string, FSWatcher>();
   const stable = new Map<string, { revision: string; since: number }>();
-  let active: Execution | null = null;
+  const executions = new Map<string, Execution>();
+  const controls = new Map<string, Promise<void>>();
   let closed = false;
   let queued = false;
   let pumping: Promise<void> | null = null;
   let debounce: NodeJS.Timeout | undefined;
   let lastError = '';
 
+  function owns(execution: Execution) { return executions.get(execution.run.id) === execution; }
+  function hasCapacity() {
+    const configured = store.settings().maxConcurrentTickets;
+    const capacity = Number.isInteger(configured) && configured >= 1 && configured <= 4 ? configured : 1;
+    let claimed = 0;
+    for (const run of store.list('runs')) if (CLAIMED.includes(run.status)) claimed++;
+    return claimed < capacity;
+  }
+  function executionFor(run: Run, repo: Repo, ticket: Ticket) {
+    const initialized = Promise.withResolvers<void>();
+    const execution: Execution = { run, repo, ticket, rpc: null, result: null, setup: true, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: false, failed: null, conversation: new RunConversation(run), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve(), abort: new AbortController(), phaseWork: null };
+    executions.set(run.id, execution);
+    return execution;
+  }
+
   function persist(execution: Execution) {
+    if (!owns(execution)) return;
     store.save('runs', execution.run);
     store.notify();
   }
@@ -224,6 +245,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       execution.run.changedFiles = 'Git change tracking unavailable: this workspace is not a Git repository.';
       return;
     }
+    if (!execution.run.workspace) throw new Error('Workspace ownership identity is unavailable');
+    await assertWorkspaceIdentity(execution.repo, execution.run.workspace);
     const status = await command(execution.repo.path, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=all']);
     const paths = changedPaths(status);
     if (requireHandoff && paths.length) {
@@ -241,6 +264,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   }
 
   async function stop(execution: Execution, status: Status, error: string | null = null): Promise<void> {
+    if (!owns(execution)) return;
     if (execution.stopping) return execution.stopping;
     if (error) error = redact(error);
     execution.stopping = (async () => {
@@ -290,7 +314,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         execution.run.pid = null;
         execution.run.finished = status === 'paused' ? null : Date.now();
         store.transaction(() => { store.save('runs', execution.run); updateTicket(execution.run, status); });
-        if (active === execution) active = null;
+        if (owns(execution)) executions.delete(execution.run.id);
         store.notify();
         wake();
       } catch (cause) {
@@ -304,6 +328,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   }
 
   function fail(execution: Execution, error: string) {
+    if (!owns(execution)) return;
     if (!execution.failed) execution.conversation.add('system', error, 'error');
     execution.failed ??= redact(error);
     if (!execution.setup && !execution.stopping) void stop(execution, 'failed', execution.failed);
@@ -311,12 +336,16 @@ export async function createRuntime(store: Store): Promise<Runtime> {
 
 
   function guard(execution: Execution) {
-    if (active !== execution || execution.stopping || execution.abort.signal.aborted || execution.failed) throw new Error('Autonomous phase no longer owns execution');
+    if (!owns(execution) || execution.stopping || execution.abort.signal.aborted || execution.failed) throw new Error('Autonomous phase no longer owns execution');
     assertAutonomyAuthority(store, execution.run);
   }
 
   async function freshAuthority(execution: Execution) {
     await reconcileTickets(store, true);
+    if (!execution.run.workspace) throw new Error('Workspace ownership identity is unavailable; assistance required');
+    const repo = store.get('repos', execution.repo.id);
+    if (!repo) throw new Error('Repository no longer exists');
+    await assertWorkspaceIdentity(repo, execution.run.workspace);
     guard(execution);
   }
 
@@ -366,7 +395,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     persist(execution);
     if (!resumeHost) {
       await authorStopped(execution);
-      guard(execution);
+      await freshAuthority(execution);
       lifecycle.candidate = await captureCandidate(store, repo, lifecycle.baseline, lifecycle.authorFiles);
     } else if (!lifecycle.candidate) throw new Error('Paused host phase has no durable candidate; assistance required');
     persist(execution);
@@ -432,10 +461,11 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     return false;
   }
   async function settled(execution: Execution) {
-    if (execution.setup || execution.stopping || execution.settling || !execution.rpc) return;
+    if (!owns(execution) || execution.setup || execution.stopping || execution.settling || !execution.rpc) return;
     execution.settling = true;
     try {
       const state = await execution.rpc.command('get_state');
+      if (!owns(execution) || execution.stopping) return;
       if (state.isSettled !== true || state.hasPendingAsyncWork === true) return;
       await execution.hostWork;
       if (execution.failed) { await stop(execution, 'failed', execution.failed); return; }
@@ -453,6 +483,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   }
 
   function onFrame(execution: Execution, frame: Frame) {
+    if (!owns(execution)) return;
     if (execution.conversation.frame(frame)) persist(execution);
     if ((frame.type === 'auto_compaction_start' || frame.type === 'auto_compaction_end') && execution.run.progress) {
       const starting = frame.type === 'auto_compaction_start';
@@ -558,16 +589,15 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   }
 
   async function launch(run: Run, repo: Repo, ticket: Ticket, resume = false, continuing?: Execution) {
-    const initialized = Promise.withResolvers<void>();
-    const execution: Execution = continuing ?? { run, repo, ticket, rpc: null, result: null, setup: true, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: false, failed: null, conversation: new RunConversation(run), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve(), abort: new AbortController(), phaseWork: null };
-    if (continuing) {
+    const execution = continuing ?? executionFor(run, repo, ticket);
+    if (continuing && !execution.setup) {
+      const initialized = Promise.withResolvers<void>();
       execution.initialized = initialized.promise;
       execution.initializedResolve = initialized.resolve;
       execution.setup = true;
       execution.polling = false;
       clearTimeout(execution.deadline);
     }
-    active = execution;
     if (run.lifecycle && !continuing) {
       run.lifecycle.phase = 'implementing';
       delete run.lifecycle.candidate;
@@ -584,6 +614,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     const remaining = settings.timeLimitMinutes * 60_000 - (Date.now() - run.started);
     execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Execution time budget exhausted; explicit review required'); }, Math.max(1, remaining));
     try {
+      if (closed || !owns(execution) || execution.stopping) throw new Error('Execution ownership changed before launch');
+      if (!run.workspace) throw new Error('Workspace ownership identity is unavailable; assistance required');
+      await assertWorkspaceIdentity(repo, run.workspace);
+      if (closed || !owns(execution) || execution.stopping) throw new Error('Execution ownership changed before launch');
       if (run.lifecycle) guard(execution);
       if (run.lifecycle && !resume) await assertCandidate(store, repo, run.lifecycle.baseline);
       const directory = privateDir(store, run.id);
@@ -601,6 +635,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         if (!run.sessionFile || !run.sessionId) throw new Error('No persisted session identity is available to resume');
         args.push('--resume', run.sessionFile);
       }
+      await assertWorkspaceIdentity(repo, run.workspace);
+      if (closed || !owns(execution) || execution.stopping) throw new Error('Execution ownership changed before launch');
       persist(execution);
       const rpc = await RpcProcess.launch({
         executable: settings.executable, args, cwd: repo.path,
@@ -740,10 +776,11 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       if (execution.stopping) return;
       if (execution.failed) { await stop(execution, 'failed', execution.failed); return; }
       execution.poll = setInterval(() => {
-        if (execution.polling || execution.stopping) return;
+        if (!owns(execution) || execution.polling || execution.stopping) return;
         execution.polling = true;
         void (async () => {
           const stats = await rpc.command('get_session_stats');
+          if (!owns(execution) || execution.stopping) return;
           if (run.lifecycle) guard(execution);
           const tokens = object(stats.tokens);
           const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
@@ -755,6 +792,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           }
           if (settings.tokenBudget !== null && (run.progress?.tokens?.total ?? total) >= settings.tokenBudget) { await stop(execution, 'failed', 'Execution token budget exhausted; explicit review required'); return; }
           const current = await rpc.command('get_state');
+          if (!owns(execution) || execution.stopping) return;
           if (current.sessionId !== run.sessionId) throw new Error('OMP changed session identity during execution');
           sampleRunState(run, current);
           persist(execution);
@@ -777,7 +815,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
 
   async function recover() {
     for (const run of store.list('runs')) {
-      if (!CLAIMED.includes(run.status) || active?.run.id === run.id) continue;
+      if (!CLAIMED.includes(run.status) || executions.has(run.id) || controls.has(run.id)) continue;
       if (run.status === 'paused' && !run.pid) continue;
       let uncertain: string | null = null;
       if (run.pid) {
@@ -857,66 +895,75 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     await reconcileTickets(store);
     syncWatchers();
     await recover();
-    if (active?.run.lifecycle && !active.stopping) {
-      try { guard(active); } catch (error) { await stop(active, 'blocked', message(error)); }
-    }
-    if (active?.run.status === 'stopping' && !active.stopping) {
-      await stop(active, 'interrupted', active.run.error);
+    for (const execution of executions.values()) {
+      if (execution.run.lifecycle && !execution.stopping) {
+        try { guard(execution); } catch (error) { void stop(execution, 'blocked', message(error)); }
+      }
+      if (execution.run.status === 'stopping' && !execution.stopping) void stop(execution, 'interrupted', execution.run.error);
     }
     const now = Date.now();
     for (const ticket of store.list('tickets')) {
       const previous = stable.get(key(ticket));
       if (!previous || previous.revision !== ticket.revision) stable.set(key(ticket), { revision: ticket.revision, since: now });
     }
-    if (closed || active || store.settings().paused || store.list('runs').some((run) => CLAIMED.includes(run.status))) return;
+    if (closed || store.settings().paused || !hasCapacity()) return;
     const repos = store.list('repos').sort((a, b) => a.lastStarted - b.lastStarted || a.id.localeCompare(b.id));
     for (const repo of repos) {
+      if (closed || store.settings().paused || !hasCapacity()) return;
+      if (store.list('runs').some(run => run.repoId === repo.id && CLAIMED.includes(run.status))) continue;
       const tickets = store.list('tickets').filter((ticket) => ticket.repoId === repo.id && eligible(store, repo, ticket)).sort((a, b) => a.order - b.order || a.id.localeCompare(b.id));
       for (const candidate of tickets) {
         const observed = stable.get(key(candidate));
         if (!observed || now - observed.since < QUIET_MS) { wake(); continue; }
-        if (repo.git) {
-          const handoff = await inspectWorkspaceHandoff(repo);
-          if (handoff) {
-            const current = store.get('repos', repo.id);
-            if (current) store.save('repos', { ...current, handoff });
-            break; // One project gate, not a blocked synthetic run for every queued ticket.
-          }
-        }
-        let lifecycle: Run['lifecycle'];
-        if (repo.completion?.mode === 'autonomous') {
-          try {
-            const policy = structuredClone(repo.completion);
-            const baseline = await captureBaseline(store, repo);
-            const recipeHash = await recipeIdentity(repo, policy.verification);
-            if (recipeHash !== policy.recipeHash) throw new Error('Authorized verification recipe changed; explicitly review and save completion policy again');
-            lifecycle = { policy, phase: 'implementing', baseline, recipeHash, corrections: 0, recoveries: 0, authorTokens: 0, reviewerTokens: 0, verification: [], reviews: [] };
-          } catch (error) {
-            const current = store.get('repos', repo.id);
-            if (current) store.save('repos', { ...current, handoff: { id: crypto.randomUUID(), runId: null, detected: Date.now(), files: [], reason: `Autonomous admission blocked: ${redact(message(error))}` } });
+        try {
+          const claimed = await workspaceOperation(store, repo.id, async workspace => {
+            const currentRepo = store.get('repos', repo.id);
+            if (!currentRepo || currentRepo.path !== repo.path || currentRepo.git !== repo.git) return null;
+            if (closed || store.settings().paused || !hasCapacity() || claimedWorkspaceConflict(store, repo, workspace)) return null;
+            if (repo.git) {
+              const handoff = await inspectWorkspaceHandoff(repo);
+              if (handoff) {
+                const current = store.get('repos', repo.id);
+                if (current) store.save('repos', { ...current, handoff });
+                return null;
+              }
+            }
+            let lifecycle: Run['lifecycle'];
+            if (repo.completion?.mode === 'autonomous') {
+              const policy = structuredClone(repo.completion);
+              const baseline = await captureBaseline(store, repo);
+              const recipeHash = await recipeIdentity(repo, policy.verification);
+              if (recipeHash !== policy.recipeHash) throw new Error('Authorized verification recipe changed; explicitly review and save completion policy again');
+              lifecycle = { policy, phase: 'implementing', baseline, recipeHash, corrections: 0, recoveries: 0, authorTokens: 0, reviewerTokens: 0, verification: [], reviews: [] };
+            }
+            await assertWorkspaceIdentity(repo, workspace);
+            return store.transaction(() => {
+              const freshRepo = store.get('repos', repo.id);
+              const fresh = store.get('tickets', key(candidate));
+              if (closed || !fresh || !freshRepo || freshRepo.path !== repo.path || freshRepo.git !== repo.git || store.settings().paused || !eligible(store, freshRepo, fresh) || fresh.revision !== candidate.revision || !hasCapacity() || claimedWorkspaceConflict(store, freshRepo, workspace)) return null;
+              if (lifecycle && (freshRepo.completion?.mode !== 'autonomous' || freshRepo.completion.revision !== lifecycle.policy.revision)) return null;
+              const run: Run = { id: crypto.randomUUID(), repoId: repo.id, ticketId: fresh.id, revision: fresh.revision, workspace, status: 'running', started: Date.now(), finished: null, pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
+              run.recoveryContext = recoveryContext(store, fresh);
+              run.configuration = resolveRunConfiguration(store.settings(), fresh);
+              if (lifecycle) run.lifecycle = lifecycle;
+              store.save('runs', run);
+              store.save('tickets', { ...fresh, status: 'running', runId: run.id });
+              store.save('repos', { ...freshRepo, lastStarted: run.started });
+              return executionFor(run, freshRepo, fresh);
+            });
+          });
+          if (claimed) {
+            store.notify();
+            void launch(claimed.run, claimed.repo, claimed.ticket, false, claimed).catch(error => fail(claimed, message(error)));
             break;
           }
+        } catch (error) {
+          if (message(error) === 'Another workspace operation is in progress') { wake(); break; }
+          const current = store.get('repos', repo.id);
+          if (current) store.save('repos', { ...current, handoff: { id: crypto.randomUUID(), runId: null, detected: Date.now(), files: [], reason: `Workspace admission blocked: ${redact(message(error))}` } });
+          break;
         }
-        const claimed = store.transaction(() => {
-          const freshRepo = store.get('repos', repo.id);
-          const fresh = store.get('tickets', key(candidate));
-          if (!fresh || !freshRepo || store.settings().paused || !eligible(store, freshRepo, fresh) || fresh.revision !== candidate.revision || store.list('runs').some((run) => CLAIMED.includes(run.status))) return null;
-          if (lifecycle && (freshRepo.completion?.mode !== 'autonomous' || freshRepo.completion.revision !== lifecycle.policy.revision)) return null;
-          const run: Run = { id: crypto.randomUUID(), repoId: repo.id, ticketId: fresh.id, revision: fresh.revision, status: 'running', started: Date.now(), finished: null, pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
-          run.recoveryContext = recoveryContext(store, fresh);
-          run.configuration = resolveRunConfiguration(store.settings(), fresh);
-          if (lifecycle) run.lifecycle = lifecycle;
-          store.save('runs', run);
-          store.save('tickets', { ...fresh, status: 'running', runId: run.id });
-          store.save('repos', { ...freshRepo, lastStarted: run.started });
-          return { run, ticket: fresh, repo: freshRepo };
-        });
-        if (claimed) {
-          store.notify();
-          // The pump must not wait for ticket execution; controls/reconciliation remain responsive.
-          void launch(claimed.run, claimed.repo, claimed.ticket);
-          return;
-        }
+        if (store.get('repos', repo.id)?.handoff) break;
       }
     }
   }
@@ -941,40 +988,91 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     finally { pumping = null; }
   }
 
-  async function control(runId: string, action: 'pause' | 'resume') {
-    const run = store.get('runs', runId);
-    if (!run) throw new Error('Run not found');
-    if (action === 'pause') {
-      if (!active || active.run.id !== runId || active.run.status !== 'running') throw new Error('Only the current running ticket can be paused');
-      await stop(active, 'paused');
-      return;
+  async function control(runId: string, action: 'pause' | 'resume' | 'cancel') {
+    if (closed) throw new Error('Runtime is closed');
+    if (controls.has(runId)) throw new Error('Another control already owns this run');
+    const completed = Promise.withResolvers<void>();
+    controls.set(runId, completed.promise);
+    try {
+      const run = store.get('runs', runId);
+      if (!run) throw new Error('Run not found');
+      const owned = executions.get(runId);
+      const cancellation = 'Operator canceled this run. Partial work and evidence were preserved; no rollback, retry or replay was performed.';
+      if (action === 'pause' || action === 'cancel' && run.status === 'running') {
+        if (!owned || owned.run.status !== 'running' || run.status !== 'running') throw new Error('Only an owned running ticket can be paused or canceled');
+        await stop(owned, action === 'pause' ? 'paused' : 'interrupted', action === 'cancel' ? cancellation : null);
+        return;
+      }
+      if (run.status !== 'paused' || run.pid || owned) throw new Error('Only an observed stopped, paused run can be resumed or canceled');
+      const repo = store.get('repos', run.repoId);
+      if (action === 'cancel') {
+        run.status = 'stopping'; run.dialog = null; run.error = cancellation;
+        store.transaction(() => { store.save('runs', run); updateTicket(run, 'stopping'); });
+        store.notify();
+        if (!await processGone(run)) throw new Error('Owned child work still exists; cancellation cannot release its claim');
+        if (repo?.git) {
+          let handoff: Repo['handoff'];
+          try {
+            if (!run.workspace) throw new Error('Legacy workspace identity is unavailable');
+            await assertWorkspaceIdentity(repo, run.workspace);
+            handoff = await inspectWorkspaceHandoff(repo, run.id);
+          } catch (error) {
+            handoff = { id: crypto.randomUUID(), runId: run.id, detected: Date.now(), files: [], reason: `Canceled workspace requires explicit reconciliation: ${redact(message(error))}` };
+          }
+          const current = store.get('repos', repo.id);
+          if (current && handoff) store.save('repos', { ...current, handoff });
+        }
+        settleConversation(run);
+        run.status = 'interrupted'; run.finished = Date.now();
+        if (run.progress) run.progress.phase = 'Owned child work stopped';
+        if (run.lifecycle) { run.lifecycle.phase = 'assistance'; run.lifecycle.exception = cancellation; }
+        store.transaction(() => { store.save('runs', run); updateTicket(run, 'interrupted'); });
+        store.notify(); wake();
+        return;
+      }
+      if (!repo) throw new Error('Repository no longer exists');
+      if (run.lifecycle && !run.workspace) throw new Error('Autonomous continuation requires its original admitted workspace identity; reconcile partial work and explicitly retry as a new attempt');
+      const ticket = JSON.parse(await readFile(join(privateDir(store, run.id), 'ticket.json'), 'utf8')) as Ticket;
+      const paused = store.get('runs', runId);
+      if (closed || paused?.status !== 'paused' || paused.pid || executions.has(runId)) throw new Error('Paused execution ownership changed before resume');
+      const execution = await workspaceOperation(store, repo.id, async observedWorkspace => {
+        const workspace = run.workspace ?? observedWorkspace;
+        await assertWorkspaceIdentity(repo, workspace);
+        return store.transaction(() => {
+          const current = store.get('runs', runId);
+          const currentRepo = store.get('repos', repo.id);
+          if (closed || !current || current.status !== 'paused' || current.pid || executions.has(runId) || !currentRepo || currentRepo.path !== repo.path || currentRepo.git !== repo.git) throw new Error('Paused execution ownership changed before resume');
+          if (claimedWorkspaceConflict(store, currentRepo, workspace, runId)) throw new Error('Another run owns this workspace');
+          current.workspace = workspace;
+          current.status = 'running'; current.finished = null; current.error = null;
+          store.save('runs', current); updateTicket(current, 'running');
+          return executionFor(current, currentRepo, ticket);
+        });
+      });
+      controls.delete(runId);
+      completed.resolve();
+      store.notify();
+      if (execution.run.lifecycle && ['verifying', 'reviewing', 'publishing'].includes(execution.run.lifecycle.phase)) {
+        execution.setup = false; execution.initializedResolve(); execution.settling = true;
+        execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Whole-attempt execution deadline exhausted'); }, Math.max(1, (execution.run.progress?.deadline ?? execution.run.started) - Date.now()));
+        execution.phaseWork = autonomous(execution, true);
+        try {
+          const complete = await execution.phaseWork;
+          execution.phaseWork = null;
+          if (complete && !execution.stopping) await stop(execution, 'done');
+        } catch (error) { fail(execution, message(error)); }
+        finally { execution.settling = false; }
+        return;
+      }
+      await launch(execution.run, execution.repo, ticket, true, execution).catch(error => fail(execution, message(error)));
+    } finally {
+      if (controls.get(runId) === completed.promise) controls.delete(runId);
+      completed.resolve();
     }
-    if (run.status !== 'paused' || run.pid) throw new Error('Only an observed stopped, paused run can be resumed');
-    if (active || store.list('runs').some((other) => other.id !== runId && CLAIMED.includes(other.status))) throw new Error('Another run owns the execution slot');
-    const repo = store.get('repos', run.repoId);
-    if (!repo) throw new Error('Repository no longer exists');
-    const ticket = JSON.parse(await readFile(join(privateDir(store, run.id), 'ticket.json'), 'utf8')) as Ticket;
-    run.status = 'running'; run.finished = null; run.error = null;
-    store.transaction(() => { store.save('runs', run); updateTicket(run, 'running'); });
-    if (run.lifecycle && ['verifying', 'reviewing', 'publishing'].includes(run.lifecycle.phase)) {
-      const initialized = Promise.withResolvers<void>(); initialized.resolve();
-      const execution: Execution = { run, repo, ticket, rpc: null, result: null, setup: false, initialized: initialized.promise, initializedResolve: initialized.resolve, stopping: null, settling: true, failed: null, conversation: new RunConversation(run), poll: undefined, polling: false, deadline: undefined, hostWork: Promise.resolve(), abort: new AbortController(), phaseWork: null };
-      active = execution;
-      execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Whole-attempt execution deadline exhausted'); }, Math.max(1, (run.progress?.deadline ?? run.started) - Date.now()));
-      execution.phaseWork = autonomous(execution, true);
-      try {
-        const complete = await execution.phaseWork;
-        execution.phaseWork = null;
-        if (complete && !execution.stopping) await stop(execution, 'done');
-      } catch (error) { fail(execution, message(error)); }
-      finally { execution.settling = false; }
-      return;
-    }
-    await launch(run, repo, ticket, true);
   }
 
   async function answer(runId: string, response: Record<string, unknown>) {
-    const execution = active;
+    const execution = executions.get(runId);
     const dialog = execution?.run.dialog;
     if (!execution || execution.run.id !== runId || !execution.rpc || !dialog || execution.stopping) throw new Error('No active dialog for this run');
     if (response.id !== dialog.id) throw new Error('Dialog changed; refresh before answering');
@@ -1004,7 +1102,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       for (const watcher of watchers.values()) watcher.close();
       watchers.clear();
       if (pumping) await pumping.catch(() => {});
-      if (active) await stop(active, 'interrupted', 'Backend shut down; review partial work before explicit retry');
+      await Promise.all([...executions.values()].map(execution => stop(execution, 'interrupted', 'Backend shut down; review partial work before explicit retry')));
+      await Promise.all(controls.values());
     },
   };
 }

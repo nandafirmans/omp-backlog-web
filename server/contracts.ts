@@ -8,6 +8,7 @@ export interface IndependentReview { sessionId: string; model: string; candidate
 export interface Publication { operationId: string; state: 'prepared' | 'published' | 'complete'; commit: string | null; parent: string; tree: string; ref: string; recorded: number; noChanges: boolean }
 export interface Lifecycle { policy: Extract<CompletionPolicy, { mode: 'autonomous' }>; phase: 'implementing' | 'verifying' | 'reviewing' | 'correcting' | 'recovering' | 'publishing' | 'complete' | 'assistance'; baseline: Candidate; candidate?: Candidate; recipeHash: string; corrections: number; recoveries: number; authorSessionId?: string; authorSessionFile?: string; authorFiles?: string[]; authorTokens: number; reviewerTokens?: number; reviewerModel?: string; verification: HostVerification[]; reviews: IndependentReview[]; publication?: Publication; exception?: string }
 export interface Repo { id: string; name: string; path: string; git: boolean; mode: Mode; lastStarted: number; completion?: CompletionPolicy; handoff?: { id: string; runId: string | null; detected: number; files: string[]; reason: string } }
+export interface WorkspaceIdentity { root: string; rootDev: string; rootIno: string; commonDir?: string; commonDev?: string; commonIno?: string }
 export interface Attachment { name: string; size: number; hash: string }
 export interface WorkspaceReview { id: string; head: string | null; files: { path: string; status: string; before?: string; after?: string; mode?: string; diff?: string; blocked?: string }[] }
 export interface ExecutionOverrides { model?: string; thinking?: string; tokenBudget?: number | null }
@@ -20,9 +21,9 @@ export interface TranscriptEntry { id: string; kind: 'agent' | 'tool' | 'system'
 export interface BlockerDetails { prerequisite: string; unblock: string; attempted?: string; permission?: string; verification?: string; suggestedPrompt: string }
 export interface RecoveryNote { id: string; revision: string; instructions: string; recorded: number; reviewed?: number }
 export interface RecoveryContext { sourceRunId: string; sourceRevision: string; note: RecoveryNote; blocker: string | null; details?: BlockerDetails; evidence: string[]; changedFiles: string }
-export interface Run { id: string; repoId: string; ticketId: string; revision: string; status: Status; started: number; finished: number | null; pid: number | null; sessionId: string | null; sessionFile: string | null; snapshot: string; transcript: string; conversation?: TranscriptEntry[]; evidence: string[]; blocker: string | null; blockerDetails?: BlockerDetails; recoveryNote?: RecoveryNote; recoveryContext?: RecoveryContext; configuration?: RunConfiguration; changedFiles: string; dialog: Dialog | null; error: string | null; verification?: VerificationReceipt[]; reviewFeedback?: { message: string; recorded: number }; lifecycle?: Lifecycle; progress?: { phase: string; latestAction: string; tokenBudget: number | null; deadline: number; model?: string; thinking?: string; context?: { tokens: number; window: number; sampled: number; basis: string }; compaction?: { enabled?: boolean; active: boolean; sampled: number; lastEvent?: string; lastCompletedAt?: number }; tokens?: { total: number; sampled: number; basis: string } } }
+export interface Run { id: string; repoId: string; workspace?: WorkspaceIdentity; ticketId: string; revision: string; status: Status; started: number; finished: number | null; pid: number | null; sessionId: string | null; sessionFile: string | null; snapshot: string; transcript: string; conversation?: TranscriptEntry[]; evidence: string[]; blocker: string | null; blockerDetails?: BlockerDetails; recoveryNote?: RecoveryNote; recoveryContext?: RecoveryContext; configuration?: RunConfiguration; changedFiles: string; dialog: Dialog | null; error: string | null; verification?: VerificationReceipt[]; reviewFeedback?: { message: string; recorded: number }; lifecycle?: Lifecycle; progress?: { phase: string; latestAction: string; tokenBudget: number | null; deadline: number; model?: string; thinking?: string; context?: { tokens: number; window: number; sampled: number; basis: string }; compaction?: { enabled?: boolean; active: boolean; sampled: number; lastEvent?: string; lastCompletedAt?: number }; tokens?: { total: number; sampled: number; basis: string } } }
 export const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-export interface Settings { executable: string; model: string; thinking?: string; roots: string[]; timeLimitMinutes: number; tokenBudget: number | null; paused: boolean }
+export interface Settings { executable: string; model: string; thinking?: string; roots: string[]; timeLimitMinutes: number; tokenBudget: number | null; maxConcurrentTickets: number; paused: boolean }
 export interface Snapshot { repos: Repo[]; tickets: Ticket[]; runs: Run[]; settings: Settings }
 export interface Store {
   list<K extends keyof Entities>(kind: K): Entities[K][];
@@ -38,7 +39,7 @@ export interface Entities { repos: Repo; tickets: Ticket; runs: Run }
 export interface Runtime {
   wake(): void;
   reconcile(): Promise<void>;
-  control(runId: string, action: 'pause' | 'resume'): Promise<void>;
+  control(runId: string, action: 'pause' | 'resume' | 'cancel'): Promise<void>;
   answer(runId: string, response: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 }

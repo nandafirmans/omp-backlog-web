@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { watch } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
@@ -10,6 +11,7 @@ import { createRuntime, inspectWorkspaceHandoff } from './runtime';
 import { closeStore, createStore, database, subscribe } from './store';
 import { writeTicket } from './tickets';
 import { createApi } from './api';
+import { inspectWorkspaceIdentity } from './workspace-identity';
 
 // These are process/protocol acceptance tests. The child verifies a disposable
 // proof file; it does not exercise a real OMP installation, model, or credentials.
@@ -305,6 +307,320 @@ test('actual child transport enforces the global slot and rotates fairly between
     expect(harness.store.list('runs').every(run => run.status === 'needs_review' && run.pid === null)).toBe(true);
     expect(harness.store.list('tickets').every(value => value.status === 'needs_review')).toBe(true);
   });
+}, 20_000);
+
+test('capacity two overlaps independent children, skips a busy repository, and reuses only an observed stopped slot', async () => {
+  await withHarness(async harness => {
+    const first = await repository(harness, 'a');
+    const second = await repository(harness, 'b');
+    const third = await repository(harness, 'c');
+    await ticket(harness, first);
+    await ticket(harness, first, 'T002');
+    await ticket(harness, second);
+    await ticket(harness, third);
+    await start(harness);
+    const [one, two] = await Promise.all([running(harness, first.id), running(harness, second.id)]);
+    expect(one.pid).not.toBe(two.pid);
+    expect(one.sessionId).not.toBe(two.sessionId);
+    expect(one.workspace).toBeDefined();
+    expect(two.workspace).toBeDefined();
+    for (const run of [one, two]) expect(await readFile(`/proc/${run.pid}/stat`, 'utf8')).toContain(String(run.pid));
+    await Promise.all(Array.from({ length: 16 }, () => { harness.runtime!.wake(); return harness.runtime!.reconcile(); }));
+    expect(harness.store.list('runs')).toHaveLength(2);
+    expect((await events(first)).filter(event => event.event === 'spawn')).toHaveLength(1);
+    expect(await events(third)).toEqual([]);
+    const completed = await finish(harness, one);
+    const three = await running(harness, third.id);
+    expect(three.started).toBeGreaterThanOrEqual(completed.finished!);
+    expect(harness.store.get('runs', two.id)).toMatchObject({ status: 'running', pid: two.pid, dialog: { id: 'finish' } });
+    await finish(harness, two);
+    const sameRepo = await running(harness, first.id);
+    expect(sameRepo.ticketId).toBe('T002');
+    expect(sameRepo.started).toBeGreaterThanOrEqual(completed.finished!);
+    expect(harness.store.list('runs').filter(run => run.pid !== null)).toHaveLength(2);
+    await Promise.all([finish(harness, sameRepo), finish(harness, three)]);
+    expect(harness.store.list('runs').every(run => run.status === 'needs_review' && run.pid === null)).toBe(true);
+  }, { maxConcurrentTickets: 2 });
+}, 20_000);
+
+test('capacity four bounds duplicate reconciliation and close stops every owned child without replay', async () => {
+  await withHarness(async harness => {
+    const repos: Repo[] = [];
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      const repo = await repository(harness, id);
+      await ticket(harness, repo);
+      repos.push(repo);
+    }
+    await start(harness);
+    const owners = await Promise.all(repos.slice(0, 4).map(repo => running(harness, repo.id)));
+    expect(new Set(owners.map(run => run.pid)).size).toBe(4);
+    await Promise.all(Array.from({ length: 20 }, () => harness.runtime!.reconcile()));
+    expect(harness.store.list('runs')).toHaveLength(4);
+    expect(await events(repos[4]!)).toEqual([]);
+    await harness.runtime!.close();
+    for (const run of owners) {
+      expect(harness.store.get('runs', run.id)).toMatchObject({ status: 'interrupted', pid: null });
+      expect((await events(repos.find(repo => repo.id === run.repoId)!)).some(event => event.event === 'exit')).toBe(true);
+      await expect(readFile(`/proc/${run.pid}/stat`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(4);
+    expect(await events(repos[4]!)).toEqual([]);
+  }, { maxConcurrentTickets: 4 });
+}, 20_000);
+
+test('per-run pause, raced resume and cancel preserve the other live session and release no paused slot', async () => {
+  await withHarness(async harness => {
+    const first = await repository(harness, 'a');
+    const second = await repository(harness, 'b');
+    const third = await repository(harness, 'c');
+    for (const repo of [first, second, third]) await ticket(harness, repo);
+    await start(harness);
+    const [one, two] = await Promise.all([running(harness, first.id), running(harness, second.id)]);
+    await writeFile(join(first.path, 'partial.txt'), 'preserve partial operator work\n');
+    await harness.runtime!.control(one.id, 'pause');
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(2);
+    expect(await events(third)).toEqual([]);
+    expect(harness.store.get('runs', two.id)).toMatchObject({ status: 'running', pid: two.pid, dialog: { id: 'finish' } });
+    const controls = await Promise.allSettled(Array.from({ length: 8 }, () => harness.runtime!.control(one.id, 'resume')));
+    expect(controls.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const resumed = await running(harness, first.id);
+    expect(resumed.id).toBe(one.id);
+    expect(resumed.sessionId).toBe(one.sessionId);
+    expect((await events(first)).filter(event => event.event === 'spawn')).toHaveLength(2);
+    expect((await events(first)).filter(event => event.command === 'goal' && event.op === 'resume')).toHaveLength(1);
+    await harness.runtime!.control(one.id, 'pause');
+    await harness.runtime!.control(one.id, 'cancel');
+    expect(harness.store.get('runs', one.id)).toMatchObject({ status: 'interrupted', pid: null, dialog: null });
+    expect(harness.store.get('runs', one.id)?.error).toContain('Operator canceled');
+    expect(await readFile(join(first.path, 'partial.txt'), 'utf8')).toBe('preserve partial operator work\n');
+    const three = await running(harness, third.id);
+    expect(harness.store.get('runs', two.id)?.pid).toBe(two.pid);
+    await harness.runtime!.control(two.id, 'cancel');
+    expect(harness.store.get('runs', two.id)).toMatchObject({ status: 'interrupted', pid: null });
+    expect(harness.store.get('runs', two.id)?.error).toContain('no rollback, retry or replay');
+    expect((await events(second)).some(event => event.event === 'exit')).toBe(true);
+    expect((await events(second)).some(event => event.op === 'complete')).toBe(false);
+    await finish(harness, three);
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs')).toHaveLength(3);
+  }, { maxConcurrentTickets: 2 });
+}, 20_000);
+
+test('a provider failure releases only its own slot while another repository keeps its dialog and evidence authority', async () => {
+  await withHarness(async harness => {
+    const failedRepo = await repository(harness, 'a', 0, 'provider-failure');
+    const heldRepo = await repository(harness, 'b');
+    const waitingRepo = await repository(harness, 'c');
+    for (const repo of [failedRepo, heldRepo, waitingRepo]) await ticket(harness, repo);
+    await start(harness);
+    const held = await running(harness, heldRepo.id);
+    const failed = await waitFor('independent failed child exit', () => harness.store.list('runs').find(run => run.repoId === failedRepo.id && run.status === 'failed' && run.pid === null));
+    const next = await running(harness, waitingRepo.id);
+    expect(next.started).toBeGreaterThanOrEqual(failed.finished!);
+    expect(harness.store.get('runs', held.id)).toMatchObject({ status: 'running', pid: held.pid, dialog: { id: 'finish' } });
+    const [heldResult, nextResult] = await Promise.all([finish(harness, held), finish(harness, next)]);
+    expect(heldResult.verification).toHaveLength(1);
+    expect(nextResult.verification).toHaveLength(1);
+    expect(heldResult.verification![0]!.runId).toBe(held.id);
+    expect(nextResult.verification![0]!.runId).toBe(next.id);
+    expect(harness.store.get('runs', failed.id)?.evidence).toEqual([]);
+  }, { maxConcurrentTickets: 2 });
+}, 20_000);
+
+test('capacity reduction retains paused owners and global pause prevents replacement without stopping existing work', async () => {
+  await withHarness(async harness => {
+    const first = await repository(harness, 'a');
+    const second = await repository(harness, 'b');
+    const third = await repository(harness, 'c');
+    for (const repo of [first, second, third]) await ticket(harness, repo);
+    await start(harness);
+    const [one, two] = await Promise.all([running(harness, first.id), running(harness, second.id)]);
+    harness.store.setSettings({ ...harness.store.settings(), maxConcurrentTickets: 1 });
+    await harness.runtime!.control(one.id, 'pause');
+    await harness.runtime!.control(one.id, 'resume');
+    const resumed = await running(harness, first.id);
+    expect(resumed.sessionId).toBe(one.sessionId);
+    await harness.runtime!.control(one.id, 'cancel');
+    await harness.runtime!.reconcile();
+    expect(await events(third)).toEqual([]);
+    expect(harness.store.get('runs', two.id)?.status).toBe('running');
+    harness.store.setSettings({ ...harness.store.settings(), paused: true });
+    await finish(harness, two);
+    await harness.runtime!.reconcile();
+    expect(await events(third)).toEqual([]);
+    harness.store.save('repos', { ...third, mode: 'paused' });
+    harness.store.setSettings({ ...harness.store.settings(), paused: false });
+    await harness.runtime!.reconcile();
+    expect(await events(third)).toEqual([]);
+    const selected = harness.store.get('tickets', `${third.id}/T001`)!;
+    harness.store.save('repos', { ...third, mode: 'approved' });
+    harness.store.save('tickets', { ...selected, approvedRevision: null });
+    await harness.runtime!.reconcile();
+    expect(await events(third)).toEqual([]);
+    harness.store.save('tickets', { ...selected, approvedRevision: selected.revision });
+    await harness.runtime!.reconcile();
+    await finish(harness, await running(harness, third.id));
+  }, { maxConcurrentTickets: 2 });
+}, 20_000);
+
+test('parallel admission still waits for accepted Done dependencies rather than another repository or Needs review', async () => {
+  await withHarness(async harness => {
+    const first = await repository(harness, 'a');
+    const other = await repository(harness, 'b');
+    await ticket(harness, first);
+    const dependent = await ticket(harness, first, 'T002');
+    const updated = await writeTicket(harness.store, first, dependent.markdown.replace('depends_on: []', 'depends_on: [T001]'), dependent.revision, dependent.id);
+    harness.store.save('tickets', { ...updated, status: 'ready', approvedRevision: updated.revision });
+    await ticket(harness, other);
+    await start(harness);
+    const [one, two] = await Promise.all([running(harness, first.id), running(harness, other.id)]);
+    await finish(harness, one);
+    await harness.runtime!.reconcile();
+    expect(harness.store.list('runs').filter(run => run.repoId === first.id)).toHaveLength(1);
+    const predecessor = harness.store.get('tickets', `${first.id}/T001`)!;
+    harness.store.save('tickets', { ...predecessor, status: 'done' });
+    await harness.runtime!.reconcile();
+    const next = await running(harness, first.id);
+    expect(next.ticketId).toBe('T002');
+    expect(harness.store.get('runs', two.id)?.pid).toBe(two.pid);
+    await Promise.all([finish(harness, next), finish(harness, two)]);
+  }, { maxConcurrentTickets: 2 });
+}, 20_000);
+
+test('close during a blocked resume snapshot read prevents attaching a replacement child', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'resume-close');
+    const selected = await ticket(harness, repo);
+    await start(harness);
+    const run = await running(harness, repo.id);
+    await harness.runtime!.control(run.id, 'pause');
+    const path = join(harness.store.dataDir, 'runtime', run.id, 'ticket.json');
+    await rename(path, path + '.saved');
+    const fifo = Bun.spawn(['mkfifo', path], { stdout: 'ignore', stderr: 'ignore' });
+    expect(await fifo.exited).toBe(0);
+    const resumed = harness.runtime!.control(run.id, 'resume');
+    const outcome = resumed.then(() => null, error => error as Error);
+    await expect(harness.runtime!.control(run.id, 'resume')).rejects.toThrow('Another control');
+    const closed = harness.runtime!.close();
+    await writeFile(path, JSON.stringify(selected));
+    expect(await outcome).toBeInstanceOf(Error);
+    await closed;
+    expect(harness.store.get('runs', run.id)).toMatchObject({ status: 'paused', pid: null });
+    expect((await events(repo)).filter(event => event.event === 'spawn')).toHaveLength(1);
+    expect((await events(repo)).some(event => event.command === 'goal' && event.op === 'resume')).toBe(false);
+  });
+}, 15_000);
+
+for (const limit of ['time', 'tokens'] as const) {
+  test(`one repository exhausting its ${limit} budget cannot stop or overwrite another run`, async () => {
+    await withHarness(async harness => {
+      const limited = await repository(harness, 'a', 0, limit === 'tokens' ? 'tokens' : 'hold');
+      const independent = await repository(harness, 'b');
+      const selected = await ticket(harness, limited);
+      harness.store.save('tickets', { ...selected, execution: { tokenBudget: limit === 'tokens' ? 7 : null } });
+      const independentTicket = await ticket(harness, independent);
+      harness.store.save('tickets', { ...independentTicket, execution: { tokenBudget: null } });
+      await start(harness);
+      const one = await running(harness, limited.id);
+      harness.store.setSettings({ ...harness.store.settings(), maxConcurrentTickets: 2, timeLimitMinutes: 0.3 });
+      await harness.runtime!.reconcile();
+      const two = await running(harness, independent.id);
+      const failed = await waitFor('only the exhausted owner stops', () => {
+        const current = harness.store.get('runs', one.id);
+        return current?.status === 'failed' && current.pid === null ? current : undefined;
+      });
+      expect(failed.error).toContain(`Execution ${limit === 'tokens' ? 'token' : 'time'} budget exhausted`);
+      expect(harness.store.get('runs', two.id)).toMatchObject({ status: 'running', pid: two.pid, sessionId: two.sessionId, dialog: { id: 'finish' } });
+      expect(two.progress?.tokenBudget).toBeNull();
+      if (limit === 'time') expect(two.progress!.deadline).toBeGreaterThan(one.progress!.deadline);
+      await finish(harness, two);
+      expect(harness.store.get('runs', one.id)?.evidence).toEqual([]);
+    }, { maxConcurrentTickets: 1, timeLimitMinutes: limit === 'time' ? 0.05 : 0.3 });
+  }, 15_000);
+}
+
+test('legacy paused identities and missing repository owners fail closed until explicit cancellation reconciles them', async () => {
+  await withHarness(async harness => {
+    const legacyRepo = await repository(harness, 'a');
+    const waitingRepo = await repository(harness, 'b');
+    const selected = await ticket(harness, legacyRepo);
+    await ticket(harness, waitingRepo);
+    const legacy: Run = { id: 'legacy-paused', repoId: legacyRepo.id, ticketId: selected.id, revision: selected.revision, status: 'paused', started: Date.now(), finished: null, pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
+    harness.store.save('runs', legacy);
+    harness.store.save('tickets', { ...selected, runId: legacy.id, status: 'paused' });
+    const orphan: Run = { ...legacy, id: 'missing-repository', repoId: 'removed-registration', workspace: await inspectWorkspaceIdentity(legacyRepo) };
+    harness.store.save('runs', orphan);
+    await start(harness);
+    await Bun.sleep(1_100);
+    await harness.runtime!.reconcile();
+    expect(await events(waitingRepo)).toEqual([]);
+    await harness.runtime!.control(legacy.id, 'cancel');
+    await harness.runtime!.reconcile();
+    expect(await events(waitingRepo)).toEqual([]);
+    await harness.runtime!.control(orphan.id, 'cancel');
+    await harness.runtime!.reconcile();
+    await finish(harness, await running(harness, waitingRepo.id));
+    expect(harness.store.get('runs', legacy.id)?.error).toContain('Operator canceled');
+    expect(harness.store.get('runs', orphan.id)?.status).toBe('interrupted');
+  }, { maxConcurrentTickets: 4 });
+}, 15_000);
+
+test('restart independently stops every proven survivor but never signals unknown ownership or releases its claim early', async () => {
+  await withHarness(async harness => {
+    const children: { child: ChildProcess; exited: Promise<unknown[]>; run: Run; repo: Repo }[] = [];
+    try {
+      for (const [index, id] of ['a', 'b', 'unknown'].entries()) {
+        const repo = await repository(harness, id);
+        const selected = await ticket(harness, repo);
+        const runId = `survivor-${id}`;
+        const directory = join(harness.store.dataDir, 'runtime', runId);
+        await mkdir(directory, { recursive: true });
+        await writeFile(join(directory, 'ticket.json'), JSON.stringify(selected));
+        await writeFile(join(directory, 'config.yml'), '');
+        const child = spawn(harness.executable, ['--config', join(directory, 'config.yml'), '--session-dir', join(directory, 'sessions')], { cwd: repo.path, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+        const exited = once(child, 'close');
+        child.stdout!.resume(); child.stderr!.resume();
+        const run: Run = { id: runId, repoId: repo.id, ticketId: selected.id, revision: selected.revision, status: 'running', started: Date.now(), finished: null, pid: child.pid!, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
+        children.push({ child, exited, run, repo });
+        await waitFor('surviving child startup', async () => (await events(repo)).find(event => event.event === 'spawn'));
+        const stat = await readFile(`/proc/${child.pid}/stat`, 'utf8');
+        const startTime = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/)[19];
+        await writeFile(join(directory, 'identity.json'), JSON.stringify({ pid: child.pid, start: index === 2 ? '0' : startTime, boot: (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim() }));
+        if (index !== 2) run.workspace = await inspectWorkspaceIdentity(repo);
+        harness.store.save('runs', run);
+        harness.store.save('tickets', { ...selected, status: 'running', runId });
+      }
+      const waiting = await repository(harness, 'waiting');
+      await ticket(harness, waiting);
+      await start(harness);
+      for (const owned of children.slice(0, 2)) expect((await owned.exited)[1]).toBe('SIGTERM');
+      await harness.runtime!.reconcile();
+      for (const owned of children.slice(0, 2)) expect(harness.store.get('runs', owned.run.id)).toMatchObject({ status: 'interrupted', pid: null });
+      const unknown = children[2]!;
+      expect(unknown.child.exitCode).toBeNull();
+      expect(unknown.child.signalCode).toBeNull();
+      expect(harness.store.get('runs', unknown.run.id)).toMatchObject({ status: 'stopping', pid: unknown.run.pid });
+      expect(harness.store.get('runs', unknown.run.id)?.error).toContain('Uncertain surviving process-group identity');
+      await Bun.sleep(1_100);
+      await harness.runtime!.reconcile();
+      expect(await events(waiting)).toEqual([]);
+      for (const survivor of children) expect((await events(survivor.repo)).filter(event => event.event === 'command')).toHaveLength(0);
+      unknown.child.kill('SIGTERM');
+      await unknown.exited;
+      await harness.runtime!.reconcile();
+      expect(harness.store.get('runs', unknown.run.id)).toMatchObject({ status: 'interrupted', pid: null });
+      await finish(harness, await running(harness, waiting.id));
+      expect(harness.store.list('runs')).toHaveLength(4);
+      for (const survivor of children) expect((await events(survivor.repo)).filter(event => event.event === 'spawn')).toHaveLength(1);
+    } finally {
+      for (const owned of children) {
+        if (owned.child.exitCode === null && owned.child.signalCode === null) owned.child.kill('SIGKILL');
+        await owned.exited;
+      }
+    }
+  }, { maxConcurrentTickets: 4 });
 }, 20_000);
 
 test('operator reconciliation gates one Git project without consuming tickets; clean recheck never changes files or approval', async () => {

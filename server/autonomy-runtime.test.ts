@@ -22,12 +22,12 @@ async function until<T>(observe: () => T | undefined | false | Promise<T | undef
   throw new Error('Autonomous protocol fixture timed out');
 }
 interface Harness { root: string; store: Store; repo: Repo; config: string; runtime: Runtime | null; start(): Promise<void> }
-async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; inheritReviewer?: boolean; dependent?: boolean } = {}) {
+async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; inheritReviewer?: boolean; dependent?: boolean; authorBarrier?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'omp-autonomous-protocol-'));
   const store = createStore(join(root, 'private'));
   const path = join(root, 'project'); await mkdir(path);
   const config = join(root, 'fixture.json');
-  await writeFile(config, JSON.stringify({ scenario, holdAuthor: options.holdAuthor, holdReview: options.holdReview }));
+  await writeFile(config, JSON.stringify({ scenario, holdAuthor: options.holdAuthor, holdReview: options.holdReview, authorBarrier: options.authorBarrier }));
   const executable = join(root, 'protocol-child');
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   await writeFile(executable, `#!/bin/sh\nBUN_BE_BUN=1 exec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/autonomy-child.ts'))} --fixture-config ${quote(config)} "$@"\n`, { mode: 0o700 });
@@ -93,6 +93,81 @@ test('autonomous author report alone never accepts; host recipe, independent ses
     expectNativeAuthorLifecycle(events, 1);
     expect(events.filter(event => event.event === 'prompt' && event.reviewer)).toHaveLength(1);
   });
+}, 30000);
+
+test('two independent autonomous owners verify and publish only their own candidates', async () => {
+  await fixture('pass', async h => {
+    const secondPath = join(h.root, 'second');
+    await mkdir(secondPath);
+    await writeFile(join(secondPath, 'proof.txt'), 'pending\n');
+    await writeFile(join(secondPath, 'repository-marker.txt'), 'second-repository-only\n');
+    await writeFile(join(secondPath, 'verify.ts'), `import { readFile } from 'node:fs/promises';\nif (await readFile('proof.txt', 'utf8') !== 'verified\\n' || await readFile('repository-marker.txt', 'utf8') !== 'second-repository-only\\n') process.exit(1); console.log('second repository proof verified');\n`);
+    await git(secondPath, 'init', '-b', 'main');
+    await git(secondPath, 'config', 'user.name', 'Protocol Fixture');
+    await git(secondPath, 'config', 'user.email', 'fixture@example.invalid');
+    await git(secondPath, 'add', 'proof.txt', 'verify.ts', 'repository-marker.txt');
+    await git(secondPath, 'commit', '-m', 'Second synthetic baseline');
+    const second: Repo = { ...structuredClone(h.repo), id: 'second', name: 'Second disposable project', path: secondPath };
+    if (second.completion?.mode !== 'autonomous') throw new Error('Second fixture requires autonomous completion');
+    second.completion.recipeHash = await recipeIdentity(second, second.completion.verification);
+    h.store.save('repos', second);
+    const ticket = await writeTicket(h.store, second, '---\nid: T001\ntitle: Second disposable proof\ndepends_on: []\n---\n\nImplement proof.txt in this repository only, preserving repository-marker.txt.\n\nDone when:\n- proof.txt contains verified and repository-marker.txt retains second-repository-only.\n');
+    h.store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision });
+    h.store.setSettings({ ...h.store.settings(), maxConcurrentTickets: 2 });
+    const parents = new Map(await Promise.all([h.repo, second].map(async repo => [repo.id, await git(repo.path, 'rev-parse', 'HEAD')] as const)));
+    await h.start();
+    const held = await until(() => {
+      const runs = h.store.list('runs');
+      return runs.length === 2 && runs.every(run => run.status === 'running' && run.dialog?.id === 'author-barrier') ? runs : undefined;
+    });
+    expect(new Set(held.map(run => run.pid)).size).toBe(2);
+    expect(new Set(held.map(run => run.sessionId)).size).toBe(2);
+    expect(new Set(held.map(run => run.sessionFile)).size).toBe(2);
+    for (const run of held) {
+      expect(run.pid).toBeNumber();
+      process.kill(run.pid!, 0);
+      expect(run.lifecycle?.verification).toEqual([]);
+      expect(run.lifecycle?.publication).toBeUndefined();
+    }
+    await Promise.all(held.map(run => h.runtime!.answer(run.id, { id: 'author-barrier', value: 'release' })));
+    const completed = await until(() => {
+      const runs = h.store.list('runs');
+      return runs.length === 2 && runs.every(run => run.status === 'done' && run.pid === null) ? runs : undefined;
+    });
+    const allSessions = completed.flatMap(run => [run.lifecycle!.authorSessionId!, ...run.lifecycle!.reviews.map(review => review.sessionId)]);
+    expect(new Set(allSessions).size).toBe(4);
+    expect(new Set(completed.map(run => run.lifecycle!.candidate!.tree)).size).toBe(2);
+    for (const run of completed) {
+      const repo = run.repoId === h.repo.id ? h.repo : second;
+      const lifecycle = run.lifecycle!;
+      expect(lifecycle.phase).toBe('complete');
+      expect(lifecycle.verification).toHaveLength(1);
+      expect(lifecycle.verification[0]).toMatchObject({ source: 'host_execution', outcome: 'passed', exitCode: 0, candidateTree: lifecycle.candidate!.tree, recipeHash: lifecycle.recipeHash });
+      expect(lifecycle.verification[0]!.output.trim()).toBe(repo.id === second.id ? 'second repository proof verified' : 'host proof verified');
+      expect(lifecycle.reviews).toHaveLength(1);
+      expect(lifecycle.reviews[0]).toMatchObject({ verdict: 'pass', candidateTree: lifecycle.candidate!.tree });
+      expect(lifecycle.publication).toMatchObject({ state: 'complete', parent: parents.get(repo.id), tree: lifecycle.candidate!.tree });
+      expect(await git(repo.path, 'rev-parse', 'HEAD')).toBe(lifecycle.publication!.commit!);
+      expect(await git(repo.path, 'rev-list', '--count', `${parents.get(repo.id)}..HEAD`)).toBe('1');
+      expect(await readFile(join(repo.path, 'proof.txt'), 'utf8')).toBe('verified\n');
+      if (repo.id === second.id) {
+        expect(await readFile(join(repo.path, 'repository-marker.txt'), 'utf8')).toBe('second-repository-only\n');
+        expect(await git(repo.path, 'show', 'HEAD:repository-marker.txt')).toBe('second-repository-only');
+      }
+      expect(await git(repo.path, 'status', '--porcelain', '--', 'proof.txt', 'verify.ts')).toBe('');
+      expect(run.verification?.every(receipt => receipt.runId === run.id && receipt.revision === run.revision)).toBe(true);
+      expect(run.verification?.map(receipt => receipt.criterion)).toEqual([repo.id === second.id ? 'proof.txt contains verified and repository-marker.txt retains second-repository-only.' : 'proof.txt contains verified.']);
+      expect(run.conversation?.some(entry => entry.text.includes('OMP recorded the native poteto-mode skill-prompt'))).toBe(true);
+    }
+    await h.runtime!.close();
+    h.runtime = await createRuntime(h.store);
+    await h.runtime.reconcile();
+    expect(h.store.list('runs')).toHaveLength(2);
+    for (const run of completed) {
+      const repo = run.repoId === h.repo.id ? h.repo : second;
+      expect(await git(repo.path, 'rev-parse', 'HEAD')).toBe(run.lifecycle!.publication!.commit!);
+    }
+  }, { authorBarrier: true });
 }, 30000);
 
 test('review findings resume exactly original author session, invalidate reports and count cumulative role tokens', async () => {
@@ -204,6 +279,103 @@ test('pause aborts host verification and restricted reviewer, retaining claim wi
     expect(paused.status).toBe('paused'); expect(paused.pid).toBeNull(); expect(paused.lifecycle?.publication).toBeUndefined();
     await h.runtime!.reconcile(); expect(h.store.list('runs')).toHaveLength(1);
   }, phase === 'verifying' ? { slowVerification: true } : { holdReview: true });
+}, 30000);
+
+test('legacy autonomous resume cannot manufacture missing admitted workspace authority', async () => {
+  await fixture('pass', async h => {
+    await h.start();
+    const run = await until(() => h.store.list('runs').find(value => value.lifecycle?.phase === 'reviewing' && value.pid !== null));
+    await h.runtime!.control(run.id, 'pause');
+    const paused = h.store.get('runs', run.id)!;
+    h.store.save('runs', { ...paused, workspace: undefined });
+    const before = await protocolEvents(h);
+    const head = await git(h.repo.path, 'rev-parse', 'HEAD');
+    let rejected: boolean | undefined;
+    const resuming = h.runtime!.control(run.id, 'resume').then(() => { rejected = false; }, () => { rejected = true; });
+    try {
+      await until(() => rejected !== undefined || h.store.get('runs', run.id)?.status === 'running');
+      expect(rejected).toBe(true);
+      const current = h.store.get('runs', run.id)!;
+      expect(current.status).toBe('paused');
+      expect(current.workspace).toBeUndefined();
+      expect(current.pid).toBeNull();
+      expect(current.lifecycle?.publication).toBeUndefined();
+      expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(head);
+      expect((await protocolEvents(h)).filter(event => event.event === 'spawn')).toEqual(before.filter(event => event.event === 'spawn'));
+    } finally {
+      await h.runtime!.close();
+      await resuming;
+    }
+  }, { holdReview: true });
+}, 30000);
+
+for (const action of ['pause', 'cancel'] as const) test(`${action} stops a resumed autonomous reviewer without disturbing another repository`, async () => {
+  await fixture('pass', async h => {
+    const secondPath = join(h.root, 'second');
+    await mkdir(secondPath);
+    await writeFile(join(secondPath, 'proof.txt'), 'pending\n');
+    await writeFile(join(secondPath, 'verify.ts'), await readFile(join(h.repo.path, 'verify.ts')));
+    await git(secondPath, 'init', '-b', 'main');
+    await git(secondPath, 'config', 'user.name', 'Protocol Fixture');
+    await git(secondPath, 'config', 'user.email', 'fixture@example.invalid');
+    await git(secondPath, 'add', 'proof.txt', 'verify.ts');
+    await git(secondPath, 'commit', '-m', 'Held peer baseline');
+    const second: Repo = { ...structuredClone(h.repo), id: 'second', name: 'Held peer project', path: secondPath };
+    h.store.save('repos', second);
+    const ticket = await writeTicket(h.store, second, '---\nid: T001\ntitle: Held peer proof\ndepends_on: []\n---\n\nImplement the peer proof only.\n\nDone when:\n- proof.txt contains verified.\n');
+    h.store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision });
+    h.store.setSettings({ ...h.store.settings(), maxConcurrentTickets: 2 });
+    const head = await git(h.repo.path, 'rev-parse', 'HEAD');
+    const peerHead = await git(second.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const authors = await until(() => {
+      const runs = h.store.list('runs');
+      return runs.length === 2 && runs.every(run => run.dialog?.id === 'author-barrier') ? runs : undefined;
+    });
+    const owner = authors.find(run => run.repoId === h.repo.id)!;
+    const peer = authors.find(run => run.repoId === second.id)!;
+    await h.runtime!.answer(owner.id, { id: 'author-barrier', value: 'release' });
+    const firstReviewer = await until(async () => {
+      const events = await protocolEvents(h);
+      const prompt = events.find(event => event.reviewer && event.event === 'prompt');
+      const run = h.store.get('runs', owner.id)!;
+      return prompt && run.lifecycle?.phase === 'reviewing' && run.pid === prompt.pid ? prompt : undefined;
+    });
+    await h.runtime!.control(owner.id, 'pause');
+    expect(h.store.get('runs', owner.id)).toMatchObject({ status: 'paused', pid: null });
+    let resumeSettled = false;
+    let resumeError: unknown;
+    void h.runtime!.control(owner.id, 'resume').catch(error => { resumeError = error; }).finally(() => { resumeSettled = true; });
+    try {
+      const resumedReviewer = await until(async () => {
+        const events = await protocolEvents(h);
+        const spawns = events.filter(event => event.reviewer && event.event === 'spawn');
+        const prompt = events.find(event => event.reviewer && event.event === 'prompt' && event.sessionId !== firstReviewer.sessionId);
+        const run = h.store.get('runs', owner.id)!;
+        return spawns.length === 2 && prompt && run.status === 'running' && run.lifecycle?.phase === 'reviewing' && run.pid === prompt.pid ? prompt : undefined;
+      });
+      expect(resumedReviewer.sessionId).not.toBe(firstReviewer.sessionId);
+      expect(resumeSettled).toBe(false);
+      await h.runtime!.control(owner.id, action);
+      await until(() => resumeSettled);
+      expect(resumeError).toBeUndefined();
+      expect(h.store.get('runs', owner.id)).toMatchObject({ status: action === 'pause' ? 'paused' : 'interrupted', pid: null });
+      expect(() => process.kill(resumedReviewer.pid, 0)).toThrow();
+      await h.runtime!.reconcile();
+      expect(h.store.get('runs', owner.id)?.lifecycle?.publication).toBeUndefined();
+      expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(head);
+      expect(h.store.get('tickets', `${h.repo.id}/T001`)?.status).not.toBe('done');
+      expect(h.store.get('runs', peer.id)).toMatchObject({ status: 'running', pid: peer.pid, sessionId: peer.sessionId, dialog: { id: 'author-barrier' } });
+      process.kill(peer.pid!, 0);
+      expect(h.store.get('runs', peer.id)?.lifecycle?.publication).toBeUndefined();
+      expect(await git(second.path, 'rev-parse', 'HEAD')).toBe(peerHead);
+      expect(await readFile(join(second.path, 'proof.txt'), 'utf8')).toBe('pending\n');
+      expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && event.sessionId === peer.sessionId)).toHaveLength(1);
+      expect(h.store.list('runs')).toHaveLength(2);
+    } finally {
+      await h.runtime!.close();
+    }
+  }, { holdReview: true, authorBarrier: true });
 }, 30000);
 
 test('crash reconciliation recognizes the exact published object without duplicate commit or author replay', async () => {

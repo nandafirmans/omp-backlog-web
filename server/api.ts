@@ -16,6 +16,7 @@ import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspac
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
 import { saveCompletionPolicy } from './autonomy-policy';
+import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
 interface Owner { username: string; hash: string }
@@ -158,7 +159,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       }
       if (url.pathname === '/api/settings' && request.method === 'PATCH') {
         const input = await body(request); const settings = store.settings();
-        if (Object.keys(input).some(key => !['executable', 'model', 'thinking', 'roots', 'timeLimitMinutes', 'tokenBudget', 'paused'].includes(key))) throw new HttpError(400, 'Unknown setting');
+        if (Object.keys(input).some(key => !['executable', 'model', 'thinking', 'roots', 'timeLimitMinutes', 'tokenBudget', 'maxConcurrentTickets', 'paused'].includes(key))) throw new HttpError(400, 'Unknown setting');
         if (input.executable !== undefined) { settings.executable = string(input.executable, 'executable', 4096).trim(); if (!settings.executable || settings.executable.includes('\0')) throw new HttpError(400, 'Set an OMP executable path or command'); }
         if (input.model !== undefined) {
           settings.model = string(input.model, 'model', 512);
@@ -170,6 +171,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           settings.thinking = thinking;
         }
         for (const key of ['timeLimitMinutes', 'tokenBudget'] as const) { if (input[key] !== undefined) { const value = input[key]; if (key === 'tokenBudget' && value === null) { settings.tokenBudget = null; continue; } const max = key === 'timeLimitMinutes' ? 1440 : 10000000; if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > max) throw new HttpError(400, `Invalid ${key}`); settings[key] = value; } }
+        if (input.maxConcurrentTickets !== undefined) { const value = input.maxConcurrentTickets; if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 4) throw new HttpError(400, 'Invalid maxConcurrentTickets'); settings.maxConcurrentTickets = value; }
         if (input.paused !== undefined) { if (typeof input.paused !== 'boolean') throw new HttpError(400, 'paused must be boolean'); settings.paused = input.paused; }
         if (input.roots !== undefined) {
           if (!Array.isArray(input.roots) || !input.roots.length || input.roots.length > 20) throw new HttpError(400, 'Provide 1–20 permitted roots');
@@ -214,13 +216,15 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             : await commitWorkspace(store, repo, input)));
         }
         if (segments.length === 4 && segments[3] === 'reconcile-workspace' && request.method === 'POST') {
-          return await workspaceOperation(store, repo.id, async () => {
+          return await workspaceOperation(store, repo.id, async identity => {
           const input = await body(request);
           if (!repo.handoff || input.handoffId !== repo.handoff.id) throw new HttpError(409, 'Workspace handoff changed; review the current gate');
-          const claimed = () => store.list('runs').some(run => run.repoId === repo.id && ['running', 'stopping', 'paused'].includes(run.status));
+          const claimed = () => claimedWorkspaceConflict(store, repo, identity);
           if (claimed()) throw new HttpError(409, 'Stop or finish owned work before reconciling the workspace');
           await permittedPath(store, repo.path);
+          await assertWorkspaceIdentity(repo, identity);
           const handoff = await inspectWorkspaceHandoff(repo, repo.handoff.runId);
+          await assertWorkspaceIdentity(repo, identity);
           const current = store.get('repos', repo.id);
           if (!current?.handoff || current.handoff.id !== input.handoffId || claimed()) throw new HttpError(409, 'Workspace state changed during inspection; review again');
           if (handoff) {
@@ -310,7 +314,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
             return json(saveRecoveryNote(store, ticket, run.id, input));
           }
-          if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }
+          if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume' && input.action !== 'cancel') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }
           if (segments[3] === 'answer') { await runtime.answer(run.id, input); return json({ ok: true }); }
         }
       }

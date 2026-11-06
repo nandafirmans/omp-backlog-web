@@ -3,8 +3,8 @@ import type { CompletionPolicy, Repo, Store, VerificationRecipe } from './contra
 import { captureBaseline, recipeIdentity } from './autonomy';
 import { HttpError } from './tickets';
 import { workspaceOperation } from './workspace-commit';
+import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
 
-const ACTIVE = ['running', 'stopping', 'paused'];
 function boundedInteger(value: unknown, field: string, minimum: number, maximum: number): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value < minimum || value > maximum) throw new HttpError(400, `${field} must be an integer from ${minimum} to ${maximum}`);
   return value;
@@ -20,7 +20,7 @@ function recipe(value: unknown): VerificationRecipe {
 
 /** A separate owner setting; ticket agents cannot grant themselves publication authority. */
 export async function saveCompletionPolicy(store: Store, repo: Repo, input: Record<string, unknown>): Promise<Repo> {
-  return workspaceOperation(store, repo.id, async () => {
+  return workspaceOperation(store, repo.id, async identity => {
     const current = store.get('repos', repo.id);
     if (!current || input.revision !== (current.completion?.revision ?? null)) throw new HttpError(409, 'Completion policy changed; reload and review');
     if (Object.keys(input).some(key => !['revision', 'mode', 'confirm', 'verification', 'reviewerModel', 'maxCorrections', 'maxRecoveries'].includes(key))) throw new HttpError(400, 'Unknown completion policy field');
@@ -32,17 +32,20 @@ export async function saveCompletionPolicy(store: Store, repo: Repo, input: Reco
       if (input.confirm !== true) throw new HttpError(400, 'Explicitly confirm agent review, local commits and automatic Done authority');
       if (!current.git) throw new HttpError(409, 'Autonomous completion requires a Git repository');
       if (current.handoff) throw new HttpError(409, 'Reconcile the recorded workspace gate before enabling autonomous completion');
-      if (store.list('runs').some(run => run.repoId === repo.id && ACTIVE.includes(run.status))) throw new HttpError(409, 'Stop or finish owned work before changing autonomous settings');
+      if (claimedWorkspaceConflict(store, current, identity)) throw new HttpError(409, 'Stop or finish owned work before changing autonomous settings');
       const verification = recipe(input.verification);
       if (typeof input.reviewerModel !== 'string' || input.reviewerModel.length > 512 || input.reviewerModel && (!/^[^/]+\/.+$/u.test(input.reviewerModel) || /\p{Cc}/u.test(input.reviewerModel))) throw new HttpError(400, 'Reviewer model must be an exact provider/model or blank to use the attempt model');
       const maxCorrections = boundedInteger(input.maxCorrections, 'Correction rounds', 0, 2);
       const maxRecoveries = boundedInteger(input.maxRecoveries, 'Recovery attempts', 0, 1);
+      await assertWorkspaceIdentity(current, identity);
       await captureBaseline(store, current);
       const recipeHash = await recipeIdentity(current, verification);
       const fresh = store.get('repos', repo.id);
-      if (!fresh || (fresh.completion?.revision ?? null) !== input.revision || fresh.handoff || store.list('runs').some(run => run.repoId === repo.id && ACTIVE.includes(run.status))) throw new HttpError(409, 'Workspace or completion policy changed during inspection; review again');
+      await assertWorkspaceIdentity(current, identity);
+      if (!fresh || (fresh.completion?.revision ?? null) !== input.revision || fresh.handoff || claimedWorkspaceConflict(store, fresh, identity)) throw new HttpError(409, 'Workspace or completion policy changed during inspection; review again');
       completion = { mode: 'autonomous', revision: randomUUID(), updated: Date.now(), verification, recipeHash, reviewerModel: input.reviewerModel, maxCorrections, maxRecoveries };
     }
+    await assertWorkspaceIdentity(current, identity);
     const updated = { ...store.get('repos', repo.id)!, completion };
     store.save('repos', updated);
     return updated;
