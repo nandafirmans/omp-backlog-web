@@ -189,3 +189,12 @@ Run Evidence distinguishes author claims, host command receipts, independent rev
 Actual authenticated app/browser checks used disposable Git and protocol children: canceled and confirmed commissioning, saved authority/start-policy independence, exact-candidate local commit to Done, permission exception/filter, keyboard evidence disclosure, canceled unsaved close, mobile footer reachability, cross-tab revocation and stale draft retention. Kanagawa/Light were visually inspected at 1440px and 390px. Fixed duplicate modal/board sibling keys and implicit grid min-content overflow; final mobile policy body measured 326px client/scroll width with zero horizontal scroll, and document overflow was absent. Full-project lint and strict TypeScript passed.
 
 This is browser/protocol evidence, not real OMP/provider or exhaustive accessibility verification. Original screenshots under `/tmp/omp-autonomous-browser-5EJXDe/proof` became unavailable after session resumption; session transcript retains the visual observations, not a currently accessible artifact directory. Owned browser/server were stopped; no registered project was enabled.
+
+### Engineering mode controls and usage
+
+Global and saved-ticket engineering-mode selectors reuse existing Ant Design fields and native sizing. Run history/details display immutable admission mode, not current defaults. Usage separates recorded author/reviewer components from their cumulative total and from actual provider billing. No shared visual convention changed.
+
+Actual-React/synthetic-API browser checks covered global mode save without model discovery or budget changes, ticket override save/cancel/inheritance, unsaved Settings navigation/restore, active-owner disabling, legacy pstack labels, immutable history and 22 author + 14 reviewer = 36 total without double counting. Tokyo Night/Light desktop (1440px) and mobile (390px) were visually inspected without horizontal document overflow or recorded browser runtime errors. Global-helper contrast measured 6.43:1 dark and 6.04:1 Light; selector focus and accessible names were inspected. Native 32px controls remain intentional repository geometry, not blanket touch-target certification.
+
+Private UI proof: `/tmp/omp-engineering-ui-mQQjTW/result.json` and adjacent screenshots. Requested AFTER audit: `anti-slop/audit-001-2026-11-06.md`. This is frontend/synthetic-API proof; backend/native/provider results and limitations are recorded separately in `docs/current-agent-workflow.md`.
+

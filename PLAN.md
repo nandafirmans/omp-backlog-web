@@ -476,14 +476,23 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 
 - Later explicit extension: global and per-ticket **No cumulative token limit** with cost warning/save confirmation. `null` is uncapped; omitted ticket cap inherits; numeric cap still bounds usage. Native goal omits `token_budget` and host skips only that token check; accounting, native compaction, fixed finite deadline, ownership and acceptance gates remain. Existing defaults/runs are not silently changed. Legacy resumes retain recorded progress limits when available. Browser/UI and lint verification only; additional backend/protocol tests added, not run. No guarantee of automatic completion or waived provider/account limits.
 
-### Phase 5 default engineering router
+### Phase 5 engineering router
 
-- Authorized ticket implementation now requires native `poteto-mode` and `pstack-pi` skill commands plus the native `task` tool in the actual author RPC session. Missing or disabled discovery fails before the implementation prompt with actionable setup diagnostics. No plugin installation or global configuration mutation is performed.
+- Pstack-selected ticket implementation requires native `poteto-mode` and `pstack-pi` skill commands plus the native `task` tool in the actual author RPC session. Missing or disabled discovery fails before the implementation prompt with actionable setup diagnostics. Standard mode bypasses this requirement. No plugin installation or global configuration mutation is performed.
 - Fresh authors invoke the installed router through native `/skill:poteto-mode` dispatch, not an implicit ticket mention. The host observes OMP's prompt-bound native skill record and retains its resolved path in existing run conversation/transcript storage. Playbook and project-verification reads remain observed tool activity, not proof of workflow compliance or acceptance.
 - Same-session resume, bounded correction, and recovery retain the original workflow and do not initialize another router run. Model/thinking overrides, native goal continuation/compaction, budgets, evidence contracts, Human Needs review, and Autonomous host checks/restricted review/publication remain separate.
 - Imported pstack autonomy/shipping instructions are subordinate to the host contract in the author system prompt and immutable objective. No scheduler, generic retry loop, settings UI, copied skills, ticket-agent commit grant, or executable plugin discovery in the restricted reviewer is added.
 - Installed OMP 18.16.0 support includes a reproduced and corrected restricted-startup ancestor-plugin namespace gap. Private `work/.omp` now anchors plugin resolution; executable discovery remains disabled for acceptance review. Exact-version source audit and real positive/negative import controls are documented in [compatibility evidence](docs/omp-18.16.0-compatibility.md).
 - Verification and current installed-version limits are recorded in [Current agent workflow](docs/current-agent-workflow.md#implementation-and-verification). Broader pstack parity, external shipping automation, and exhaustive provider/playbook coverage remain outside this delivery.
+
+### Phase 7 prerequisite: engineering mode and token efficiency
+
+- Implemented global Standard OMP / OMP + pstack selection and per-ticket inheritance/override. New configurations default Standard; legacy settings and sessions without a mode retain pstack.
+- Admission snapshots mode alongside unchanged model/thinking and lifetime limits. Standard uses direct native implementation and applicable project verification skills; explicit pstack skill references cannot override that choice. Pstack alone performs capability preflight, native router dispatch and invocation observation.
+- Pause/resume, bounded correction and same-attempt recovery retain the selected mode and cumulative accounting. Separately reviewed blocker restarts retain their source mode across settings changes and backend restart. No automatic escalation, budget increase/reset within an attempt, or generic Phase 7 blocker-repair engine is added.
+- Both modes keep the existing host verification, restricted independent review and guarded local-publication contracts. Run details/history and Usage expose mode and recorded total consumption, including reviewers; token accounting is not actual provider billing.
+- Verification evidence and observed equivalent-ticket consumption are recorded in [Current agent workflow](docs/current-agent-workflow.md#engineering-mode-verification-november-6-2026).
+
 
 ## 12. Opt-in autonomous local completion
 

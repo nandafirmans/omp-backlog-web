@@ -89,19 +89,51 @@ Markdown and requirement attachments determine the ticket revision. Changing the
 
 ### Implementation and verification
 
-Fresh implementation sessions now use the installed [pstack-pi fork](https://github.com/nandafirmans/oh-my-pstack) by default. This applies to Human review and Autonomous completion projects, not the separate ticket-drafting conversation or restricted acceptance reviewer.
+Fresh configurations default to **Standard OMP**: ordinary native tools and goal continuation implement the ticket directly, with applicable project-local verification skills. pstack need not be installed. Existing persisted settings without an engineering-mode field retain **OMP + pstack**, preserving the previous workflow rather than silently changing it.
 
-`server/engineering.ts` checks the actual author RPC session's `get_available_commands` for native `skill:poteto-mode` and `skill:pstack-pi`, and `get_state.dumpTools` for `task`. Missing/disabled discovery stops before the implementation prompt and native goal. No plugin installation, global setting change, filesystem discovery replacement, or fallback methodology is attempted.
+Global **Settings → Engineering Mode** selects Standard OMP or OMP + pstack. Saved ticket **Next attempt · mode, model & budget** offers Inherit global, Standard OMP and OMP + pstack. Admission snapshots the effective choice alongside model/thinking, token cap and time limit. Run details, Usage and ticket execution history display that immutable mode. Changing defaults never changes admitted work. Same-session pause/resume, correction and incomplete-verification recovery retain mode, investigation, cumulative accounting and the original deadline.
 
-`launch()` submits `/skill:poteto-mode` with the immutable objective once per fresh author session. OMP expands the installed router. A bounded, abortable metadata observation waits for the native `custom` / `skill-prompt` record bound to that submitted prompt, then records its resolved router path in the existing run conversation and transcript. Native prompt success alone does not establish skill loading. OMP canonicalizes the recorded prompt's surrounding whitespace.
+Only pstack runs check the actual author RPC session's `get_available_commands` for native `skill:poteto-mode` and `skill:pstack-pi`, and `get_state.dumpTools` for `task`. Missing/disabled capabilities stop before implementation prompts or goals. A fresh pstack author submits `/skill:poteto-mode` once; the host observes its prompt-bound native `custom` / `skill-prompt` record and retains the resolved router path. Same-session continuations recheck availability without routing again. No fallback, plugin installation or global OMP configuration change occurs.
 
-The router selects and reads its installed engineering playbook; the objective requires an explicit `skill://pstack-pi` read and preserves project-local verification instructions. Observed reads remain tool observations, not proof that a playbook was followed. Package revision/version remains unknown unless separately observed; the app does not derive it from a skill mention.
+The pstack router selects its installed engineering playbook; author instructions require an explicit `skill://pstack-pi` read. Standard instructions instead prohibit invoking or reading poteto-mode, pstack-pi and their playbooks, including explicit references in ticket text, attachments or other skills. A requirement that actually needs pstack is a mode conflict to report as blocked, not permission to switch. Other project skills remain enabled. This boundary is an author instruction plus conditional native dispatch, not a sandbox preventing an untrusted author from calling its ordinary tools.
 
-Same-session resume, bounded correction, and recovery recheck native availability without invoking the router again or resetting investigation, accounting, or limits. Native OMP still owns goal continuation and compaction. The appended author system prompt and immutable objective keep imported playbooks subordinate to host authorization, evidence, independent review, publication, and Done gates. pstack review is never the restricted host acceptance review.
+Both modes receive the same host authorization/evidence contract. Native OMP owns goal continuation and compaction; the scheduler, fixed limits, host verification, fresh restricted acceptance reviewer, guarded local publication and Done gates remain unchanged. Drafting and restricted acceptance review do not load the engineering router.
+
+A separately operator-reviewed blocker retry still creates a new authorized attempt with fresh checks, not a resumed exhausted session. Its recovery context now pins the source run's engineering mode, including legacy pstack, even after global or ticket mode edits and backend restart. It never switches methodology to bypass a capability failure. Autonomous same-attempt recovery/correction never resets consumption or limits. Automatic escalation from Standard to pstack and general Phase 7 blocker repair remain deferred.
+
+Usage presents cumulative accounted tokens, including recorded independent reviewer sessions without double counting. Input/output/cache accounting is not provider billing or a monetary spending cap; missing usage remains unavailable. Enabling pstack does not increase budgets or alter model/thinking overrides. Observed router/playbook reads establish tool activity, not methodology compliance or acceptance.
 
 Agent instructions require reading applicable project verification skills and relevant feature-map entries, then exercising affected entry points independently. One convenient UI route does not prove alternate routes. The host does not independently attest that the agent followed those instructions.
 
 Agents must respect target repository check policy and time/token limits. Missing required setup or tools remain blocked/unverified; no automatic dependency installation, credential invention or weakened acceptance is authorized. Commissioning this app's verification skill does not commission a skill for every registered project.
+
+#### Engineering mode verification, November 6, 2026
+
+- Final focused protocol/API coverage passed **64 tests** across `runtime-integration`, `autonomy-runtime`, `execution`, `settings-api` and `recovery`. Covered capability failures, direct Standard execution with/without pstack, explicit skill references, inheritance/override validation, legacy settings/sessions, pause/resume, correction/recovery, restart, mixed-mode repositories, cumulative exhaustion and host acceptance/publication. A later focused recovery-context check passed **3 tests**; it is overlapping coverage, not three additional distinct tests.
+- Installed OMP **18.16.0** discovery/isolation checks passed **5 tests**: `OMP_BACKLOG_NATIVE_TESTS=1 bun test server/engineering-native.test.ts server/restricted-native.test.ts`.
+- Live-provider checks passed **6 tests** in two invocations: the four paired `server/engineering-live.test.ts` lifecycles, then Standard with extensions disabled and `server/concurrency-live.test.ts` mixed-mode overlap. Standard did not record router invocation or pstack reads. The extension-disabled control changed only its disposable author's launch flags, not installed/global configuration.
+- Both autonomous greeting runs passed actual host commands, distinct-session restricted acceptance review and guarded local publication, with owned work stopped before Done. Human runs stopped at Needs review. The test independently executed both greeting outputs after each lifecycle.
+- Changed-code ESLint and strict `tsc --noEmit` passed. Initial protocol failures were fixture errors: revision-less ticket overwrite, missing permitted scratch root, and survivor processes without author-prompt arguments. Corrected before the passing run. Initial TypeScript fixture literal/optional-field errors were corrected. No production build ran.
+
+Equivalent greeting tickets used `openai-codex/gpt-6.1-sol`, thinking `low`, identical criteria, explicit 600,000 accounted-token caps and four-minute deadlines. These are single observations per mode/policy, not billing totals or guaranteed percentage savings:
+
+| Completion policy | Engineering mode | Accounted author tokens | Accounted reviewer tokens | Accounted total | Outcome |
+| --- | --- | ---: | ---: | ---: | --- |
+| Human | Standard | 258,181 | Not commissioned | 258,181 | Needs review |
+| Human | pstack | 465,641 | Not commissioned | 465,641 | Needs review |
+| Autonomous | Standard | 304,582 | 13,996 | 318,578 | Done |
+| Autonomous | pstack | 578,964 | 14,174 | 593,138 | Done |
+
+Paired proof: `/tmp/omp-engineering-standard-live-rmhruq/proof.json`, `/tmp/omp-engineering-standard-live-UzW7lF/proof.json`, `/tmp/omp-engineering-pstack-live-NMbytq/proof.json`, `/tmp/omp-engineering-pstack-live-lEA7uI/proof.json`. Both autonomous candidates had the same tree `6ff44c5b9958594be153d55cf8804fd2c4763f36`; their disposable publication commits were `8a52a55370b7fb22aa1f4b47b972a0b2f46e5274` and `936692ea8738cdf49329f0d2e28586aca0ccbf35`.
+
+Extension-disabled Standard proof: `/tmp/omp-engineering-standard-live-hJfaaG/proof.json` (Needs review, 244,339 accounted tokens). Concurrent mixed-mode proof: `/tmp/omp-concurrency-live-jRTJNk/proof.json` (distinct live processes/sessions observed together; both stopped at Needs review with repository-specific evidence). No production-ticket execution, source-repository commit, push, PR, deployment or global OMP change occurred.
+
+These successful greeting samples all exceeded the unchanged 100,000-token new-store default. They do not establish that default as sufficient for either mode. No cap was automatically raised or reset within a run.
+
+Frontend verification used actual React/styles in isolated Chromium with synthetic APIs, separate from backend/native proof. Settings/ticket mode save/cancel/inheritance, unsaved-navigation/restore, active-owner disabling, legacy labels, immutable history and author/reviewer totals were exercised. Tokyo Night/Light desktop and 390px mobile were inspected without document overflow or recorded runtime errors. Helper contrast measured 6.43:1 dark and 6.04:1 Light. Private UI proof: `/tmp/omp-engineering-ui-mQQjTW/result.json`; [requested AFTER audit](../anti-slop/audit-001-2026-11-06.md).
+
+Remaining limits: no exhaustive feature-map/provider/playbook/theme/accessibility coverage, native-compaction trigger, or live pause/correction/blocker-restart journey. Those continuation/recovery paths have protocol coverage, not live-provider proof. General autonomous blocker repair and adaptive mode escalation remain unimplemented. Reviewed pstack restart context retains previously observed `skill://poteto-mode/playbooks/*.md` reads; legacy runs without those observations cannot recover an unrecorded selected playbook.
+
 
 #### Phase 5 verification, November 5, 2026
 
