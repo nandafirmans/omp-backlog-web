@@ -74,7 +74,7 @@ export default function CompletionPolicy({ repo, api, execute, busy, owned, onCl
           <label htmlFor="completion-corrections">Maximum corrections<InputNumber id="completion-corrections" min={0} max={2} precision={0} value={draft.maxCorrections} disabled={busy} onChange={maxCorrections => setDraft(value => ({ ...value, maxCorrections }))} /></label>
           <label htmlFor="completion-recoveries">Maximum recoveries<InputNumber id="completion-recoveries" min={0} max={1} precision={0} value={draft.maxRecoveries} disabled={busy} onChange={maxRecoveries => setDraft(value => ({ ...value, maxRecoveries }))} /></label>
         </div>
-        <p className="muted">All roles share the attempt's deadline and cumulative token limit. Exhausted limits or uncertain evidence require assistance, not a silent retry.</p>
+        <p className="muted">All roles share the attempt's original deadline and cumulative token limit. Recoveries cover incomplete verification and host-reproduced engineering blockers together. Failed host checks and reviewer findings share the correction limit. Credentials, installations, product decisions, exhausted limits, and uncertain operations require assistance. No budget reset or expanded permission is granted.</p>
         {base?.mode === 'autonomous' && <details><summary>Pinned saved recipe identity</summary><p className="path">{base.recipeHash}</p></details>}
         <p className="muted">Save again to explicitly recommission changed recipe bytes, even when these form values are unchanged.</p>
       </>}

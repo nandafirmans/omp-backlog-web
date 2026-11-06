@@ -1,6 +1,7 @@
 import { Tag } from 'antd';
 import type { Run } from '../server/contracts';
 import { lifecycleLabels } from './lifecyclePresentation';
+import RecoveryHistory from './RecoveryHistory';
 
 export default function LifecycleProgress({ run }: { run: Run }) {
   const lifecycle = run.lifecycle;
@@ -13,6 +14,7 @@ export default function LifecycleProgress({ run }: { run: Run }) {
     <p className="muted">Policy revision {policy.revision} · corrections {lifecycle.corrections}/{policy.maxCorrections} · recoveries {lifecycle.recoveries}/{policy.maxRecoveries}. All roles share this attempt's deadline and token limit. No push, PR, merge or deployment.</p>
     {phase === 'assistance' && <div className="error-banner" role="alert"><strong>Operator assistance required</strong><p>{lifecycle.exception || 'The autonomous attempt could not safely establish completion. Inspect the recorded evidence, candidate and workspace before deciding how to recover.'}</p><p>Automatic completion stopped; this is not Done. Preserve partial work. Use the ticket's existing reviewed recovery controls and, when gated, explicit workspace reconciliation. No blind retry or rollback is implied.</p></div>}
     {phase !== 'assistance' && lifecycle.exception && <p className="warning-text">{lifecycle.exception}</p>}
+    <RecoveryHistory run={run} />
     <details className="run-record"><summary>Candidate &amp; authority identity{candidate ? ` · tree ${candidate.tree.slice(0, 12)}` : ' · candidate not captured yet'}</summary><dl className="run-metadata">
       <div><dt>Baseline commit</dt><dd>{lifecycle.baseline.head}</dd></div><div><dt>Branch ref</dt><dd>{lifecycle.baseline.ref}</dd></div><div><dt>Candidate tree</dt><dd>{candidate?.tree ?? 'Not captured yet'}</dd></div><div><dt>Candidate fingerprint</dt><dd>{candidate?.fingerprint ?? 'Not captured yet'}</dd></div><div><dt>Commissioned recipe hash</dt><dd>{lifecycle.recipeHash}</dd></div><div><dt>Author session</dt><dd>{lifecycle.authorSessionId ?? 'Not recorded'}</dd></div><div><dt>Author tokens</dt><dd>{lifecycle.authorTokens.toLocaleString()}</dd></div>
       <div><dt>Reviewer tokens</dt><dd>{lifecycle.reviewerTokens?.toLocaleString() ?? 'Not recorded'}</dd></div>

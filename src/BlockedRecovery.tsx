@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import type { Repo, Run, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
 import MarkdownEditor from './MarkdownEditor';
+import RecoveryHistory from './RecoveryHistory';
 
 interface Props {
   repo: Repo; ticket: Ticket; run: Run; api: RequestApi; disabled: boolean;
@@ -58,6 +59,7 @@ export default function BlockedRecovery({ repo, ticket, run, api, disabled, exec
     <p className="muted">Source: <Link to={`/runs/${encodeURIComponent(run.id)}`}>blocked run · {run.revision.slice(0, 10)}</Link>{run.revision !== ticket.revision && ' · Older requirements; reconcile against current criteria.'}</p>
     <h4>Why blocked</h4><p className="recovery-text">{run.blockerDetails?.prerequisite ?? run.blocker ?? 'Not recorded.'}</p>
     <h4>Recommended fix · agent suggestion</h4><p className="recovery-text">{run.blockerDetails?.unblock ?? 'Review the legacy blocker above.'}</p>
+    <RecoveryHistory run={run} />
     <details><summary>Attempts, checks &amp; partial work</summary>
       <h4>What was tried · agent report</h4><p className="recovery-text">{run.blockerDetails?.attempted ?? 'Not reported. Inspect the source run before repeating any action.'}</p>
       <h4>Permission needed · agent report</h4><p className="recovery-text">{run.blockerDetails?.permission ?? 'Not reported; no additional permission granted.'}</p>
