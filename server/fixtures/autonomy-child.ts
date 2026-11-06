@@ -10,6 +10,7 @@ if (args.includes('--version')) { console.log('18.13.3'); process.exit(0); }
 const configPath = argument('--fixture-config');
 const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean };
 const reviewer = args.includes('--no-tools');
+const standard = !reviewer && argument('--append-system-prompt').includes('Engineering mode: standard.');
 if (reviewer && args.includes('--append-system-prompt')) throw new Error('Restricted reviewer must not receive author engineering system instructions');
 const directory = reviewer ? dirname(argument('--session-dir')) : dirname(argument('--config'));
 const ticket = reviewer ? null : JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')) as Ticket;
@@ -68,7 +69,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   else if (frame.type === 'get_available_thinking_levels') respond({ levels: ['off', 'medium', 'high'] });
   else if (frame.type === 'set_thinking_level') { thinking = String(frame.level); respond(); }
   else if (frame.type === 'set_host_tools') {
-    if (!reviewer && !engineeringDiscovered) throw new Error('Author tool registration must follow engineering preflight');
+    if (!reviewer && !standard && !engineeringDiscovered) throw new Error('Pstack author tool registration must follow engineering preflight');
     const names = Array.isArray(frame.tools) ? frame.tools.map(tool => tool.name) : [];
     if (reviewer && JSON.stringify(names) !== JSON.stringify(['candidate_diff', 'candidate_source', 'backlog_review'])) throw new Error('Restricted reviewer received non-review capabilities');
     authorToolsRegistered = !reviewer;
@@ -79,7 +80,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     prompt = String(frame.message); settled = false;
     const routed = prompt.startsWith('/skill:poteto-mode\n');
     if (reviewer && routed) throw new Error('Restricted reviewer must never initialize the engineering router');
-    if (!reviewer && (!authorToolsRegistered || routed === args.includes('--resume'))) throw new Error('Only fresh admitted authors initialize the engineering router');
+    if (!reviewer && (!authorToolsRegistered || routed !== (!standard && !args.includes('--resume')))) throw new Error('Author prompt violated selected engineering mode');
     if (routed) {
       session.messages = [{ role: 'custom', customType: 'skill-prompt', details: { name: 'poteto-mode', path: join(directory, 'fixture-skills/poteto-mode/SKILL.md'), prompt: config.scenario === 'missing-invocation' ? 'Stale prior prompt, not the submitted invocation' : prompt.trim(), lineCount: 1 }, content: 'Deterministic fixture native router expansion, not an installed playbook.' }];
       await writeFile(sessionFile, JSON.stringify(session));

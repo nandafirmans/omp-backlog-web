@@ -6,8 +6,12 @@ import { object } from './rpc';
 export function parseExecutionOverrides(value: unknown): ExecutionOverrides {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, 'Provide ticket execution settings');
   const input = value as Record<string, unknown>;
-  if (Object.keys(input).some(key => !['model', 'thinking', 'tokenBudget'].includes(key))) throw new HttpError(400, 'Unknown ticket execution setting');
+  if (Object.keys(input).some(key => !['engineeringMode', 'model', 'thinking', 'tokenBudget'].includes(key))) throw new HttpError(400, 'Unknown ticket execution setting');
   const result: ExecutionOverrides = {};
+  if (input.engineeringMode !== undefined) {
+    if (input.engineeringMode !== 'standard' && input.engineeringMode !== 'pstack') throw new HttpError(400, 'Invalid engineering mode');
+    result.engineeringMode = input.engineeringMode;
+  }
   if (input.model !== undefined) {
     if (typeof input.model !== 'string' || input.model.length > 512) throw new HttpError(400, 'Invalid ticket model');
     if ((input.model !== '' && !/^[^/]+\/.+$/u.test(input.model)) || /\p{Cc}/u.test(input.model)) throw new HttpError(400, 'Choose an exact provider/model or OMP default');
@@ -25,7 +29,7 @@ export function parseExecutionOverrides(value: unknown): ExecutionOverrides {
 }
 
 export function resolveRunConfiguration(settings: Settings, ticket: Pick<Ticket, 'execution'>): RunConfiguration {
-  return { model: ticket.execution?.model ?? settings.model, thinking: ticket.execution?.thinking ?? (ticket.execution?.model === undefined ? settings.thinking ?? '' : ''), tokenBudget: ticket.execution?.tokenBudget === undefined ? settings.tokenBudget : ticket.execution.tokenBudget, timeLimitMinutes: settings.timeLimitMinutes };
+  return { engineeringMode: ticket.execution?.engineeringMode ?? settings.engineeringMode ?? 'pstack', model: ticket.execution?.model ?? settings.model, thinking: ticket.execution?.thinking ?? (ticket.execution?.model === undefined ? settings.thinking ?? '' : ''), tokenBudget: ticket.execution?.tokenBudget === undefined ? settings.tokenBudget : ticket.execution.tokenBudget, timeLimitMinutes: settings.timeLimitMinutes };
 }
 
 /** Retain only bounded telemetry, never get_state's prompts, tools or provider/session objects. */

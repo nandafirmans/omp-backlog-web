@@ -40,7 +40,7 @@ export function createStore(directory = process.env.OMP_BACKLOG_DATA || join(hom
     CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY CHECK(id=1), username TEXT NOT NULL, hash TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, csrf TEXT NOT NULL, authenticated INTEGER NOT NULL, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS throttle (id INTEGER PRIMARY KEY CHECK(id=1), failures INTEGER NOT NULL, until_at INTEGER NOT NULL);`);
-  const defaults: Settings = { executable: 'omp', model: '', roots: [join(homedir(), 'Development')], timeLimitMinutes: 30, tokenBudget: 100000, maxConcurrentTickets: 1, paused: false };
+  const defaults: Settings = { executable: 'omp', engineeringMode: 'standard', model: '', roots: [join(homedir(), 'Development')], timeLimitMinutes: 30, tokenBudget: 100000, maxConcurrentTickets: 1, paused: false };
   db.query('INSERT OR IGNORE INTO config(id,value) VALUES(1,?)').run(JSON.stringify(defaults));
   const target = new EventTarget();
   let depth = 0;
@@ -56,7 +56,7 @@ export function createStore(directory = process.env.OMP_BACKLOG_DATA || join(hom
       try { const value = db.transaction(fn)(); depth--; if (dirty) { dirty = false; target.dispatchEvent(new Event('change')); } return value; }
       catch (error) { depth--; dirty = false; throw error; }
     },
-    settings() { const row = db.query<{ value: string }, []>('SELECT value FROM config WHERE id=1').get(); if (!row) throw new Error('Settings are missing'); const settings = JSON.parse(row.value) as Settings; return { ...settings, maxConcurrentTickets: settings.maxConcurrentTickets ?? 1 }; },
+    settings() { const row = db.query<{ value: string }, []>('SELECT value FROM config WHERE id=1').get(); if (!row) throw new Error('Settings are missing'); const settings = JSON.parse(row.value) as Settings; return { ...settings, engineeringMode: settings.engineeringMode ?? 'pstack', maxConcurrentTickets: settings.maxConcurrentTickets ?? 1 }; },
     setSettings(value) { db.query('UPDATE config SET value=? WHERE id=1').run(JSON.stringify(value)); store.notify(); },
     notify() { if (depth) dirty = true; else target.dispatchEvent(new Event('change')); },
   };

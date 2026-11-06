@@ -40,7 +40,7 @@ async function withHarness(run: (harness: Harness) => Promise<void>, settings: P
   const executable = join(root, 'protocol-child');
   await writeFile(executable, `#!${process.execPath}\nimport ${JSON.stringify(new URL('./fixtures/runtime-child.ts', import.meta.url).href)};\n`, { mode: 0o700 });
   const store = createStore(join(root, 'private'));
-  store.setSettings({ ...store.settings(), roots: [root], executable, ...settings });
+  store.setSettings({ ...store.settings(), roots: [root], executable, engineeringMode: 'pstack', ...settings });
   const harness: Harness = { root, store, executable, runtime: null };
   try { await run(harness); }
   finally {
@@ -207,6 +207,54 @@ test('fresh native router initializes once; same-session resume rediscovers with
     expect(goal?.objective?.startsWith('/skill:')).toBe(false);
   });
 }, 15_000);
+
+test('standard directly implements with installed or missing pstack and ignores explicit router references across resume', async () => {
+  for (const scenario of ['hold', 'disabled-plugin']) {
+    await withHarness(async harness => {
+      const repo = await repository(harness, `standard-${scenario}`, 0, scenario);
+      const original = await ticket(harness, repo);
+      const changed = await writeTicket(harness.store, repo, original.markdown.replace('Write disposable proof file.', 'Write disposable proof file. Reference /skill:poteto-mode and /skill:pstack-pi.'), original.revision);
+      harness.store.save('tickets', { ...changed, status: 'ready', approvedRevision: changed.revision });
+      await start(harness);
+      const first = await running(harness);
+      expect(first.configuration?.engineeringMode).toBe('standard');
+      await harness.runtime!.control(first.id, 'pause');
+      const paused = harness.store.get('runs', first.id)!;
+      harness.store.setSettings({ ...harness.store.settings(), engineeringMode: 'pstack', tokenBudget: 999999 });
+      await harness.runtime!.control(first.id, 'resume');
+      const resumed = await running(harness);
+      expect(resumed.configuration).toEqual(paused.configuration);
+      expect(resumed.progress?.deadline).toBe(paused.progress?.deadline);
+      const complete = await finish(harness, resumed);
+      expect(complete.status).toBe('needs_review');
+      expect(complete.sessionId).toBe(first.sessionId);
+      expect(await readFile(join(repo.path, 'proof.txt'), 'utf8')).toBe('verified\n');
+      const log = await events(repo);
+      expect(log.some(event => ['get_available_commands', 'get_messages'].includes(String(event.command)) || event.event === 'native-skill-record')).toBe(false);
+      expect(log.filter(event => event.command === 'prompt').every(event => !event.message?.startsWith('/skill:'))).toBe(true);
+      expect(log.filter(event => event.command === 'goal' && event.op === 'create')).toHaveLength(1);
+    }, { engineeringMode: 'standard' });
+  }
+}, 25000);
+
+test('legacy session without mode resumes pstack despite a new standard global default', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'legacy-mode');
+    await ticket(harness, repo);
+    await start(harness);
+    const first = await running(harness);
+    await harness.runtime!.control(first.id, 'pause');
+    const paused = harness.store.get('runs', first.id)!;
+    delete paused.configuration!.engineeringMode;
+    harness.store.save('runs', paused);
+    harness.store.setSettings({ ...harness.store.settings(), engineeringMode: 'standard' });
+    await harness.runtime!.control(first.id, 'resume');
+    const resumed = await running(harness);
+    expect(resumed.sessionId).toBe(first.sessionId);
+    await finish(harness, resumed);
+    expect((await events(repo)).filter(event => event.command === 'get_available_commands')).toHaveLength(2);
+  });
+}, 15000);
 
 test('resume rechecks disabled pstack before admitting continuation or mutating the proof', async () => {
   await withHarness(async harness => {
@@ -519,7 +567,7 @@ for (const limit of ['time', 'tokens'] as const) {
       const limited = await repository(harness, 'a', 0, limit === 'tokens' ? 'tokens' : 'hold');
       const independent = await repository(harness, 'b');
       const selected = await ticket(harness, limited);
-      harness.store.save('tickets', { ...selected, execution: { tokenBudget: limit === 'tokens' ? 7 : null } });
+      harness.store.save('tickets', { ...selected, execution: { engineeringMode: 'standard', tokenBudget: limit === 'tokens' ? 7 : null } });
       const independentTicket = await ticket(harness, independent);
       harness.store.save('tickets', { ...independentTicket, execution: { tokenBudget: null } });
       await start(harness);
@@ -532,6 +580,11 @@ for (const limit of ['time', 'tokens'] as const) {
         return current?.status === 'failed' && current.pid === null ? current : undefined;
       });
       expect(failed.error).toContain(`Execution ${limit === 'tokens' ? 'token' : 'time'} budget exhausted`);
+      expect(failed.configuration?.engineeringMode).toBe('standard');
+      expect(two.configuration?.engineeringMode).toBe('pstack');
+      if (limit === 'tokens') expect(failed.progress?.tokens?.total).toBe(7);
+      await harness.runtime!.reconcile();
+      expect(harness.store.list('runs').filter(run => run.repoId === limited.id)).toHaveLength(1);
       expect(harness.store.get('runs', two.id)).toMatchObject({ status: 'running', pid: two.pid, sessionId: two.sessionId, dialog: { id: 'finish' } });
       expect(two.progress?.tokenBudget).toBeNull();
       if (limit === 'time') expect(two.progress!.deadline).toBeGreaterThan(one.progress!.deadline);
@@ -903,6 +956,7 @@ test('blocked result stops an unsettled goal without completing it or rerunning;
     // Simulate an operator-authorized next attempt; API feedback validation has separate coverage.
     const message = 'Check the alternate user entry point.';
     harness.store.save('runs', { ...blocked, reviewFeedback: { message, recorded: Date.now() }, recoveryNote: { id: 'reviewed-note', revision: blocked.revision, instructions: 'Probe the missing fixture before repair.', recorded: Date.now(), reviewed: Date.now() } });
+    harness.store.setSettings({ ...harness.store.settings(), engineeringMode: 'standard' });
     await writeFile(join(repo.path, 'fixture.json'), JSON.stringify({ scenario: 'hold', expectedFeedback: message }));
     const selected = harness.store.get('tickets', `${repo.id}/T001`)!;
     harness.store.save('tickets', { ...selected, status: 'ready' });
@@ -911,6 +965,7 @@ test('blocked result stops an unsettled goal without completing it or rerunning;
     expect(next.id).not.toBe(blocked.id);
     expect(next.recoveryContext?.sourceRunId).toBe(blocked.id);
     expect(next.recoveryContext?.note.instructions).toContain('Probe the missing fixture');
+    expect(next.configuration?.engineeringMode).toBe('pstack');
     const completed = await finish(harness, next);
     expect(completed.verification).toHaveLength(1);
     const artifact = completed.verification![0]!.artifact!;
@@ -919,6 +974,33 @@ test('blocked result stops an unsettled goal without completing it or rerunning;
   });
 }, 15_000);
 
+
+test('reviewed standard recovery restart cannot inherit a later pstack default or override', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'standard-recovery', 0, 'blocked');
+    await ticket(harness, repo);
+    await start(harness);
+    const first = await running(harness);
+    await harness.runtime!.answer(first.id, { id: 'finish', value: 'finish' });
+    const blocked = await waitFor('standard blocked shutdown', () => {
+      const run = harness.store.get('runs', first.id);
+      return run?.status === 'blocked' && run.pid === null ? run : undefined;
+    });
+    harness.store.save('runs', { ...blocked, recoveryNote: { id: 'reviewed-note', revision: blocked.revision, instructions: 'Recheck original proof', recorded: Date.now(), reviewed: Date.now() } });
+    harness.store.setSettings({ ...harness.store.settings(), engineeringMode: 'pstack' });
+    const selected = harness.store.get('tickets', `${repo.id}/T001`)!;
+    harness.store.save('tickets', { ...selected, execution: { engineeringMode: 'pstack' }, status: 'ready', approvedRevision: selected.revision });
+    await writeFile(join(repo.path, 'fixture.json'), JSON.stringify({ scenario: 'disabled-plugin' }));
+    await harness.runtime!.close();
+    harness.runtime = null;
+    await start(harness);
+    const next = await running(harness);
+    expect(next.configuration?.engineeringMode).toBe('standard');
+    expect(next.recoveryContext?.sourceRunId).toBe(blocked.id);
+    await finish(harness, next);
+    expect((await events(repo)).some(event => event.command === 'get_available_commands' || event.event === 'native-skill-record')).toBe(false);
+  }, { engineeringMode: 'standard' });
+}, 20000);
 test('startup terminates an identity-matched surviving child before interrupting it, without replay', async () => {
   await withHarness(async harness => {
     const repo = await repository(harness, 'recovery');

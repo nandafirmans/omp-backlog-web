@@ -159,7 +159,11 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       }
       if (url.pathname === '/api/settings' && request.method === 'PATCH') {
         const input = await body(request); const settings = store.settings();
-        if (Object.keys(input).some(key => !['executable', 'model', 'thinking', 'roots', 'timeLimitMinutes', 'tokenBudget', 'maxConcurrentTickets', 'paused'].includes(key))) throw new HttpError(400, 'Unknown setting');
+        if (Object.keys(input).some(key => !['executable', 'engineeringMode', 'model', 'thinking', 'roots', 'timeLimitMinutes', 'tokenBudget', 'maxConcurrentTickets', 'paused'].includes(key))) throw new HttpError(400, 'Unknown setting');
+        if (input.engineeringMode !== undefined) {
+          if (input.engineeringMode !== 'standard' && input.engineeringMode !== 'pstack') throw new HttpError(400, 'Invalid engineering mode');
+          settings.engineeringMode = input.engineeringMode;
+        }
         if (input.executable !== undefined) { settings.executable = string(input.executable, 'executable', 4096).trim(); if (!settings.executable || settings.executable.includes('\0')) throw new HttpError(400, 'Set an OMP executable path or command'); }
         if (input.model !== undefined) {
           settings.model = string(input.model, 'model', 512);

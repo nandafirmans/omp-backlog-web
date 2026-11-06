@@ -13,6 +13,7 @@ function argument(name: string) {
   return args[index + 1]!;
 }
 const directory = dirname(argument('--config'));
+const standard = args.includes('--append-system-prompt') && argument('--append-system-prompt').includes('Engineering mode: standard.');
 const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')) as Ticket;
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
@@ -68,7 +69,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     await writeFile(sessionFile, JSON.stringify(session));
     respond();
   } else if (frame.type === 'set_host_tools') {
-    if (!engineeringDiscovered) throw new Error('Host registered author tools before native engineering preflight');
+    if (!standard && !engineeringDiscovered) throw new Error('Host registered pstack author tools before native engineering preflight');
     if (!Array.isArray(frame.tools) || !frame.tools.some((tool) => tool.name === 'backlog_result')) throw new Error('Missing backlog_result registration');
     toolsRegistered = true;
     respond();
@@ -80,7 +81,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'prompt') {
     if (!toolsRegistered || typeof frame.message !== 'string' || !frame.message.includes(ticket.revision)) throw new Error('Prompt lacks registered tool or immutable revision');
     const routed = frame.message.startsWith('/skill:poteto-mode\n');
-    if (routed === args.includes('--resume')) throw new Error('Only a fresh author prompt may initialize the native router');
+    if (routed !== (!standard && !args.includes('--resume'))) throw new Error('Only fresh pstack author prompt may initialize native router');
     if (configuration.expectedFeedback && !frame.message.includes(configuration.expectedFeedback)) throw new Error('Prompt lost human review feedback');
     if (routed) {
       session.messages = [{ role: 'custom', customType: 'skill-prompt', details: { name: 'poteto-mode', path: join(directory, 'fixture-skills/poteto-mode/SKILL.md'), prompt: configuration.scenario === 'missing-invocation' ? 'Stale prior prompt, not the submitted invocation' : String(frame.message).trim(), lineCount: 1 }, content: 'Deterministic fixture native router expansion, not an installed playbook.' }];

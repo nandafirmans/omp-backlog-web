@@ -63,13 +63,22 @@ test('blocked recovery is durable, stale-safe, separately saved and explicitly r
     expect(wakes).toBe(1); expect(store.list('runs')).toHaveLength(1);
     expect((await call(actionPath, retry)).status).toBe(409);
     expect((await call(notePath, { ...input, noteId: note.id })).status).toBe(409);
+    const playbook = 'skill://poteto-mode/playbooks/bug-fix.md';
+    store.save('runs', { ...store.get('runs', run.id)!, conversation: [
+      { id: 'read-playbook', kind: 'tool', text: 'Read original playbook', toolName: 'read', state: 'complete', input: JSON.stringify({ path: playbook }) },
+      { id: 'read-failed', kind: 'tool', text: 'Failed read', toolName: 'read', state: 'error', input: JSON.stringify({ path: 'skill://poteto-mode/playbooks/feature.md' }) },
+      { id: 'unrelated', kind: 'tool', text: 'Read project guidance', toolName: 'read', state: 'complete', input: JSON.stringify({ path: 'skill://verify-synthetic' }) },
+    ] });
     const context = recoveryContext(store, ready)!;
     expect(context.sourceRunId).toBe(run.id); expect(context.note.instructions).toBe(input.instructions);
+    expect(context.playbookReads).toEqual([playbook]);
     const fresh = { ...run, id: 'fresh', recoveryContext: context, verification: [] };
     expect(recoveryObjective(fresh).join('\n')).toContain(input.instructions);
-    expect(recoveryObjective(fresh).join('\n')).toContain('not a passing check');
+    expect(recoveryObjective(fresh).join('\n')).toContain(playbook);
+    expect(recoveryObjective({ ...fresh, configuration: { model: '', thinking: '', tokenBudget: 1000, timeLimitMinutes: 30, engineeringMode: 'standard' } }).join('\n')).not.toContain(playbook);
     expect(recoveryObjective({ ...fresh, revision: 'edited' })).toEqual([]);
     expect(recoveryContext(store, { ...ready, revision: 'edited' })).toBeUndefined();
+    expect(recoveryContext(store, store.get('tickets', 'repo/T001')!)?.playbookReads).toEqual([playbook]);
     expect(store.get('runs', run.id)!.evidence).toEqual(['Partial report']);
 
     // Requirement edits cannot reuse an old note or bypass recovery through Draft approval.

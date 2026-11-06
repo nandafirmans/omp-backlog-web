@@ -9,7 +9,7 @@ import { writeTicket } from './tickets';
 
 const liveTest = process.env.OMP_BACKLOG_LIVE_TESTS === '1' ? test : test.skip;
 
-liveTest('two native OMP pstack sessions overlap and retain repository-specific provider evidence', async () => {
+liveTest('native Standard and pstack sessions overlap and retain repository-specific provider evidence', async () => {
   const root = await mkdtemp(join(tmpdir(), 'omp-concurrency-live-'));
   const store = createStore(join(root, 'private'));
   store.setSettings({ ...store.settings(), roots: [root], executable: 'omp', maxConcurrentTickets: 2, model: process.env.OMP_BACKLOG_LIVE_MODEL || 'openai-codex/gpt-6.1-sol', thinking: 'low', tokenBudget: 600000, timeLimitMinutes: 4, paused: true });
@@ -26,13 +26,14 @@ liveTest('two native OMP pstack sessions overlap and retain repository-specific 
       const repo: Repo = { id, name: `Disposable ${id}`, path, git: false, mode: 'approved', lastStarted: 0 };
       store.save('repos', repo);
       const ticket = await writeTicket(store, repo, `---\nid: T001\ntitle: Explain this repository marker\ndepends_on: []\n---\n\nRead-only investigation. Read marker.txt in this repository and report its exact value as acceptance evidence. Do not modify any files. No installation, credentials, network tools, commits, PRs, docs or external actions. Native OMP provider inference is authorized only for this bounded investigation. Verify by reading marker.txt through a real file tool. Do not inspect sibling repositories.\n\nDone when:\n- The evidence reports exactly ${marker} from this repository's marker.txt.\n`);
-      store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision });
+      store.save('tickets', { ...ticket, execution: { engineeringMode: id === 'alpha' ? 'standard' : 'pstack' }, status: 'ready', approvedRevision: ticket.revision });
       projects.push({ repo, marker });
     }
     runtime = await createRuntime(store);
     store.setSettings({ ...store.settings(), paused: false });
     await runtime.reconcile();
     const deadline = Date.now() + 260000;
+    // Separate native processes/provider IO require platform-clock observation.
     while (Date.now() < deadline) {
       const runs = store.list('runs');
       const live = runs.filter(run => run.status === 'running' && run.pid !== null && run.sessionId !== null);
@@ -59,13 +60,14 @@ liveTest('two native OMP pstack sessions overlap and retain repository-specific 
       expect(run.verification?.some(receipt => receipt.runId === run.id && receipt.revision === run.revision && receipt.outcome === 'passed' && receipt.details.includes(marker))).toBe(true);
       const other = projects.find(project => project.repo.id !== repo.id)!;
       expect(run.evidence.join('\n')).not.toContain(other.marker);
-      expect(run.conversation?.some(entry => entry.kind === 'system' && entry.text.includes('OMP recorded the native poteto-mode skill-prompt'))).toBe(true);
+      expect(run.configuration?.engineeringMode).toBe(repo.id === 'alpha' ? 'standard' : 'pstack');
+      expect(run.conversation?.some(entry => entry.kind === 'system' && entry.text.includes('OMP recorded native poteto-mode skill-prompt'))).toBe(repo.id !== 'alpha');
       expect(await readFile(join(repo.path, 'marker.txt'), 'utf8')).toBe(`${marker}\n`);
     }
   } finally {
     await runtime?.close();
     const runs: Run[] = store.list('runs');
-    await writeFile(join(root, 'proof.json'), JSON.stringify({ tier: 'live_provider_concurrent_native_sessions', overlapObservedAt, overlap, runs: runs.map(run => ({ id: run.id, repoId: run.repoId, status: run.status, error: run.error, pid: run.pid, started: run.started, finished: run.finished, sessionId: run.sessionId, sessionFile: run.sessionFile, model: run.progress?.model, evidence: run.evidence, receipts: run.verification, routerProvenance: run.conversation?.filter(entry => entry.kind === 'system' && entry.text.startsWith('Pstack initialization')) })) }, null, 2), { mode: 0o600 });
+    await writeFile(join(root, 'proof.json'), JSON.stringify({ tier: 'live_provider_concurrent_native_sessions', overlapObservedAt, overlap, runs: runs.map(run => ({ id: run.id, repoId: run.repoId, engineeringMode: run.configuration?.engineeringMode, tokens: run.progress?.tokens, status: run.status, error: run.error, pid: run.pid, started: run.started, finished: run.finished, sessionId: run.sessionId, sessionFile: run.sessionFile, model: run.progress?.model, evidence: run.evidence, receipts: run.verification, routerProvenance: run.conversation?.filter(entry => entry.kind === 'system' && entry.text.includes('native poteto-mode skill-prompt')) })) }, null, 2), { mode: 0o600 });
     closeStore(store);
     console.log(`Concurrent native/provider proof retained at ${join(root, 'proof.json')}`);
   }

@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdir, mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { Run, Runtime } from './contracts';
+import type { Run, Runtime, Settings } from './contracts';
 import { createApi } from './api';
 import { parseExecutionOverrides, resolveRunConfiguration, sampleRunState } from './execution';
 import { closeStore, createStore, database, digest, token } from './store';
@@ -14,13 +14,33 @@ test('ticket model/budget overrides preserve defaults, explicit OMP default and 
   expect(parseExecutionOverrides({ tokenBudget: null })).toEqual({ tokenBudget: null });
   const settings = { executable: 'unused', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30, maxConcurrentTickets: 1, roots: [], paused: true };
   const ticket = { execution: undefined };
-  expect(resolveRunConfiguration(settings, ticket)).toEqual({ model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30 });
-  expect(resolveRunConfiguration(settings, { ...ticket, execution: { model: 'provider/ticket', tokenBudget: 2000 } })).toEqual({ model: 'provider/ticket', thinking: '', tokenBudget: 2000, timeLimitMinutes: 30 });
+  expect(resolveRunConfiguration(settings, ticket)).toEqual({ engineeringMode: 'pstack', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30 });
+  expect(resolveRunConfiguration(settings, { ...ticket, execution: { model: 'provider/ticket', tokenBudget: 2000 } })).toEqual({ engineeringMode: 'pstack', model: 'provider/ticket', thinking: '', tokenBudget: 2000, timeLimitMinutes: 30 });
   expect(resolveRunConfiguration(settings, { ...ticket, execution: { model: '', thinking: 'off' } }).model).toBe('');
-  expect(resolveRunConfiguration(settings, { execution: { tokenBudget: null } })).toEqual({ model: 'provider/global', thinking: 'high', tokenBudget: null, timeLimitMinutes: 30 });
+  expect(resolveRunConfiguration(settings, { execution: { tokenBudget: null } })).toEqual({ engineeringMode: 'pstack', model: 'provider/global', thinking: 'high', tokenBudget: null, timeLimitMinutes: 30 });
   expect(resolveRunConfiguration(settings, { execution: {} }).tokenBudget).toBe(1000);
   expect(resolveRunConfiguration({ ...settings, tokenBudget: null }, { execution: {} }).tokenBudget).toBeNull();
   expect(resolveRunConfiguration({ ...settings, tokenBudget: null }, { execution: { tokenBudget: 500 } }).tokenBudget).toBe(500);
+});
+
+test('engineering mode validates exact overrides and snapshots ticket, global and legacy precedence', () => {
+  for (const engineeringMode of ['', 'STANDARD', 'inherit', null, false, 1, {}, []]) expect(() => parseExecutionOverrides({ engineeringMode })).toThrow('Invalid engineering mode');
+  expect(parseExecutionOverrides({})).toEqual({});
+  const settings: Settings = { executable: 'unused', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30, maxConcurrentTickets: 1, roots: [], paused: true };
+  expect(resolveRunConfiguration(settings, {}).engineeringMode).toBe('pstack');
+  for (const engineeringMode of ['standard', 'pstack'] as const) {
+    expect(parseExecutionOverrides({ engineeringMode })).toEqual({ engineeringMode });
+    const global = { ...settings, engineeringMode };
+    expect(resolveRunConfiguration(global, {}).engineeringMode).toBe(engineeringMode);
+    const opposite = engineeringMode === 'standard' ? 'pstack' : 'standard';
+    const configuration = resolveRunConfiguration(global, { execution: { engineeringMode: opposite, model: 'provider/ticket', thinking: 'low', tokenBudget: null } });
+    expect(configuration).toEqual({ engineeringMode: opposite, model: 'provider/ticket', thinking: 'low', tokenBudget: null, timeLimitMinutes: 30 });
+    global.engineeringMode = opposite;
+    expect(configuration.engineeringMode).toBe(opposite);
+    const inherited = resolveRunConfiguration(global, {});
+    global.engineeringMode = engineeringMode;
+    expect(inherited.engineeringMode).toBe(opposite);
+  }
 });
 
 test('context telemetry is separate from cumulative consumption and excludes raw state', () => {
@@ -52,13 +72,15 @@ test('ticket execution saves are stale-safe and cannot approve, retry or change 
     const api = createApi(store, runtime); const cookie = token(); const csrf = token();
     database(store).query('INSERT INTO sessions VALUES(?,?,1,?)').run(digest(cookie), csrf, Date.now() + 60000);
     const origin = 'http://localhost:4310';
-    const input = { revision: original.revision, version: null, execution: { model: 'provider/ticket', thinking: 'off', tokenBudget: null } };
+  const input = { revision: original.revision, version: null, execution: { engineeringMode: 'pstack' as const, model: 'provider/ticket', thinking: 'off', tokenBudget: null } };
     const call = (value: unknown, authenticated = true, validCsrf = true) => api(new Request(`${origin}/api/tickets/repo/T001/execution`, { method: 'PATCH', headers: { Origin: origin, 'Content-Type': 'application/json', ...(authenticated ? { Cookie: `omp_session=${cookie}` } : {}), ...(validCsrf ? { 'X-CSRF-Token': csrf } : {}) }, body: JSON.stringify(value) }));
     expect((await call(input, false)).status).toBe(401); expect((await call(input, true, false)).status).toBe(403);
     expect((await call({ ...input, revision: 'stale' })).status).toBe(409);
+    for (const engineeringMode of ['', 'STANDARD', 'inherit', null, false, 1]) expect((await call({ ...input, execution: { engineeringMode } })).status).toBe(400);
     expect((await call(input)).status).toBe(200);
     const saved = store.get('tickets', 'repo/T001')!;
     expect(saved.execution).toEqual(input.execution); expect(saved.status).toBe('failed');
+    expect(resolveRunConfiguration(defaults, saved).engineeringMode).toBe('pstack');
     expect(resolveRunConfiguration(defaults, saved).tokenBudget).toBeNull();
     expect(resolveRunConfiguration(defaults, saved).timeLimitMinutes).toBe(defaults.timeLimitMinutes);
     expect(saved.revision).toBe(original.revision); expect(saved.approvedRevision).toBeNull();
@@ -71,9 +93,27 @@ test('ticket execution saves are stale-safe and cannot approve, retry or change 
       expect((await call({ ...input, version: saved.executionVersion })).status).toBe(409);
     }
     store.save('tickets', { ...saved, status: 'failed' });
+    const owned: Run = { id: 'owned', repoId: repo.id, ticketId: saved.id, revision: saved.revision, status: 'running', started: Date.now(), finished: null, pid: null, sessionId: null, sessionFile: null, snapshot: saved.markdown, transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null, configuration: resolveRunConfiguration(defaults, saved) };
+    store.save('runs', owned);
+    for (const engineeringMode of ['pstack', 'standard']) {
+      const response = await api(new Request(`${origin}/api/settings`, { method: 'PATCH', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: `omp_session=${cookie}`, 'X-CSRF-Token': csrf }, body: JSON.stringify({ engineeringMode }) }));
+      expect(response.status).toBe(200);
+      expect(store.get('runs', owned.id)).toEqual(owned);
+    }
+    for (const status of ['running', 'paused', 'stopping'] as const) {
+      store.save('runs', { ...owned, status });
+      expect((await call({ ...input, version: saved.executionVersion, execution: { engineeringMode: 'standard' } })).status).toBe(409);
+    }
+    store.save('runs', { ...owned, status: 'failed' });
     expect((await call({ ...input, version: saved.executionVersion, execution: {} })).status).toBe(200);
     expect(store.get('tickets', 'repo/T001')!.execution).toEqual({});
     expect(resolveRunConfiguration(defaults, store.get('tickets', 'repo/T001')!).tokenBudget).toBe(defaults.tokenBudget);
+    expect(resolveRunConfiguration(defaults, store.get('tickets', 'repo/T001')!).engineeringMode).toBe('standard');
+    const inherited = store.get('tickets', 'repo/T001')!;
+    const standardResponse = await call({ ...input, version: inherited.executionVersion, execution: { engineeringMode: 'standard' } });
+    expect(standardResponse.status).toBe(200);
+    expect((await standardResponse.json()).execution).toEqual({ engineeringMode: 'standard' });
+    expect(store.get('tickets', 'repo/T001')!.execution).toEqual({ engineeringMode: 'standard' });
     expect(store.settings()).toEqual(defaults);
   } finally { closeStore(store); }
 });

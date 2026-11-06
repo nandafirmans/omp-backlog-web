@@ -22,7 +22,7 @@ async function until<T>(observe: () => T | undefined | false | Promise<T | undef
   throw new Error('Autonomous protocol fixture timed out');
 }
 interface Harness { root: string; store: Store; repo: Repo; config: string; runtime: Runtime | null; start(): Promise<void> }
-async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; inheritReviewer?: boolean; dependent?: boolean; authorBarrier?: boolean } = {}) {
+async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { engineeringMode?: 'standard' | 'pstack'; mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; inheritReviewer?: boolean; dependent?: boolean; authorBarrier?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'omp-autonomous-protocol-'));
   const store = createStore(join(root, 'private'));
   const path = join(root, 'project'); await mkdir(path);
@@ -31,7 +31,7 @@ async function fixture(scenario: string, run: (h: Harness) => Promise<void>, opt
   const executable = join(root, 'protocol-child');
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   await writeFile(executable, `#!/bin/sh\nBUN_BE_BUN=1 exec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/autonomy-child.ts'))} --fixture-config ${quote(config)} "$@"\n`, { mode: 0o700 });
-  store.setSettings({ ...store.settings(), executable, roots: [root], paused: false, model: 'fixture/author', thinking: 'medium', tokenBudget: 10000, timeLimitMinutes: 5 });
+  store.setSettings({ ...store.settings(), engineeringMode: options.engineeringMode ?? 'pstack', executable, roots: [root], paused: false, model: 'fixture/author', thinking: 'medium', tokenBudget: 10000, timeLimitMinutes: 5 });
   let repo: Repo = { id: 'project', name: 'Synthetic autonomous project', path, git: true, mode: options.mode ?? 'automatic', lastStarted: 0 };
   store.save('repos', repo);
   await writeFile(join(path, 'proof.txt'), scenario === 'noop' ? 'verified\n' : 'pending\n');
@@ -112,7 +112,7 @@ test('two independent autonomous owners verify and publish only their own candid
     second.completion.recipeHash = await recipeIdentity(second, second.completion.verification);
     h.store.save('repos', second);
     const ticket = await writeTicket(h.store, second, '---\nid: T001\ntitle: Second disposable proof\ndepends_on: []\n---\n\nImplement proof.txt in this repository only, preserving repository-marker.txt.\n\nDone when:\n- proof.txt contains verified and repository-marker.txt retains second-repository-only.\n');
-    h.store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision });
+    h.store.save('tickets', { ...ticket, execution: { engineeringMode: 'standard' }, status: 'ready', approvedRevision: ticket.revision });
     h.store.setSettings({ ...h.store.settings(), maxConcurrentTickets: 2 });
     const parents = new Map(await Promise.all([h.repo, second].map(async repo => [repo.id, await git(repo.path, 'rev-parse', 'HEAD')] as const)));
     await h.start();
@@ -157,7 +157,8 @@ test('two independent autonomous owners verify and publish only their own candid
       expect(await git(repo.path, 'status', '--porcelain', '--', 'proof.txt', 'verify.ts')).toBe('');
       expect(run.verification?.every(receipt => receipt.runId === run.id && receipt.revision === run.revision)).toBe(true);
       expect(run.verification?.map(receipt => receipt.criterion)).toEqual([repo.id === second.id ? 'proof.txt contains verified and repository-marker.txt retains second-repository-only.' : 'proof.txt contains verified.']);
-      expect(run.conversation?.some(entry => entry.text.includes('OMP recorded the native poteto-mode skill-prompt'))).toBe(true);
+      expect(run.configuration?.engineeringMode).toBe(repo.id === second.id ? 'standard' : 'pstack');
+      expect(run.conversation?.some(entry => entry.text.includes('OMP recorded native poteto-mode skill-prompt'))).toBe(repo.id !== second.id);
     }
     await h.runtime!.close();
     h.runtime = await createRuntime(h.store);
@@ -169,6 +170,30 @@ test('two independent autonomous owners verify and publish only their own candid
     }
   }, { authorBarrier: true });
 }, 30000);
+
+test('standard preserves mode and cumulative author/reviewer usage through autonomous correction and recovery', async () => {
+  for (const scenario of ['pass', 'findings', 'recovery', 'disabled-plugin']) {
+    await fixture(scenario, async h => {
+      await h.start();
+      const run = await terminal(h);
+      expect(run.status).toBe('done');
+      expect(run.pid).toBeNull();
+      expect(run.configuration?.engineeringMode).toBe('standard');
+      expect(run.lifecycle?.verification.at(-1)?.outcome).toBe('passed');
+      expect(run.lifecycle?.reviews.at(-1)?.verdict).toBe('pass');
+      expect(run.lifecycle?.reviews.every(review => review.sessionId !== run.sessionId)).toBe(true);
+      expect(run.lifecycle?.publication?.state).toBe('complete');
+      expect(run.progress?.tokens?.total).toBe(run.lifecycle!.authorTokens + (run.lifecycle!.reviewerTokens ?? 0));
+      expect(run.lifecycle?.authorTokens).toBe(scenario === 'findings' || scenario === 'recovery' ? 22 : 11);
+      expect(run.lifecycle?.corrections).toBe(scenario === 'findings' ? 1 : 0);
+      expect(run.lifecycle?.recoveries).toBe(scenario === 'recovery' ? 1 : 0);
+      const events = await protocolEvents(h);
+      expect(events.some(event => ['get_available_commands', 'get_messages'].includes(String(event.command)) || event.event === 'native-skill-record')).toBe(false);
+      expect(events.filter(event => event.event === 'prompt').every(event => !event.message?.startsWith('/skill:'))).toBe(true);
+      expect(await readFile(join(h.repo.path, 'proof.txt'), 'utf8')).toBe('verified\n');
+    }, { engineeringMode: 'standard' });
+  }
+}, 60000);
 
 test('review findings resume exactly original author session, invalidate reports and count cumulative role tokens', async () => {
   await fixture('findings', async h => {

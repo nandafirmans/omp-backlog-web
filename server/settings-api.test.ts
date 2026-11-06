@@ -18,15 +18,34 @@ test('settings preserve legacy defaults and other values while validating thinki
     method, headers: { Origin: origin, 'Content-Type': 'application/json', ...(authenticated ? { Cookie: `omp_session=${cookie}`, 'X-CSRF-Token': validCsrf ? csrf : 'wrong' } : {}) }, body: JSON.stringify(value),
   }));
   try {
-    const before = store.settings();
+    const fresh = store.settings();
+    expect(fresh.engineeringMode).toBe('standard');
+    const freshReload = createStore(store.dataDir);
+    try { expect(freshReload.settings()).toEqual(fresh); } finally { closeStore(freshReload); }
+    const before = { ...fresh, engineeringMode: 'pstack' as const };
     expect(before.thinking).toBeUndefined();
     expect(before.maxConcurrentTickets).toBe(1);
-    const { maxConcurrentTickets: omittedCapacity, ...legacy } = before;
+    const { maxConcurrentTickets: omittedCapacity, engineeringMode: omittedMode, ...legacy } = before;
     expect(omittedCapacity).toBe(1);
+    expect(omittedMode).toBe('pstack');
     database(store).query('UPDATE config SET value=? WHERE id=1').run(JSON.stringify(legacy));
     expect(store.settings()).toEqual(before);
     const legacyReload = createStore(store.dataDir);
     try { expect(legacyReload.settings()).toEqual(before); } finally { closeStore(legacyReload); }
+    expect(JSON.parse(database(store).query<{ value: string }, []>('SELECT value FROM config WHERE id=1').get()!.value)).toEqual(legacy);
+    expect((await call('settings', 'PATCH', { engineeringMode: 'standard' }, false)).status).toBe(401);
+    expect((await call('settings', 'PATCH', { engineeringMode: 'standard' }, true, false)).status).toBe(403);
+    for (const engineeringMode of ['', 'STANDARD', 'inherit', null, false, 1, {}, []]) {
+      expect((await call('settings', 'PATCH', { engineeringMode, paused: true })).status).toBe(400);
+      expect(store.settings()).toEqual(before);
+    }
+    for (const engineeringMode of ['standard', 'pstack'] as const) {
+      const response = await call('settings', 'PATCH', { engineeringMode });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ...before, engineeringMode });
+      const reload = createStore(store.dataDir);
+      try { expect(reload.settings()).toEqual({ ...before, engineeringMode }); } finally { closeStore(reload); }
+    }
     expect((await call('settings', 'PATCH', { maxConcurrentTickets: 2 }, false)).status).toBe(401);
     expect((await call('settings', 'PATCH', { maxConcurrentTickets: 2 }, true, false)).status).toBe(403);
     for (const maxConcurrentTickets of [0, -1, 5, 1.5, '2', null, false, NaN, Infinity]) {

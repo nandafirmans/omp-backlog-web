@@ -1,6 +1,7 @@
 import type { BlockerDetails, RecoveryContext, Run, Store, Ticket } from './contracts';
 import { HttpError } from './tickets';
 import { redactTranscript } from './transcript';
+import { object } from './rpc';
 
 function text(value: unknown, field: string, limit: number): string {
   if (typeof value !== 'string' || !value.trim() || value.length > limit || value.includes('\0')) throw new HttpError(400, `Provide ${field} (1–${limit} characters)`);
@@ -48,7 +49,14 @@ export function recoveryContext(store: Store, ticket: Ticket): RecoveryContext |
   const source = ticket.runId ? store.get('runs', ticket.runId) : undefined;
   const note = source?.recoveryNote;
   if (!source || source.repoId !== ticket.repoId || source.ticketId !== ticket.id || source.status !== 'blocked' || !note?.reviewed || note.revision !== ticket.revision) return;
-  return { sourceRunId: source.id, sourceRevision: source.revision, note: { ...note }, blocker: source.blocker === null ? null : redactTranscript(source.blocker), details: source.blockerDetails, evidence: source.evidence.map(redactTranscript), changedFiles: redactTranscript(source.changedFiles) };
+  const playbookReads = new Set(source.recoveryContext?.playbookReads ?? []);
+  for (const entry of source.conversation ?? []) {
+    if (entry.toolName !== 'read' || entry.state !== 'complete') continue;
+    let path: unknown;
+    try { path = object(JSON.parse(entry.input ?? '{}')).path; } catch { continue; }
+    if (typeof path === 'string' && /^skill:\/\/poteto-mode\/playbooks\/[a-z0-9-]+\.md$/u.test(path)) playbookReads.add(path);
+  }
+  return { sourceRunId: source.id, sourceRevision: source.revision, note: { ...note }, blocker: source.blocker === null ? null : redactTranscript(source.blocker), details: source.blockerDetails, evidence: source.evidence.map(redactTranscript), changedFiles: redactTranscript(source.changedFiles), ...(playbookReads.size ? { playbookReads: [...playbookReads] } : {}) };
 }
 
 export function recoveryObjective(run: Run): string[] {
@@ -56,6 +64,7 @@ export function recoveryObjective(run: Run): string[] {
   if (!context || context.note.revision !== run.revision || !context.note.reviewed) return [];
   return [
     `Reviewed recovery context from blocked run ${context.sourceRunId}, revision ${context.sourceRevision}${context.sourceRevision !== run.revision ? ' (older requirements; reconcile against current ticket)' : ''}. Context is not expanded execution permission; repository policy and all original restrictions still apply. Recheck the prerequisite before repair. Prior evidence is context, not a passing check for this attempt. Never blindly replay uncertain side effects.`,
+    ...(run.configuration?.engineeringMode !== 'standard' && context.playbookReads?.length ? [`Retain the prior pstack playbook and completed investigation. Previously observed playbook reads (tool observations, not proof of adherence): ${context.playbookReads.join(', ')}. The fresh router must retain this methodology context, not choose another workflow to bypass a blocker.`] : []),
     JSON.stringify({ blocker: context.blocker, agentReportedDetails: context.details, partialEvidence: context.evidence, changedFiles: context.changedFiles, operatorRecoveryInstructions: context.note.instructions }),
   ];
 }
