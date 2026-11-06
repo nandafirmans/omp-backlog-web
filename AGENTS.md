@@ -24,7 +24,7 @@
 ## Execution and acceptance
 
 - Ticket creation, project initialization and skill mentions do not authorize execution. When asked to prepare only, do not install dependencies, launch apps, approve tickets, enable scheduling or run agents.
-- Keep the existing scheduler and native OMP within-ticket continuation; do not add another loop or scheduler. One active ticket globally; paused work retains ownership.
+- Keep the existing scheduler and native OMP within-ticket continuation; do not add another loop or scheduler. Global capacity defaults to 1 and permits 1–4 independent repositories. Canonical overlapping workspaces and shared Git common directories remain serialized. Paused/stopping work retains capacity and ownership; uncertain child ownership never releases a slot.
 - Approvals bind to exact requirement revisions; edits invalidate approval. Automatic mode grants standing execution permission, not exemption from safety or acceptance gates.
 - Completion requires passing criterion reports with no unresolved submitted failed/blocked/not-run checks. Human-reviewed projects settle and stop before Needs review; a human accepts Done. Explicitly opted-in autonomous projects instead require exact-candidate host checks, fresh restricted nonauthor review, guarded local publication and stopped owned work before host Done. Dependencies require Done.
 - Request changes requires durable feedback linked to the reviewed run/revision and passed to later authorized attempts. Ready does not bypass scheduling gates.

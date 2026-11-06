@@ -38,7 +38,7 @@ Create ticket with observable acceptance criteria and references
 Approve exact requirements revision
     ↓
 Scheduler checks project/global permission, dependencies,
-global execution slot, workspace handoff and Git status
+available capacity, physical workspace ownership, handoff and Git status
     ↓
 OMP receives immutable ticket/attachment snapshot
 and reads applicable verification guidance/maps
@@ -55,7 +55,7 @@ Needs review, never automatic Done
     └─ Human requests changes + feedback → Ready for another attempt
 ```
 
-The scheduler selects tickets; native OMP goal mode continues work within one ticket. There is no additional `/loop` or second scheduler. Only one ticket is active globally, and an observed paused run retains that slot.
+The scheduler selects tickets; native OMP goal mode continues work within one ticket. There is no additional `/loop` or second scheduler. Global capacity defaults to 1 and accepts 1–4 in Settings. Only independent repositories may run concurrently. Running, stopping and paused owners retain slots; aliases, overlapping paths and shared Git common directories remain mutually exclusive. See [Phase 6 ownership and isolation](phase-6-concurrent-execution.md).
 
 Global Settings offers discovered workspace-default model and thinking choices, with explicit OMP defaults. Metadata discovery uses the restricted drafting profile and submits no prompt or goal; its default model can differ from normal execution configuration. Explicit thinking is checked and verified before a fresh run prompts; existing/resumed session thinking is preserved. Saved tickets can now override these defaults for their next fresh attempt; see below and [execution settings](../README.md#execution-model-and-thinking).
 
@@ -159,7 +159,7 @@ The standing grant permits only implementation within the ticket, commissioned v
 
 ### Phases and acceptance
 
-1. Capture a clean baseline and immutable ticket/configuration/policy snapshot. One admitted attempt retains the single global slot across every phase.
+1. Capture a clean baseline and immutable ticket/configuration/policy/workspace snapshot. Each admitted attempt retains its slot and physical workspace ownership across every phase.
 2. Author implements and reports concrete criterion/journey receipts plus an exact authored-file manifest. Reports remain claims, not independent proof.
 3. Stop and observe author-child exit. Capture raw file bytes/modes into an exact Git candidate tree through a private index; reject unexpected paths, staging, parent/ref drift and unsupported content.
 4. Host runs only the commissioned argv, with a durable owned process-group identity before the command begins. Receipt records actual exit/times, candidate/recipe hashes, bounded sanitized output/hash, truncation and host platform/architecture/Bun version. It proves that command's execution, not exhaustive acceptance or a reproducible dependency image.
@@ -190,13 +190,13 @@ This is **not an OS sandbox or authorship attestation**. Author/check commands r
 
 **Request changes:** enter specific missing behavior or evidence. Blank feedback cannot be submitted; cancel leaves status unchanged. Confirmation returns the ticket to Ready, retaining the revision's approval. Feedback stays on the reviewed run/revision; later authorized attempts receive it, with older-revision context identified when applicable.
 
-A new attempt still needs safe workspace handoff, execution permission, satisfied dependencies and the global slot. Status Ready is not a promise of immediate execution.
+A new attempt still needs safe workspace handoff, execution permission, satisfied dependencies, available capacity and exclusive physical workspace ownership. Status Ready is not a promise of immediate execution.
 
 ## Operator reconciliation
 
 Default/exception policy: **operator-controlled reconciliation**, not blanket automatic commits or per-ticket worktrees. Explicit autonomous completion above is the narrow host-publication exception; the confirmed operator commit remains available for other work.
 
-A project-level gate is recorded when initial admission finds Git changes, a stopped run leaves changes, interrupted-run recovery finds changes, or required Git inspection is unavailable. It blocks that project's new starts without consuming every queued ticket as a synthetic blocked run. Other projects can still use the global slot.
+A project-level gate is recorded when initial admission finds Git changes, a stopped run leaves changes, interrupted-run recovery finds changes, or required Git inspection is unavailable. It blocks that project's new starts without consuming every queued ticket as a synthetic blocked run. Other independent projects can still use available capacity.
 
 Home displays a warning. The project page shows the gate, affected files, originating run when available, and recovery instructions.
 
@@ -214,7 +214,7 @@ Git ignore rules still apply: this is not proof about ignored files or a securit
 
 - **Blocked:** submit partial evidence, exact unavailable prerequisite and required unblock action. Host pauses/stops continuation without falsely completing the goal. Preserve work and explicitly retry after resolving the prerequisite; dependents remain ineligible until Done.
 - **Failed:** provider/check/execution errors or exhausted time/token budgets require review and explicit action. Limits are not silently increased.
-- **Paused:** stops continuation, not side effects. Paused work retains the global slot; resuming preserves session/snapshot. Canceled questions remain unanswered, not consent.
+- **Paused:** stops continuation, not side effects. Paused work retains its slot and workspace ownership; resuming preserves session/snapshot even after a capacity reduction. Canceled questions remain unanswered, not consent. Canceling a selected run preserves partial work and requires explicit review before retry.
 - **Interrupted:** recovery checks surviving process identity/liveness before releasing ownership. Inspect partial work and explicitly retry; mutating actions are not automatically replayed.
 
 ### Reviewed blocker recovery

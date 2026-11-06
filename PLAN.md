@@ -11,12 +11,12 @@ Approved defaults:
 - TypeScript + Bun backend, React + Vite frontend, SQLite database.
 - Markdown ticket directories inside each repository.
 - Repositories initially paused.
-- One active ticket globally, with fair rotation between repositories.
+- Bounded global execution capacity, default 1 and configurable 1–4, with fair rotation between independent repositories. One owner per physical workspace and Git common directory.
 - Fresh OMP session per ticket.
 - Human completion review by default.
 - No automatic publication by default. Explicit project autonomy may authorize guarded host local commits and Done (section 12); push, deployment and destructive cleanup remain unauthorized.
 
-One backend process and one database remain sufficient. Scheduling is a backend module, not another service. Opt-in independent reviewer sessions run serially under the same global ticket owner; no Redis, Docker or second scheduler is required.
+One backend process and one database remain sufficient. Scheduling is a backend module, not another service. Opt-in independent reviewer sessions remain under their own ticket owner; no Redis, Docker or second scheduler is required. Phase 6A permits cross-repository concurrency only. See [architecture and Phase 6B boundary](docs/phase-6-concurrent-execution.md).
 
 The initial project setup is runnable development tooling and a project overview only. Login, repository management, tickets, scheduling, and execution controls must not be presented as operational before implementation and verification.
 
@@ -194,7 +194,7 @@ New repositories start paused. Recommend Approved tickets only until the user de
 
 Invariants:
 
-- One active ticket globally initially.
+- Default one active ticket globally; explicit capacity 1–4 permits independent repositories concurrently. Paused and stopping owners retain capacity.
 - Fair rotation across repositories; no single backlog monopolizes execution.
 - Use filesystem watching plus periodic reconciliation because events may be missed.
 - Repeated events must not create duplicate runs.
@@ -397,8 +397,8 @@ Status: partially implemented; delivery boundaries below. Adopt the useful workf
 
 - Separate two deliverables: project-local workflows for developing this application, and application support for equivalent workflows in each registered target repository. Proving this app's skill does not prove another project's skill.
 - Compare every upstream component with current behavior before adoption. Record its purpose, dependencies, portability, gaps, policy conflicts, and proposed acceptance checks. Distinguish prompt instructions from executable enforcement and implemented features from recommendations.
-- Keep one active ticket globally, revision-bound approval, native continuation, fixed lifetime limits and explicit blocker/recovery handling. Human acceptance remains default; section 12 defines the sole autonomous local-completion exception.
-- Do not replace the scheduler, add a competing backlog loop, or automatically import Cursor-specific agents/hooks/configuration. Any future multi-agent work must preserve execution ownership and verification-instance isolation; parallel ticket execution remains out of scope unless separately approved.
+- Keep bounded per-run ownership, revision-bound approval, native continuation, fixed lifetime limits and explicit blocker/recovery handling. Human acceptance remains default; section 12 defines the sole autonomous local-completion exception.
+- Do not replace the scheduler, add a competing backlog loop, or automatically import Cursor-specific agents/hooks/configuration. Phase 6A authorizes cross-repository concurrency with canonical workspace exclusion and verification-instance isolation. Same-repository parallel execution remains disabled pending the separately verified Phase 6B worktree lifecycle.
 - Ticket agents have no commit, push, PR, deployment, branch-change or destructive authority. Explicit completion policy allows only deterministic host local publication; upstream playbooks cannot grant broader shipping permission.
 
 ### A. Commission a verification skill per project
@@ -491,7 +491,7 @@ Authorized implementation extends the existing OMP scheduler, not Cursor/Codex e
 
 - Separate revisioned Completion policy, Human review by default; explicit owner commissioning binds actual recipe bytes/argv, reviewer choice and bounded corrections/recovery. Start permission remains independent. Disabling revokes future autonomous phases, while pausing new starts leaves admitted work running.
 - Clean baseline → author criterion reports/exact path declaration → stopped owned author → immutable candidate → actual commissioned host command → fresh restricted nonauthor review → bounded original-session correction if demonstrated findings → guarded local CAS publication → stopped-work host Done.
-- One global slot and fixed whole-attempt deadline/cumulative tokens across roles. Host receipts, author claims and independent review judgments remain distinct. Missing checks, stale recipe/candidate/requirements, identity mismatch, inconclusive review or exhausted bounds cannot publish.
+- One slot per attempt and fixed whole-attempt deadline/cumulative tokens across its roles. Independent repositories may own separate slots. Host receipts, author claims and independent review judgments remain distinct. Missing checks, stale recipe/candidate/requirements, identity mismatch, inconclusive review or exhausted bounds cannot publish.
 - One optional `incomplete_verification` continuation finishes only the original checks when complete criterion evidence and existing authority permit it. No general install/setup repair, credential invention or automatic interrupted mutation replay.
 - Durable publication intent recognizes the existing exact commit after crash, preserves unrelated staging/foreign locks and does not duplicate commits. Verified no-op Done creates no empty commit. Existing handoff gates are never implicitly cleared.
 - UI separates project start/completion settings, commissioned policy confirmation, run stages/host proof/review/publication, and assistance count/filter. Default human review and operator Review & commit remain.
