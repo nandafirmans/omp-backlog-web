@@ -7,7 +7,18 @@ export interface Candidate { head: string; ref: string; tree: string; indexHash:
 export interface HostVerification { id: string; source: 'host_execution'; candidateTree: string; recipeHash: string; argv: string[]; started: number; finished: number; exitCode: number | null; outcome: 'passed' | 'failed' | 'blocked'; output: string; outputHash?: string; outputTruncated?: boolean; environment?: { platform: string; arch: string; runtime: string } }
 export interface IndependentReview { sessionId: string; model: string; candidateTree: string; verdict: 'pass' | 'changes_required' | 'inconclusive'; findings: string[]; criteria: { criterion: string; evidence: string }[]; recorded: number }
 export interface Publication { operationId: string; state: 'prepared' | 'published' | 'complete'; commit: string | null; parent: string; tree: string; ref: string; recorded: number; noChanges: boolean }
-export interface Lifecycle { policy: Extract<CompletionPolicy, { mode: 'autonomous' }>; phase: 'implementing' | 'verifying' | 'reviewing' | 'correcting' | 'recovering' | 'publishing' | 'complete' | 'assistance'; baseline: Candidate; candidate?: Candidate; recipeHash: string; corrections: number; recoveries: number; authorSessionId?: string; authorSessionFile?: string; authorFiles?: string[]; authorTokens: number; reviewerTokens?: number; reviewerModel?: string; verification: HostVerification[]; reviews: IndependentReview[]; publication?: Publication; exception?: string }
+export interface RecoveryHistory {
+  id: string; runId: string; ticketId: string; revision: string; engineeringMode: EngineeringMode;
+  source: 'author_blocked' | 'incomplete_verification' | 'host_verification' | 'reviewer' | 'rpc_read';
+  category: 'engineering_failure' | 'incomplete_verification' | 'review_changes' | 'transient_read' | 'unsafe_or_unknown' | 'credentials' | 'permissions' | 'requirements' | 'installation' | 'unsafe_operation' | 'infrastructure' | 'budget_exhausted' | 'no_progress' | 'retry_exhausted' | 'unknown';
+  state: 'observed' | 'authorized' | 'dispatched' | 'paused' | 'recovered' | 'still_blocked' | 'needs_assistance';
+  fingerprint: string; diagnosticFingerprint: string; diagnostic: string; candidateTree?: string;
+  allowance: 'recoveries' | 'corrections' | 'read_retry'; ordinal: number; strategy: string; instructions: string;
+  recorded: number; started?: number; finished?: number; tokensBefore: number; tokensAfter?: number;
+  originalEvidence: string[]; originalVerification: VerificationReceipt[]; originalBlocker: string | null; originalDetails?: BlockerDetails;
+  hostVerificationId?: string; reviewSessionId?: string; continuation?: string; workPerformed?: string; verificationIds?: string[]; reviewSessionIds?: string[];
+}
+export interface Lifecycle { policy: Extract<CompletionPolicy, { mode: 'autonomous' }>; phase: 'implementing' | 'verifying' | 'reviewing' | 'correcting' | 'recovering' | 'publishing' | 'complete' | 'assistance'; baseline: Candidate; candidate?: Candidate; recipeHash: string; corrections: number; recoveries: number; authorSessionId?: string; authorSessionFile?: string; authorFiles?: string[]; authorTokens: number; reviewerTokens?: number; reviewerModel?: string; verification: HostVerification[]; reviews: IndependentReview[]; recoveryHistory?: RecoveryHistory[]; continuation?: string; verificationFloor?: number; reviewFloor?: number; publication?: Publication; exception?: string }
 export interface Repo { id: string; name: string; path: string; git: boolean; mode: Mode; lastStarted: number; completion?: CompletionPolicy; handoff?: { id: string; runId: string | null; detected: number; files: string[]; reason: string } }
 export interface WorkspaceIdentity { root: string; rootDev: string; rootIno: string; commonDir?: string; commonDev?: string; commonIno?: string }
 export interface Attachment { name: string; size: number; hash: string }

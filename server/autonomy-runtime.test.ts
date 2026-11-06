@@ -22,20 +22,20 @@ async function until<T>(observe: () => T | undefined | false | Promise<T | undef
   throw new Error('Autonomous protocol fixture timed out');
 }
 interface Harness { root: string; store: Store; repo: Repo; config: string; runtime: Runtime | null; start(): Promise<void> }
-async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { engineeringMode?: 'standard' | 'pstack'; mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; inheritReviewer?: boolean; dependent?: boolean; authorBarrier?: boolean } = {}) {
+async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { engineeringMode?: 'standard' | 'pstack'; mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; probeBarrier?: boolean; inheritReviewer?: boolean; dependent?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean; repairTokens?: number; tokenBudget?: number; timeLimitMinutes?: number } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'omp-autonomous-protocol-'));
   const store = createStore(join(root, 'private'));
   const path = join(root, 'project'); await mkdir(path);
   const config = join(root, 'fixture.json');
-  await writeFile(config, JSON.stringify({ scenario, holdAuthor: options.holdAuthor, holdReview: options.holdReview, authorBarrier: options.authorBarrier }));
+  await writeFile(config, JSON.stringify({ scenario, holdAuthor: options.holdAuthor, holdReview: options.holdReview, authorBarrier: options.authorBarrier, recoveryBarrier: options.recoveryBarrier, repairTokens: options.repairTokens }));
   const executable = join(root, 'protocol-child');
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   await writeFile(executable, `#!/bin/sh\nBUN_BE_BUN=1 exec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/autonomy-child.ts'))} --fixture-config ${quote(config)} "$@"\n`, { mode: 0o700 });
-  store.setSettings({ ...store.settings(), engineeringMode: options.engineeringMode ?? 'pstack', executable, roots: [root], paused: false, model: 'fixture/author', thinking: 'medium', tokenBudget: 10000, timeLimitMinutes: 5 });
+  store.setSettings({ ...store.settings(), engineeringMode: options.engineeringMode ?? 'pstack', executable, roots: [root], paused: false, model: 'fixture/author', thinking: 'medium', tokenBudget: options.tokenBudget ?? 10000, timeLimitMinutes: options.timeLimitMinutes ?? 5 });
   let repo: Repo = { id: 'project', name: 'Synthetic autonomous project', path, git: true, mode: options.mode ?? 'automatic', lastStarted: 0 };
   store.save('repos', repo);
   await writeFile(join(path, 'proof.txt'), scenario === 'noop' ? 'verified\n' : 'pending\n');
-  await writeFile(join(path, 'verify.ts'), `import { readFile } from 'node:fs/promises';\n${options.slowVerification ? 'await Bun.sleep(60000);\n' : ''}if (await readFile('proof.txt','utf8') !== 'verified\\n') process.exit(1); console.log('host proof verified');\n`);
+  await writeFile(join(path, 'verify.ts'), `import assert from 'node:assert/strict';\nimport { readFile, writeFile } from 'node:fs/promises';\nimport { existsSync } from 'node:fs';\n${options.probeBarrier ? `await writeFile(${JSON.stringify(join(root, 'probe-started'))}, 'started'); while (!existsSync(${JSON.stringify(join(root, 'probe-release'))})) await Bun.sleep(20);\n` : ''}${options.slowVerification ? 'await Bun.sleep(60000);\n' : ''}assert.equal((await readFile('proof.txt','utf8')).trim(), 'verified', 'proof.txt implementation must contain verified'); console.log('host proof verified');\n`);
   await git(path, 'init', '-b', 'main'); await git(path, 'config', 'user.name', 'Protocol Fixture'); await git(path, 'config', 'user.email', 'fixture@example.invalid');
   await git(path, 'add', 'proof.txt', 'verify.ts'); await git(path, 'commit', '-m', 'Synthetic baseline');
   const recipe = { argv: ['/usr/bin/env', 'BUN_BE_BUN=1', process.execPath, 'verify.ts'], files: ['verify.ts'], timeoutSeconds: 90 };
@@ -58,7 +58,7 @@ async function fixture(scenario: string, run: (h: Harness) => Promise<void>, opt
   }
 }
 const terminal = (h: Harness) => until(() => h.store.list('runs').find(run => ['done', 'failed', 'blocked', 'needs_review', 'interrupted'].includes(run.status)));
-interface ProtocolEvent { event: string; pid: number; sessionId: string; reviewer: boolean; resumed?: boolean; command?: string; op?: string; message?: string; objective?: string; tools?: string[]; id?: string; rejected?: boolean }
+interface ProtocolEvent { event: string; pid: number; sessionId: string; reviewer: boolean; resumed?: boolean; command?: string; op?: string; message?: string; objective?: string; tools?: string[]; id?: string; rejected?: boolean; args?: string[]; turn?: number; proof?: string; tokens?: number }
 async function protocolEvents(h: Harness): Promise<ProtocolEvent[]> {
   return (await readFile(`${h.config}.events`, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as ProtocolEvent);
 }
@@ -93,6 +93,446 @@ test('autonomous author report alone never accepts; host recipe, independent ses
     expectNativeAuthorLifecycle(events, 1);
     expect(events.filter(event => event.event === 'prompt' && event.reviewer)).toHaveLength(1);
   });
+}, 30000);
+
+for (const engineeringMode of ['standard', 'pstack'] as const) test(`${engineeringMode} repairs eligible blocked engineering in its original session before one verified local commit`, async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).toBe('done');
+    expect(run.configuration?.engineeringMode).toBe(engineeringMode);
+    expect(run.lifecycle?.recoveries).toBe(1);
+    expect(run.lifecycle?.corrections).toBe(0);
+    expect(run.lifecycle?.authorTokens).toBe(22);
+    expect(run.lifecycle?.reviewerTokens).toBe(7);
+    expect(run.progress?.tokens?.total).toBe(29);
+    expect(run.progress?.tokenBudget).toBe(10000);
+    expect(run.progress?.deadline).toBe(run.started + 5 * 60000);
+    const history = run.lifecycle?.recoveryHistory;
+    expect(history).toHaveLength(1);
+    expect(history![0]).toMatchObject({ runId: run.id, ticketId: run.ticketId, revision: run.revision, engineeringMode, source: 'author_blocked', category: 'engineering_failure', state: 'recovered', allowance: 'recoveries', ordinal: 1, tokensBefore: 11 });
+    expect(history![0]!.tokensAfter).toBeGreaterThanOrEqual(22);
+    expect(history![0]!.diagnostic).toContain('AssertionError');
+    expect(history![0]!.fingerprint).not.toBe('');
+    expect(history![0]!.diagnosticFingerprint).not.toBe('');
+    expect(history![0]!.originalDetails?.attempted).not.toBe('');
+    expect(history![0]!.originalDetails?.verification).not.toBe('');
+    expect(history![0]!.originalDetails?.permission).toBeUndefined();
+    expect(history![0]!.originalBlocker).not.toBeNull();
+    expect(history![0]!.hostVerificationId).toBe(run.lifecycle?.verification.at(-1)?.id);
+    expect(history![0]!.reviewSessionId).toBe(run.lifecycle?.reviews.at(-1)?.sessionId);
+    expect(history![0]!.finished).toBeGreaterThanOrEqual(history![0]!.started!);
+    expect(run.lifecycle?.verification.at(-1)).toMatchObject({ source: 'host_execution', outcome: 'passed', exitCode: 0 });
+    expect(run.lifecycle?.reviews.at(-1)).toMatchObject({ verdict: 'pass', candidateTree: run.lifecycle?.candidate?.tree });
+    expect(run.lifecycle?.reviews.at(-1)?.sessionId).not.toBe(run.sessionId);
+    expect(run.lifecycle?.publication).toMatchObject({ state: 'complete', parent });
+    expect(await git(h.repo.path, 'rev-list', '--count', `${parent}..HEAD`)).toBe('1');
+    expect(await readFile(join(h.repo.path, 'proof.txt'), 'utf8')).toBe('verified\n');
+    const events = await protocolEvents(h);
+    expect(events.filter(event => event.event === 'proof-written').map(event => event.proof)).toEqual(['broken\n', 'verified\n']);
+    const authors = events.filter(event => event.event === 'spawn' && !event.reviewer);
+    expect(authors).toHaveLength(2);
+    expect(authors[1]).toMatchObject({ resumed: true, sessionId: authors[0]!.sessionId });
+    expect(authors[1]!.args).toContain(run.sessionFile!);
+    if (engineeringMode === 'pstack') expectNativeAuthorLifecycle(events, 2);
+    else expect(events.some(event => event.event === 'native-skill-record' || ['get_available_commands', 'get_messages'].includes(String(event.command)))).toBe(false);
+  }, { engineeringMode });
+}, 30000);
+
+test('failed original host recipe diagnoses broken implementation then verifies repaired evidence and fresh review', async () => {
+  await fixture('engineering-host-failure', async h => {
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).toBe('done');
+    expect(run.lifecycle?.corrections).toBe(1);
+    expect(run.lifecycle?.recoveries).toBe(0);
+    expect(run.lifecycle?.verification.map(receipt => receipt.outcome)).toEqual(['failed', 'passed']);
+    expect(run.lifecycle?.verification[0]?.output).toContain('AssertionError');
+    expect(run.lifecycle?.verification[0]?.candidateTree).not.toBe(run.lifecycle?.candidate?.tree);
+    expect(run.lifecycle?.verification.at(-1)?.candidateTree).toBe(run.lifecycle?.candidate?.tree);
+    expect(run.verification).toHaveLength(1);
+    expect(run.verification?.[0]?.outcome).toBe('passed');
+    expect(run.lifecycle?.reviews).toHaveLength(1);
+    expect(run.lifecycle?.reviews[0]?.candidateTree).toBe(run.lifecycle?.candidate?.tree);
+    expect(run.lifecycle?.recoveryHistory).toHaveLength(1);
+    const recovery = run.lifecycle!.recoveryHistory![0]!;
+    expect(recovery).toMatchObject({ source: 'host_verification', category: 'engineering_failure', allowance: 'corrections', ordinal: 1, state: 'recovered' });
+    expect(recovery.candidateTree).toBe(run.lifecycle?.verification[0]?.candidateTree);
+    expect(recovery.originalVerification).toHaveLength(1);
+    expect(recovery.originalVerification[0]?.id).not.toBe(run.verification?.[0]?.id);
+    expect(recovery.hostVerificationId).toBe(run.lifecycle?.verification.at(-1)?.id);
+    expect(recovery.reviewSessionId).toBe(run.lifecycle?.reviews.at(-1)?.sessionId);
+    expectNativeAuthorLifecycle(await protocolEvents(h), 2);
+  });
+}, 30000);
+
+for (const scenario of ['engineering-credentials', 'engineering-installation', 'engineering-requirements', 'engineering-spoofed', 'engineering-artifact-credentials', 'engineering-artifact-installation', 'engineering-artifact-unsafe', 'engineering-no-work', 'engineering-no-verification']) test(`${scenario} cannot turn a category claim into recovery authority`, async () => {
+  await fixture(scenario, async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).toBe('blocked');
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.lifecycle?.recoveries).toBe(0);
+    expect(run.lifecycle?.corrections).toBe(0);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(run.lifecycle?.reviews).toEqual([]);
+    expect(run.lifecycle?.recoveryHistory).toHaveLength(1);
+    expect(run.lifecycle?.recoveryHistory?.[0]).toMatchObject({ source: 'author_blocked', state: 'needs_assistance' });
+    expect(run.lifecycle?.recoveryHistory?.[0]?.started).toBeUndefined();
+    expect(run.lifecycle?.recoveryHistory?.[0]?.originalDetails?.attempted).not.toBe('');
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    const events = await protocolEvents(h);
+    expect(events.filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(1);
+    expect(events.some(event => event.reviewer)).toBe(false);
+    await h.runtime!.reconcile();
+    expect(h.store.list('runs')).toHaveLength(1);
+  });
+}, 30000);
+
+for (const scenario of ['engineering-repeated', 'engineering-cosmetic']) test(`${scenario} stops ineffective repairs without spending a second author cycle`, async () => {
+  await fixture(scenario, async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.status).not.toBe('done');
+    expect(run.lifecycle?.recoveries).toBe(1);
+    expect(run.lifecycle?.corrections).toBe(0);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(2);
+  });
+}, 30000);
+
+for (const limit of ['tokens', 'deadline'] as const) test(`engineering recovery preserves a tight ${limit} limit instead of resetting it`, async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.status).not.toBe('done');
+    expect(run.lifecycle?.recoveries).toBe(0);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(run.progress?.tokenBudget).toBe(limit === 'tokens' ? 6000 : 10000);
+    expect(run.progress?.deadline).toBe(run.started + (limit === 'deadline' ? 2 : 5) * 60000);
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(1);
+  }, limit === 'tokens' ? { tokenBudget: 6000 } : { timeLimitMinutes: 2 });
+}, 30000);
+
+test('author repair cannot consume the independent reviewer reserve', async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).not.toBe('done');
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.lifecycle?.authorTokens).toBe(7000);
+    expect(run.progress?.tokenBudget).toBe(10000);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect((await protocolEvents(h)).some(event => event.reviewer)).toBe(false);
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+  }, { repairTokens: 7000 });
+}, 30000);
+
+const recoveryBarrier = (h: Harness) => until(() => h.store.list('runs').find(run => run.status === 'running' && run.dialog?.id === 'recovery-barrier' && run.pid !== null));
+
+test('pause retains final observed author usage and attempt consumption after cancellation', async () => {
+  await fixture('engineering-stop-accounting', async h => {
+    await h.start();
+    const held = await recoveryBarrier(h);
+    await writeFile(`${h.config}.usage`, '999');
+    await h.runtime!.control(held.id, 'pause');
+    const paused = h.store.get('runs', held.id)!;
+    expect(paused.status).toBe('paused');
+    expect(paused.lifecycle?.authorTokens).toBe(999);
+    expect(paused.progress?.tokens?.total).toBe(999);
+    expect(paused.lifecycle?.recoveryHistory?.[0]?.tokensAfter).toBe(999);
+    expect(paused.lifecycle?.publication).toBeUndefined();
+    expect((await protocolEvents(h)).filter(event => event.event === 'usage').at(-1)?.tokens).toBe(999);
+  }, { recoveryBarrier: true });
+}, 30000);
+
+test('pausing independent recovery review retains its final usage within the original aggregate limit', async () => {
+  await fixture('engineering-reviewer-stop-accounting', async h => {
+    await h.start();
+    await until(() => h.store.list('runs').find(run => run.lifecycle?.phase === 'reviewing' && run.pid !== null));
+    await until(async () => (await protocolEvents(h)).find(event => event.reviewer && event.event === 'prompt'));
+    const held = h.store.list('runs')[0]!;
+    expect(held.lifecycle?.phase).toBe('reviewing');
+    await writeFile(`${h.config}.usage`, '999');
+    await h.runtime!.control(held.id, 'pause');
+    const paused = h.store.get('runs', held.id)!;
+    expect(paused.status).toBe('paused');
+    expect(paused.lifecycle?.authorTokens).toBe(22);
+    expect(paused.lifecycle?.reviewerTokens).toBe(999);
+    expect(paused.progress?.tokens?.total).toBe(1021);
+    expect(paused.lifecycle?.recoveryHistory?.[0]?.tokensAfter).toBe(1021);
+    expect(paused.progress?.tokenBudget).toBe(10000);
+    expect(paused.lifecycle?.publication).toBeUndefined();
+  }, { holdReview: true });
+}, 30000);
+
+for (const engineeringMode of ['standard', 'pstack'] as const) test(`${engineeringMode} pause and resume retain the authorized recovery without spending it twice`, async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const held = await recoveryBarrier(h);
+    const history = held.lifecycle!.recoveryHistory![0]!;
+    expect(history).toMatchObject({ state: 'dispatched', allowance: 'recoveries', ordinal: 1 });
+    expect(history.originalDetails?.attempted).not.toBe('');
+    expect(history.originalDetails?.verification).not.toBe('');
+    const original = { sessionId: held.sessionId, sessionFile: held.sessionFile, deadline: held.progress!.deadline, tokenBudget: held.progress!.tokenBudget };
+    expect(held.lifecycle?.recoveries).toBe(1);
+    expect(held.lifecycle?.verification.at(-1)?.outcome).toBe('failed');
+    expect(held.lifecycle?.candidate).toBeUndefined();
+    expect(held.verification ?? []).toEqual([]);
+    await h.runtime!.control(held.id, 'pause');
+    const paused = h.store.get('runs', held.id)!;
+    expect(paused).toMatchObject({ status: 'paused', pid: null, sessionId: original.sessionId, sessionFile: original.sessionFile });
+    expect(paused.lifecycle?.recoveries).toBe(1);
+    expect(paused.lifecycle?.recoveryHistory?.[0]).toMatchObject({ id: history.id, state: 'paused', instructions: history.instructions, ordinal: 1 });
+    const resuming = h.runtime!.control(held.id, 'resume');
+    try {
+      const resumed = await recoveryBarrier(h);
+      expect(resumed.lifecycle?.recoveryHistory?.[0]).toMatchObject({ id: history.id, state: 'dispatched', instructions: history.instructions, ordinal: 1 });
+      expect(resumed.sessionId).toBe(original.sessionId);
+      expect(resumed.sessionFile).toBe(original.sessionFile);
+      expect(resumed.progress?.deadline).toBe(original.deadline);
+      expect(resumed.progress?.tokenBudget).toBe(original.tokenBudget);
+      expect(resumed.configuration?.engineeringMode).toBe(engineeringMode);
+      expect(resumed.lifecycle?.recoveries).toBe(1);
+      await h.runtime!.answer(resumed.id, { id: 'recovery-barrier', value: 'release' });
+      await resuming;
+      const run = await terminal(h);
+      expect(run.status).toBe('done');
+      expect(run.lifecycle?.recoveries).toBe(1);
+      expect(run.lifecycle?.authorTokens).toBe(22);
+      expect(run.lifecycle?.reviewerTokens).toBe(7);
+      expect(await git(h.repo.path, 'rev-list', '--count', `${parent}..HEAD`)).toBe('1');
+      const events = await protocolEvents(h);
+      expect(new Set(events.filter(event => event.event === 'spawn' && !event.reviewer).map(event => event.sessionId)).size).toBe(1);
+      expect(events.filter(event => event.event === 'native-skill-record')).toHaveLength(engineeringMode === 'pstack' ? 1 : 0);
+    } finally {
+      await h.runtime!.close();
+      await resuming;
+    }
+  }, { engineeringMode, recoveryBarrier: true });
+}, 30000);
+
+test('restart retains uncertain recovery and workspace claim without replaying author mutation', async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const held = await recoveryBarrier(h);
+    const history = held.lifecycle!.recoveryHistory![0]!;
+    const dispatchedSnapshot = structuredClone(held);
+    await h.runtime!.close();
+    h.runtime = null;
+    h.store.save('runs', dispatchedSnapshot);
+    await h.start();
+    const run = h.store.get('runs', held.id)!;
+    expect(run.status).toBe('interrupted');
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.lifecycle?.recoveries).toBe(1);
+    expect(run.lifecycle?.recoveryHistory?.[0]).toMatchObject({ id: history.id, state: 'needs_assistance', ordinal: 1, instructions: history.instructions, fingerprint: history.fingerprint });
+    expect(run.sessionId).toBe(held.sessionId);
+    expect(run.sessionFile).toBe(held.sessionFile);
+    expect(run.workspace).toEqual(held.workspace);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(h.store.list('runs')).toHaveLength(1);
+    expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(2);
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    expect(await readFile(join(h.repo.path, 'proof.txt'), 'utf8')).toBe('broken\n');
+  }, { recoveryBarrier: true });
+}, 30000);
+
+test('paused blocker verification cannot resume as a completed-author host phase or replay uncertain checks', async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const probing = await until(async () => {
+      if (!await Bun.file(join(h.root, 'probe-started')).exists()) return;
+      return h.store.list('runs').find(run => run.lifecycle?.phase === 'verifying' && run.pid !== null);
+    });
+    await h.runtime!.control(probing.id, 'pause');
+    const paused = h.store.get('runs', probing.id)!;
+    expect(paused.status).toBe('paused');
+    expect(paused.lifecycle?.recoveries).toBe(0);
+    await writeFile(join(h.root, 'probe-release'), 'release');
+    await expect(h.runtime!.control(probing.id, 'resume')).rejects.toBeInstanceOf(Error);
+    const stopped = h.store.get('runs', probing.id)!;
+    expect(stopped.status).toBe('paused');
+    expect(stopped.pid).toBeNull();
+    expect(stopped.lifecycle?.corrections).toBe(0);
+    expect(stopped.lifecycle?.recoveries).toBe(0);
+    expect(stopped.lifecycle?.publication).toBeUndefined();
+    expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(1);
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+  }, { probeBarrier: true });
+}, 30000);
+
+for (const authority of ['policy', 'revision'] as const) test(`revoked ${authority} stops an admitted recovery before publication`, async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const held = await recoveryBarrier(h);
+    if (authority === 'policy') h.store.save('repos', { ...h.store.get('repos', h.repo.id)!, completion: { mode: 'human', revision: 'revoked-policy', updated: Date.now() } });
+    else {
+      const ticket = h.store.get('tickets', `${h.repo.id}/T001`)!;
+      await writeTicket(h.store, h.repo, ticket.markdown.replace('Implement the disposable proof only.', 'Changed requirements during recovery.'), ticket.revision, ticket.id);
+    }
+    await h.runtime!.reconcile();
+    const run = await terminal(h);
+    expect(run.pid).toBeNull();
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.lifecycle?.recoveries).toBe(1);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(run.lifecycle?.reviews).toEqual([]);
+    expect(() => process.kill(held.pid!, 0)).toThrow();
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+  }, { recoveryBarrier: true });
+}, 30000);
+
+test('pausing new starts leaves admitted recovery authorized with its original limits', async () => {
+  await fixture('engineering-blocked', async h => {
+    await h.start();
+    const held = await recoveryBarrier(h);
+    h.store.setSettings({ ...h.store.settings(), paused: true, tokenBudget: 20000, timeLimitMinutes: 10, engineeringMode: 'standard' });
+    h.store.save('repos', { ...h.store.get('repos', h.repo.id)!, mode: 'paused' });
+    await h.runtime!.reconcile();
+    expect(h.store.get('runs', held.id)?.status).toBe('running');
+    await h.runtime!.answer(held.id, { id: 'recovery-barrier', value: 'release' });
+    const run = await terminal(h);
+    expect(run.status).toBe('done');
+    expect(run.configuration?.engineeringMode).toBe('pstack');
+    expect(run.progress?.tokenBudget).toBe(10000);
+    expect(run.progress?.deadline).toBe(held.progress?.deadline);
+    expect(run.lifecycle?.recoveries).toBe(1);
+    expectNativeAuthorLifecycle(await protocolEvents(h), 2);
+  }, { recoveryBarrier: true });
+}, 30000);
+
+test('duplicate blocked submissions authorize only one original-session repair', async () => {
+  await fixture('engineering-duplicate', async h => {
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).toBe('done');
+    expect(run.lifecycle?.recoveries).toBe(1);
+    expect(run.lifecycle?.recoveryHistory).toHaveLength(1);
+    expect(run.lifecycle?.recoveryHistory?.[0]?.state).toBe('recovered');
+    expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(2);
+  });
+}, 30000);
+
+test('engineering repair and incomplete verification share the original recovery allowance', async () => {
+  await fixture('engineering-chain', async h => {
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).toBe('blocked');
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.lifecycle?.recoveries).toBe(1);
+    expect(run.lifecycle?.corrections).toBe(0);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(2);
+  });
+}, 30000);
+
+test('host failures and independent review findings share the aggregate correction bound', async () => {
+  await fixture('engineering-host-review-bound', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).toBe('failed');
+    expect(run.lifecycle?.phase).toBe('assistance');
+    expect(run.lifecycle?.corrections).toBe(2);
+    expect(run.lifecycle?.recoveries).toBe(0);
+    expect(run.lifecycle?.verification.map(receipt => receipt.outcome)).toEqual(['failed', 'passed', 'passed']);
+    expect(run.lifecycle?.reviews.map(review => review.verdict)).toEqual(['changes_required', 'changes_required']);
+    expect(new Set(run.lifecycle?.reviews.map(review => review.sessionId)).size).toBe(2);
+    expect(run.lifecycle?.authorTokens).toBe(33);
+    expect(run.lifecycle?.reviewerTokens).toBe(14);
+    expect(run.progress?.tokens?.total).toBe(47);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    expectNativeAuthorLifecycle(await protocolEvents(h), 3);
+  });
+}, 30000);
+
+test('human completion policy never grants engineering recovery authority', async () => {
+  await fixture('engineering-blocked', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(run.status).toBe('blocked');
+    expect(run.lifecycle).toBeUndefined();
+    expect((await protocolEvents(h)).filter(event => event.event === 'spawn' && !event.reviewer)).toHaveLength(1);
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+  }, { human: true });
+}, 30000);
+
+test('paused repair retains its repository claim while an independent repository repairs and publishes', async () => {
+  await fixture('engineering-blocked', async h => {
+    const secondPath = join(h.root, 'independent');
+    await mkdir(secondPath);
+    await writeFile(join(secondPath, 'proof.txt'), 'pending\n');
+    await writeFile(join(secondPath, 'verify.ts'), await readFile(join(h.repo.path, 'verify.ts')));
+    await git(secondPath, 'init', '-b', 'main');
+    await git(secondPath, 'config', 'user.name', 'Protocol Fixture');
+    await git(secondPath, 'config', 'user.email', 'fixture@example.invalid');
+    await git(secondPath, 'add', 'proof.txt', 'verify.ts');
+    await git(secondPath, 'commit', '-m', 'Independent baseline');
+    const second: Repo = { ...structuredClone(h.repo), id: 'independent', name: 'Independent repair', path: secondPath, lastStarted: 0 };
+    if (second.completion?.mode === 'autonomous') second.completion.recipeHash = await recipeIdentity(second, second.completion.verification);
+    h.store.save('repos', second);
+    const ticket = await writeTicket(h.store, second, '---\nid: T001\ntitle: Independent repair\ndepends_on: []\n---\n\nImplement disposable proof.\n\nDone when:\n- proof.txt contains verified.\n');
+    h.store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision, execution: { engineeringMode: 'standard' } });
+    h.store.setSettings({ ...h.store.settings(), maxConcurrentTickets: 2 });
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    const peerParent = await git(secondPath, 'rev-parse', 'HEAD');
+    await h.start();
+    const initial = await until(() => {
+      const runs = h.store.list('runs');
+      return runs.length === 2 && runs.every(run => run.dialog?.id === 'author-barrier') ? runs : undefined;
+    });
+    const owner = initial.find(run => run.repoId === h.repo.id)!;
+    const peer = initial.find(run => run.repoId === second.id)!;
+    await h.runtime!.answer(owner.id, { id: 'author-barrier', value: 'release' });
+    const held = await until(() => {
+      const run = h.store.get('runs', owner.id)!;
+      return run.dialog?.id === 'recovery-barrier' ? run : undefined;
+    });
+    await h.runtime!.control(owner.id, 'pause');
+    const waiting = await writeTicket(h.store, h.repo, '---\nid: T002\ntitle: Same repository waits\ndepends_on: []\n---\n\nImplement another disposable proof.\n\nDone when:\n- proof.txt contains verified.\n');
+    h.store.save('tickets', { ...waiting, status: 'ready', approvedRevision: waiting.revision });
+    await h.runtime!.answer(peer.id, { id: 'author-barrier', value: 'release' });
+    await until(() => h.store.get('runs', peer.id)?.dialog?.id === 'recovery-barrier');
+    await h.runtime!.answer(peer.id, { id: 'recovery-barrier', value: 'release' });
+    const completed = await until(() => {
+      const run = h.store.get('runs', peer.id)!;
+      return run.status === 'done' ? run : undefined;
+    });
+    const paused = h.store.get('runs', owner.id)!;
+    expect(paused).toMatchObject({ status: 'paused', pid: null, sessionId: held.sessionId, sessionFile: held.sessionFile, workspace: held.workspace });
+    expect(paused.lifecycle?.recoveries).toBe(1);
+    expect(paused.lifecycle?.recoveryHistory?.[0]?.state).toBe('paused');
+    expect(paused.lifecycle?.publication).toBeUndefined();
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    expect(await readFile(join(h.repo.path, 'proof.txt'), 'utf8')).toBe('broken\n');
+    expect(completed.lifecycle?.recoveries).toBe(1);
+    expect(completed.lifecycle?.publication).toMatchObject({ parent: peerParent, state: 'complete' });
+    expect(completed.lifecycle?.verification.every(receipt => receipt.recipeHash === completed.lifecycle?.recipeHash)).toBe(true);
+    expect(completed.lifecycle?.reviews[0]?.sessionId).not.toBe(held.sessionId);
+    expect(await git(secondPath, 'rev-list', '--count', `${peerParent}..HEAD`)).toBe('1');
+    expect(await readFile(join(secondPath, 'proof.txt'), 'utf8')).toBe('verified\n');
+    expect(h.store.list('runs')).toHaveLength(2);
+    await h.runtime!.reconcile();
+    expect(h.store.list('runs')).toHaveLength(2);
+    expect(h.store.get('runs', owner.id)?.status).toBe('paused');
+    expect(h.store.get('tickets', `${h.repo.id}/T002`)?.runId).toBeNull();
+  }, { authorBarrier: true, recoveryBarrier: true });
 }, 30000);
 
 test('two independent autonomous owners verify and publish only their own candidates', async () => {
@@ -205,12 +645,21 @@ test('review findings resume exactly original author session, invalidate reports
     const authors = events.filter(event => event.event === 'spawn' && !event.reviewer);
     expect(authors).toHaveLength(2); expect(authors[0].sessionId).toBe(authors[1].sessionId); expect(authors[1].resumed).toBe(true);
     expect(run.verification).toHaveLength(1);
+    expect(run.lifecycle?.verification).toHaveLength(2);
+    expect(run.lifecycle?.verification[0]?.candidateTree).toBe(run.lifecycle?.verification[1]?.candidateTree);
+    expect(run.lifecycle?.verification[0]?.id).not.toBe(run.lifecycle?.verification[1]?.id);
+    expect(run.lifecycle?.reviews[0]?.sessionId).not.toBe(run.lifecycle?.reviews[1]?.sessionId);
+    const recovery = run.lifecycle?.recoveryHistory?.[0];
+    expect(recovery).toMatchObject({ source: 'reviewer', category: 'review_changes', allowance: 'corrections', state: 'recovered', ordinal: 1 });
+    expect(recovery?.originalVerification[0]?.id).not.toBe(run.verification?.[0]?.id);
+    expect(recovery?.hostVerificationId).toBe(run.lifecycle?.verification[1]?.id);
+    expect(recovery?.reviewSessionId).toBe(run.lifecycle?.reviews[1]?.sessionId);
     expectNativeAuthorLifecycle(await protocolEvents(h), 2);
   });
 }, 30000);
 
 test('corrections are bounded and unresolved findings require assistance without publication', async () => {
-  await fixture('always-findings', async h => { await h.start(); const run = await terminal(h); expect(run.status).toBe('failed'); expect(run.lifecycle?.phase).toBe('assistance'); expect(run.lifecycle?.corrections).toBe(2); expect(run.lifecycle?.reviews).toHaveLength(3); expect(run.lifecycle?.publication).toBeUndefined(); });
+  await fixture('always-findings', async h => { await h.start(); const run = await terminal(h); expect(run.status).toBe('failed'); expect(run.lifecycle?.phase).toBe('assistance'); expect(run.lifecycle?.corrections).toBe(1); expect(run.lifecycle?.reviews).toHaveLength(2); expect(run.lifecycle?.publication).toBeUndefined(); });
 }, 30000);
 
 test('one incomplete-original-verification recovery is scoped, while permission blockers require assistance', async () => {

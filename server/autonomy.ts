@@ -224,6 +224,7 @@ export async function verifyCandidate(store: Store, repo: Repo, run: Run, signal
 
 function approved(store: Store, repo: Repo, run: Run) {
   const life = policy(store, repo, run), value = life.candidate;
+  if (life.verification.length <= (life.verificationFloor ?? 0) || life.reviews.length <= (life.reviewFloor ?? 0)) reject('Fresh post-invalidation host verification and independent review required');
   if (!value || life.verification.at(-1)?.outcome !== 'passed' || life.verification.at(-1)?.candidateTree !== value.tree || life.verification.at(-1)?.recipeHash !== life.recipeHash || life.reviews.at(-1)?.verdict !== 'pass' || life.reviews.at(-1)?.candidateTree !== value.tree || !life.reviews.at(-1)?.sessionId || life.reviews.at(-1)?.sessionId === life.authorSessionId) reject('Exact candidate requires host verification and independent review');
   if (value.head !== life.baseline.head || value.ref !== life.baseline.ref || value.indexHash !== life.baseline.indexHash || JSON.stringify([...(life.authorFiles ?? [])].sort()) !== JSON.stringify(value.files)) reject('Candidate no longer matches admitted baseline or author manifest');
   return life;

@@ -26,7 +26,7 @@ export function parseIndependentReview(value: unknown, run: Run, ticket: Ticket,
   }
   if (result.verdict === 'pass' && result.findings.length) throw new Error('A passing review cannot contain unresolved findings');
   if (result.verdict === 'changes_required' && !result.findings.length) throw new Error('Changes required needs actionable findings');
-  if (result.verdict === 'pass' && !lifecycle.verification.some(receipt => receipt.source === 'host_execution' && receipt.outcome === 'passed' && receipt.candidateTree === lifecycle.candidate!.tree && receipt.recipeHash === lifecycle.recipeHash)) throw new Error('Passing review requires exact-candidate host verification evidence');
+  if (result.verdict === 'pass' && !lifecycle.verification.slice(lifecycle.verificationFloor ?? 0).some(receipt => receipt.source === 'host_execution' && receipt.outcome === 'passed' && receipt.candidateTree === lifecycle.candidate!.tree && receipt.recipeHash === lifecycle.recipeHash)) throw new Error('Passing review requires fresh post-invalidation host verification for exact candidate');
   return { sessionId, model: lifecycle.reviewerModel || lifecycle.policy.reviewerModel, candidateTree: lifecycle.candidate.tree, verdict: result.verdict as IndependentReview['verdict'], findings: result.findings.map(String), criteria: ticket.criteria.map(criterion => ({ criterion, evidence: criteria.get(criterion)! })), recorded: Date.now() };
 }
 
@@ -38,6 +38,8 @@ async function git(repo: Repo, args: string[]): Promise<string> {
 
 export async function reviewCandidate(store: Store, repo: Repo, run: Run, ticket: Ticket, options: {
   signal: AbortSignal; guard(): void; onSpawn(pid: number): Promise<void>; onRpc(rpc: RpcProcess): void; onTokens(total: number): void;
+  onReadRetry?(event: { command: string; attempt: number; error: string; delayMs: number }): Promise<void> | void;
+  onReadRecovered?(command: string): void;
 }): Promise<IndependentReview> {
   const lifecycle = run.lifecycle!;
   const candidate = lifecycle.candidate!;
@@ -66,9 +68,12 @@ export async function reviewCandidate(store: Store, repo: Repo, run: Run, ticket
     sampledTokens = Math.max(sampledTokens, total);
     options.onTokens(sampledTokens);
   };
-  const abort = () => {
-    if (rpc) void rpc.command('get_session_stats', {}, 1000).then(account).catch(() => {}).then(() => rpc?.shutdown()).catch(() => {});
+  let teardown: Promise<number | null> | null = null;
+  const stopReviewer = () => {
+    if (!rpc) return Promise.resolve(null);
+    return teardown ??= rpc.finalSessionStats().then(account).catch(() => {}).then(() => rpc!.shutdown());
   };
+  const abort = () => { void stopReviewer().catch(() => {}); };
   options.signal.addEventListener('abort', abort, { once: true });
   const check = async () => {
     await reconcileTickets(store, true);
@@ -111,9 +116,10 @@ export async function reviewCandidate(store: Store, repo: Repo, run: Run, ticket
         || (frame.type === 'tool_execution_start' && !['candidate_diff', 'candidate_source', 'backlog_review'].includes(String(frame.toolName)))
         || (frame.type === 'prompt_result' && frame.status === 'error')) failure = new Error('Restricted reviewer requested unavailable capabilities or failed');
     };
-    rpc = await RpcProcess.launch({ executable: store.settings().executable, args: [...privateArgs(directory), '--model', reviewerModel], cwd, env, onSpawn: options.onSpawn, onFrame: frame, onStderr: () => {}, onFailure: error => { failure = error; } });
+    rpc = await RpcProcess.launch({ executable: store.settings().executable, args: [...privateArgs(directory), '--model', reviewerModel], cwd, env, onSpawn: options.onSpawn, onFrame: frame, onStderr: () => {}, onFailure: error => { failure = error; }, readRetry: { signal: options.signal, guard: options.guard, beforeRetry: async event => { options.guard(); await options.onReadRetry?.(event); } } });
     options.onRpc(rpc);
     const state = await rpc.command('get_state');
+    options.onReadRecovered?.('get_state');
     const model = object(state.model);
     if (typeof state.sessionId !== 'string' || state.sessionId === lifecycle.authorSessionId || `${model.provider}/${model.id}` !== reviewerModel) throw new Error('Reviewer must use a fresh session and the exact authorized model');
     sessionId = state.sessionId;
@@ -131,7 +137,9 @@ export async function reviewCandidate(store: Store, repo: Repo, run: Run, ticket
       await check();
       if (failure) throw failure;
       account(await rpc.command('get_session_stats'));
+      options.onReadRecovered?.('get_session_stats');
       const current = await rpc.command('get_state');
+      options.onReadRecovered?.('get_state');
       if (current.sessionId !== sessionId) throw new Error('Reviewer session identity changed');
       if (current.isSettled === true && current.hasPendingAsyncWork !== true) { await work; break; }
       const pause = Promise.withResolvers<void>();
@@ -144,9 +152,6 @@ export async function reviewCandidate(store: Store, repo: Repo, run: Run, ticket
   } finally {
     options.signal.removeEventListener('abort', abort);
     await work.catch(() => {});
-    if (rpc) {
-      await rpc.command('get_session_stats', {}, 1000).then(account).catch(() => {});
-      await rpc.shutdown();
-    }
+    await stopReviewer();
   }
 }

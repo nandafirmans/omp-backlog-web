@@ -3,13 +3,13 @@ import type { FSWatcher } from 'node:fs';
 import { appendFile, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
-import type { Dialog, Repo, Run, Runtime, Status, Store, Ticket } from './contracts';
+import type { Dialog, HostVerification, RecoveryHistory, Repo, Run, Runtime, Status, Store, Ticket } from './contracts';
 import { reconcileTickets, snapshotTicket } from './tickets';
 import { object, RpcProcess } from './rpc';
 import type { Frame } from './rpc';
 import { assertVerifiedCriteria, recordEvidence } from './evidence';
 import { redactTranscript, RunConversation, settleConversation, transcriptValue } from './transcript';
-import { blockerDetails, recoveryContext, recoveryObjective } from './recovery';
+import { blockerDetails, classifyEngineeringFailure, engineeringBlockerCategory, missingAuthoredArtifact, recoveryAllowance, recoveryCategory, recoveryContext, recoveryDiagnostic, recoveryFingerprint, recoveryObjective, repairReserve } from './recovery';
 import { resolveRunConfiguration, sampleRunState } from './execution';
 import { assertCandidate, captureBaseline, captureCandidate, publishCandidate, recipeIdentity, reconcilePublication, verifyCandidate } from './autonomy';
 import { reviewCandidate } from './autonomy-review';
@@ -171,6 +171,7 @@ export function assertAutonomyAuthority(store: Store, run: Run) {
     || repo.completion.recipeHash !== lifecycle.recipeHash
     || ticket?.runId !== run.id || ticket.revision !== run.revision || ticket.removed || ticket.error
     || (lifecycle.authorSessionId !== undefined && lifecycle.authorSessionId !== run.sessionId)
+    || (lifecycle.authorSessionFile !== undefined && lifecycle.authorSessionFile !== run.sessionFile)
     || run.status !== 'running' || (run.workspace
       ? claimedWorkspaceConflict(store, repo, run.workspace, run.id)
       : store.list('runs').some(other => other.id !== run.id && CLAIMED.includes(other.status)))) {
@@ -187,6 +188,8 @@ export function safeIncompleteVerificationRecovery(run: Run, ticket: Ticket, val
   return !!lifecycle && lifecycle.recoveries < Math.min(1, lifecycle.policy.maxRecoveries)
     && input.recoverableCause === 'incomplete_verification' && input.status === 'blocked'
     && !String(input.permission ?? '').trim() && !run.dialog
+    && (input.failureCategory === undefined || input.failureCategory === 'incomplete_verification' || input.failureCategory === 'unknown')
+    && recoveryCategory(`${String(input.prerequisite ?? '')} ${String(input.unblock ?? '')} ${String(input.attempted ?? '')}`) === 'unknown'
     && Array.isArray(input.evidence) && ticket.criteria.every(criterion => (input.evidence as unknown[]).some(raw => object(raw).criterion === criterion))
     && !(run.verification ?? []).some(receipt => receipt.outcome === 'failed' || receipt.outcome === 'blocked');
 }
@@ -282,6 +285,16 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         await execution.phaseWork?.catch(() => {});
         await execution.hostWork;
         if (execution.rpc) {
+          if (execution.run.lifecycle && ['implementing', 'correcting', 'recovering', 'verifying'].includes(execution.run.lifecycle.phase)) {
+          await execution.rpc.finalSessionStats().then(stats => {
+              const tokens = object(stats.tokens);
+              const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+            if (Object.keys(tokens).length && Number.isFinite(total) && total >= 0) {
+              execution.run.lifecycle!.authorTokens = Math.max(execution.run.lifecycle!.authorTokens, total);
+              if (execution.run.progress) execution.run.progress.tokens = { total: execution.run.lifecycle!.authorTokens + (execution.run.lifecycle!.reviewerTokens ?? 0), sampled: Date.now(), basis: 'Cumulative OMP author session plus independent reviewer sessions' };
+            }
+            }).catch(() => {});
+          }
           // Both commands are best effort; shutdown below is mandatory even if the command channel failed.
           await execution.rpc.command('goal', { op: 'pause' }, 3_000).catch(() => {});
           await execution.rpc.command('abort', {}, 5_000).catch(() => {});
@@ -303,6 +316,13 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         const stderr = execution.conversation.text('system', 'stderr');
         if (stderr) transcript(execution, stderr);
         settleConversation(execution.run);
+        for (const record of execution.run.lifecycle?.recoveryHistory ?? []) {
+          if (!['observed', 'authorized', 'dispatched', 'paused'].includes(record.state)) continue;
+          record.state = status === 'paused' ? 'paused' : status === 'done' ? 'recovered' : 'needs_assistance';
+          if (error && status !== 'paused' && recoveryCategory(error) !== 'unknown') record.category = recoveryCategory(error);
+          record.tokensAfter = execution.run.lifecycle!.authorTokens + (execution.run.lifecycle!.reviewerTokens ?? 0);
+          if (status !== 'paused') record.finished = Date.now();
+        }
         if (execution.run.lifecycle && status !== 'done' && status !== 'paused') {
           execution.run.lifecycle.phase = 'assistance';
           execution.run.lifecycle.exception = error || execution.run.blocker || 'Autonomous lifecycle stopped before publication; review partial evidence and reconcile before retry';
@@ -349,31 +369,125 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     guard(execution);
   }
 
-  async function recoverIncompleteVerification(execution: Execution): Promise<boolean> {
-    const lifecycle = execution.run.lifecycle!;
-    lifecycle.recoveries++;
-    lifecycle.phase = 'recovering';
+  function observation(execution: Execution, source: RecoveryHistory['source'], diagnostic: string, category: RecoveryHistory['category'], allowance: RecoveryHistory['allowance']): RecoveryHistory {
+    const { run } = execution;
+    const lifecycle = run.lifecycle!;
+    const normalized = recoveryDiagnostic(diagnostic);
+    const fingerprint = recoveryFingerprint(lifecycle.recipeHash, normalized, lifecycle.candidate?.tree);
+    const previous = lifecycle.recoveryHistory?.find(record => record.source === source && record.fingerprint === fingerprint && record.state === 'observed');
+    if (previous) return previous;
+    const record: RecoveryHistory = {
+      id: crypto.randomUUID(), runId: run.id, ticketId: run.ticketId, revision: run.revision, engineeringMode: run.configuration?.engineeringMode ?? 'pstack',
+      source, category, allowance, state: 'observed', fingerprint, diagnosticFingerprint: recoveryFingerprint(lifecycle.recipeHash, normalized), diagnostic: normalized,
+      candidateTree: lifecycle.candidate?.tree, ordinal: 0, strategy: '', instructions: '', recorded: Date.now(),
+      tokensBefore: lifecycle.authorTokens + (lifecycle.reviewerTokens ?? 0), originalEvidence: run.evidence.map(redact),
+      originalVerification: structuredClone(run.verification ?? []), originalBlocker: run.blocker, originalDetails: run.blockerDetails ? { ...run.blockerDetails } : undefined,
+    };
+    lifecycle.recoveryHistory = [...(lifecycle.recoveryHistory ?? []).slice(-31), record];
     persist(execution);
+    return record;
+  }
+
+  function authorizeReadRetry(execution: Execution) {
+    const records = execution.run.lifecycle?.recoveryHistory ?? [];
+    if (records.filter(record => record.source === 'rpc_read').length >= 2) throw new Error('Whole-attempt read retry allowance exhausted; no replay authorized');
+  }
+
+  function readRecovered(execution: Execution, command: string) {
+    let changed = false;
+    for (const record of execution.run.lifecycle?.recoveryHistory ?? []) {
+      if (record.source === 'rpc_read' && record.state === 'dispatched' && record.diagnostic.startsWith(`${command}:`)) {
+        record.state = 'recovered'; record.finished = Date.now(); record.tokensAfter = execution.run.lifecycle!.authorTokens + (execution.run.lifecycle!.reviewerTokens ?? 0);
+        changed = true;
+      }
+    }
+    if (changed) persist(execution);
+  }
+
+  async function dispatchRepair(execution: Execution, record: RecoveryHistory, findings: string): Promise<boolean> {
+    const { run } = execution;
+    const lifecycle = run.lifecycle!;
+    if (record.state !== 'observed') throw new Error('Recovery submission already claimed; no replay authorized');
+    const allowance = record.allowance === 'recoveries' ? 'recoveries' : 'corrections';
+    const denied = recoveryAllowance(run, allowance, record.diagnosticFingerprint);
+    if (denied) {
+      record.state = 'needs_assistance'; record.category = recoveryCategory(denied); record.finished = Date.now();
+      for (const previous of lifecycle.recoveryHistory ?? []) if (previous !== record && previous.started && previous.state === 'dispatched') { previous.state = 'still_blocked'; previous.finished = Date.now(); }
+      persist(execution); throw new Error(denied);
+    }
+    await freshAuthority(execution);
+    for (const previous of lifecycle.recoveryHistory ?? []) {
+      if (previous !== record && previous.state === 'dispatched' && previous.allowance !== 'read_retry') { previous.state = 'still_blocked'; previous.finished = Date.now(); previous.tokensAfter = lifecycle.authorTokens + (lifecycle.reviewerTokens ?? 0); }
+    }
+    record.tokensBefore = lifecycle.authorTokens + (lifecycle.reviewerTokens ?? 0);
+    lifecycle[allowance]++;
+    record.ordinal = lifecycle[allowance];
+    record.state = 'authorized';
+    record.strategy = record.source === 'incomplete_verification' ? 'finish_original_verification' : 'repair_reproduced_diagnostic';
+    record.instructions = `Host-authorized ${record.strategy} ${record.ordinal}; resume ONLY original author session and mode. Reuse existing investigation, recorded evidence and playbook context; do not repeat broad repository analysis or reinitialize the router. Diagnose only the demonstrated failure and affected authored paths. No installs, credentials, new permissions, product decisions, weakened checks or scope expansion. Earlier author evidence and host/review passes are invalidated. Run full original final verification, independently recheck every criterion and submit fresh backlog_evidence and backlog_result; a fresh independent host review remains mandatory. Address ONLY:\n${findings}`;
+    record.continuation = record.instructions;
+    lifecycle.continuation = record.instructions;
+    execution.continuation = record.instructions;
+    lifecycle.phase = allowance === 'recoveries' ? 'recovering' : 'correcting';
+    lifecycle.verificationFloor = lifecycle.verification.length;
+    lifecycle.reviewFloor = lifecycle.reviews.length;
+    execution.result = null; run.verification = []; run.evidence = []; run.blocker = null; delete run.blockerDetails; delete lifecycle.candidate;
+    persist(execution);
+    guard(execution);
+    record.state = 'dispatched'; record.started = Date.now(); persist(execution);
+    await launch(run, execution.repo, execution.ticket, true, execution);
+    return false;
+  }
+
+  async function safeEngineeringReceipt(execution: Execution, receipt: HostVerification): Promise<boolean> {
+    const lifecycle = execution.run.lifecycle!;
+    if (!classifyEngineeringFailure(receipt, lifecycle.authorFiles ?? [])) return false;
+    const path = missingAuthoredArtifact(receipt.output, lifecycle.authorFiles ?? []);
+    return !path || /^100(?:644|755) blob [a-f0-9]+\t/u.test(await command(execution.repo.path, ['ls-tree', lifecycle.baseline.tree, '--', path]));
+  }
+
+  async function recoverBlockedEngineering(execution: Execution, record: RecoveryHistory): Promise<boolean> {
+    const { run, repo } = execution;
+    const lifecycle = run.lifecycle!;
     await freshAuthority(execution);
     await authorStopped(execution);
-    guard(execution);
-    execution.result = null;
-    execution.run.verification = [];
-    execution.run.blocker = null;
-    execution.run.blockerDetails = undefined;
-    execution.continuation = 'One host-authorized recovery for incomplete_verification: finish ONLY the original missing verification and concrete criterion reports. No installs, new permissions, credentials, new product decisions, setup retries or unrelated repairs are authorized. Previously blocked work is not complete. If the original checks cannot run safely, submit the exact blocker again without a recoverableCause; assistance is required.';
-    await launch(execution.run, execution.repo, execution.ticket, true, execution);
-    return false;
+    await freshAuthority(execution);
+    const denied = recoveryAllowance(run, 'recoveries', record.diagnosticFingerprint);
+    if (denied) { record.state = 'needs_assistance'; record.category = recoveryCategory(denied); record.finished = Date.now(); persist(execution); throw new Error(denied); }
+    lifecycle.candidate = await captureCandidate(store, repo, lifecycle.baseline, lifecycle.authorFiles);
+    record.candidateTree = lifecycle.candidate.tree;
+    persist(execution);
+    const receipt = await verifyCandidate(store, repo, run, execution.abort.signal, () => guard(execution));
+    lifecycle.verification.push(receipt); record.hostVerificationId = receipt.id; record.verificationIds = [receipt.id]; persist(execution);
+    await freshAuthority(execution);
+    if (!await safeEngineeringReceipt(execution, receipt)) {
+      record.state = 'needs_assistance'; record.category = recoveryCategory(receipt.output); record.finished = Date.now(); persist(execution);
+      throw new Error('Author blocker was not independently reproduced as a safe scoped engineering failure; assistance required');
+    }
+    record.diagnostic = recoveryDiagnostic(receipt.output);
+    record.diagnosticFingerprint = recoveryFingerprint(lifecycle.recipeHash, `${JSON.stringify(receipt.argv)}:${receipt.exitCode}:${record.diagnostic}`);
+    record.fingerprint = recoveryFingerprint(lifecycle.recipeHash, `${JSON.stringify(receipt.argv)}:${receipt.exitCode}:${record.diagnostic}`, receipt.candidateTree);
+    return dispatchRepair(execution, record, record.diagnostic);
+  }
+
+  async function recoverIncompleteVerification(execution: Execution): Promise<boolean> {
+    const record = observation(execution, 'incomplete_verification', execution.run.blocker ?? 'Incomplete original verification', 'incomplete_verification', 'recoveries');
+    await freshAuthority(execution);
+    await authorStopped(execution);
+    return dispatchRepair(execution, record, 'Finish ONLY missing original verification and concrete criterion reports. If unavailable, submit the exact blocker; no setup retries or unrelated repairs.');
   }
 
   async function authorStopped(execution: Execution) {
     clearInterval(execution.poll);
     if (execution.rpc) {
       const stats = await execution.rpc.command('get_session_stats');
+      readRecovered(execution, 'get_session_stats');
       const tokens = object(stats.tokens);
       const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
       if (!Object.keys(tokens).length || !Number.isFinite(total) || total < 0) throw new Error('Author did not expose valid cumulative token accounting');
       execution.run.lifecycle!.authorTokens = Math.max(execution.run.lifecycle!.authorTokens, total);
+      const reserve = repairReserve(execution.run);
+      if (reserve) throw new Error(reserve);
       const rpc = execution.rpc;
       execution.rpc = null;
       await rpc.command('goal', { op: 'pause' }, 3000).catch(() => {});
@@ -397,17 +511,32 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       await authorStopped(execution);
       await freshAuthority(execution);
       lifecycle.candidate = await captureCandidate(store, repo, lifecycle.baseline, lifecycle.authorFiles);
+      for (const record of lifecycle.recoveryHistory ?? []) {
+        if (record.state === 'dispatched' && record.allowance !== 'read_retry') record.workPerformed = redact(run.evidence.join('\n')).slice(0, 8000);
+      }
     } else if (!lifecycle.candidate) throw new Error('Paused host phase has no durable candidate; assistance required');
     persist(execution);
     if (run.progress) run.progress.phase = 'Host verification executing';
     await freshAuthority(execution);
     const verification = await verifyCandidate(store, repo, run, execution.abort.signal, () => guard(execution));
     lifecycle.verification.push(verification);
+    for (const record of lifecycle.recoveryHistory ?? []) {
+      if (record.state === 'dispatched' && record.allowance !== 'read_retry') { record.verificationIds = [...(record.verificationIds ?? []), verification.id]; record.hostVerificationId = verification.id; }
+    }
     persist(execution);
     guard(execution);
     let findings: string[];
     if (verification.outcome !== 'passed') {
-      if (verification.outcome === 'blocked') throw new Error(`Host verification blocked: ${verification.output}`);
+      if (verification.outcome === 'blocked') {
+        const record = observation(execution, 'host_verification', verification.output, recoveryCategory(verification.output), 'corrections');
+        record.state = 'needs_assistance'; record.hostVerificationId = verification.id; record.finished = Date.now(); persist(execution);
+        throw new Error(`Host verification blocked: ${verification.output}`);
+      }
+      if (!await safeEngineeringReceipt(execution, verification)) {
+        const record = observation(execution, 'host_verification', verification.output, recoveryCategory(verification.output), 'corrections');
+        record.state = 'needs_assistance'; record.hostVerificationId = verification.id; record.finished = Date.now(); persist(execution);
+        throw new Error('Host failure is not a safe scoped engineering diagnostic; assistance required');
+      }
       findings = [`Actual host verification failed (exit ${verification.exitCode}): ${verification.output}. Fix the demonstrated cause within this ticket; no installs or generic retries.`];
     } else {
       lifecycle.phase = 'reviewing';
@@ -421,6 +550,13 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           await writeFile(join(privateDir(store, run.id), 'identity.json'), JSON.stringify(await identity(pid)), { mode: 0o600 });
         },
         onRpc: rpc => { execution.rpc = rpc; },
+        onReadRetry: async event => {
+          await freshAuthority(execution);
+          authorizeReadRetry(execution);
+          const record = observation(execution, 'rpc_read', `${event.command}: ${event.error}`, 'transient_read', 'read_retry');
+          record.ordinal = event.attempt; record.state = 'dispatched'; record.started ??= Date.now(); record.strategy = 'bounded_read_retry'; record.instructions = `Retry only ${event.command} after ${event.delayMs}ms`; persist(execution);
+        },
+        onReadRecovered: command => readRecovered(execution, command),
         onTokens: total => {
           lifecycle.reviewerTokens = previousTokens + total;
           if (run.progress) run.progress.tokens = { total: lifecycle.authorTokens + lifecycle.reviewerTokens, sampled: Date.now(), basis: 'Cumulative OMP author session plus independent reviewer sessions' };
@@ -431,9 +567,16 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       if (!await processGone(run)) throw new Error('Reviewer child work still exists');
       run.pid = null;
       lifecycle.reviews.push(review);
+      for (const record of lifecycle.recoveryHistory ?? []) {
+        if (record.state === 'dispatched' && record.allowance !== 'read_retry') { record.reviewSessionIds = [...(record.reviewSessionIds ?? []), review.sessionId]; record.reviewSessionId = review.sessionId; }
+      }
       persist(execution);
       guard(execution);
-      if (review.verdict === 'inconclusive') throw new Error(`Independent review inconclusive: ${review.findings.join('\\n') || 'Acceptance evidence is insufficient'}`);
+      if (review.verdict === 'inconclusive') {
+        const record = observation(execution, 'reviewer', review.findings.join('\n') || 'Acceptance evidence insufficient', 'unknown', 'corrections');
+        record.state = 'needs_assistance'; record.reviewSessionId = review.sessionId; record.hostVerificationId = verification.id; record.finished = Date.now(); persist(execution);
+        throw new Error(`Independent review inconclusive: ${review.findings.join('\n') || 'Acceptance evidence insufficient'}`);
+      }
       if (review.verdict === 'pass') {
         lifecycle.phase = 'publishing';
         persist(execution);
@@ -447,24 +590,19 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       }
       findings = review.findings;
     }
-    if (lifecycle.corrections >= Math.min(2, lifecycle.policy.maxCorrections)) throw new Error('Autonomous correction bound reached; assistance required');
-    lifecycle.corrections++;
-    lifecycle.phase = 'correcting';
-    execution.result = null;
-    run.verification = [];
-    run.evidence = [];
-    delete lifecycle.candidate;
-    execution.continuation = `Host-authorized correction ${lifecycle.corrections}; resume ONLY the original author session. Earlier agent verification is invalidated. Independently recheck every criterion and resubmit backlog_evidence and backlog_result. Address these exact findings, without expanding scope or weakening checks:\\n${findings.join('\\n')}`;
-    persist(execution);
-    guard(execution);
-    await launch(run, repo, ticket, true, execution);
-    return false;
+    const source = verification.outcome === 'passed' ? 'reviewer' : 'host_verification';
+    const diagnostic = verification.outcome === 'passed' ? findings.join('\n') : `${JSON.stringify(verification.argv)}:${verification.exitCode}:${verification.output}`;
+    const record = observation(execution, source, diagnostic, source === 'reviewer' ? 'review_changes' : 'engineering_failure', 'corrections');
+    if (source === 'host_verification') record.hostVerificationId = verification.id;
+    else record.reviewSessionId = lifecycle.reviews.at(-1)?.sessionId;
+    return dispatchRepair(execution, record, findings.join('\n'));
   }
   async function settled(execution: Execution) {
-    if (!owns(execution) || execution.setup || execution.stopping || execution.settling || !execution.rpc) return;
+    if (!owns(execution) || execution.setup || execution.stopping || execution.settling || execution.phaseWork || !execution.rpc) return;
     execution.settling = true;
     try {
       const state = await execution.rpc.command('get_state');
+      readRecovered(execution, 'get_state');
       if (!owns(execution) || execution.stopping) return;
       if (state.isSettled !== true || state.hasPendingAsyncWork === true) return;
       await execution.hostWork;
@@ -537,6 +675,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             await freshAuthority(execution);
             if (!['implementing', 'correcting', 'recovering'].includes(execution.run.lifecycle.phase)) throw new Error('Author submissions are closed during host-owned phases');
             const state = await execution.rpc?.command('get_state');
+            readRecovered(execution, 'get_state');
             if (state?.sessionId !== execution.run.lifecycle.authorSessionId) throw new Error('Author submission came from a different session');
           }
           let response: string;
@@ -566,14 +705,29 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           persist(execution);
           execution.rpc?.send({ type: 'host_tool_result', id: frame.id, result: { content: [{ type: 'text', text: response }] } });
           if (execution.result?.status === 'blocked') {
-            if (safeIncompleteVerificationRecovery(execution.run, execution.ticket, frame.arguments)) {
-              execution.run.lifecycle!.phase = 'recovering';
-              queueMicrotask(() => {
-                execution.phaseWork = recoverIncompleteVerification(execution);
-                void execution.phaseWork.catch(error => fail(execution, message(error)));
-              });
-            } else void stop(execution, 'blocked');
+          const input = object(frame.arguments);
+          const incomplete = safeIncompleteVerificationRecovery(execution.run, execution.ticket, input);
+          const engineering = execution.run.lifecycle && input.recoverableCause === 'engineering_failure' && !execution.run.dialog
+            && (input.failureCategory === undefined || input.failureCategory === 'engineering_failure')
+            && !String(input.permission ?? '').trim() && execution.run.blockerDetails
+            && Boolean(execution.run.blockerDetails.attempted?.trim()) && Boolean(execution.run.blockerDetails.verification?.trim())
+            && engineeringBlockerCategory(execution.run.blockerDetails, execution.run.lifecycle.authorFiles ?? []) === 'unknown';
+          if (incomplete || engineering) {
+            const record = observation(execution, incomplete ? 'incomplete_verification' : 'author_blocked', execution.run.blocker ?? 'Author blocked', incomplete ? 'incomplete_verification' : 'engineering_failure', 'recoveries');
+            execution.run.lifecycle!.phase = 'verifying';
+            persist(execution);
+            queueMicrotask(() => {
+              execution.phaseWork = incomplete ? recoverIncompleteVerification(execution) : recoverBlockedEngineering(execution, record);
+              void execution.phaseWork.catch(error => fail(execution, message(error))).finally(() => { execution.phaseWork = null; });
+            });
+          } else {
+            if (execution.run.lifecycle) {
+              const record = observation(execution, 'author_blocked', execution.run.blocker ?? 'Author blocked', 'unsafe_or_unknown', 'recoveries');
+              record.state = 'needs_assistance'; record.category = recoveryCategory(execution.run.blocker ?? ''); record.finished = Date.now(); persist(execution);
+            }
+            void stop(execution, 'blocked');
           }
+        }
         } catch (error) {
           execution.conversation.hostResult(frame, message(error), true);
           persist(execution);
@@ -590,6 +744,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
 
   async function launch(run: Run, repo: Repo, ticket: Ticket, resume = false, continuing?: Execution) {
     const execution = continuing ?? executionFor(run, repo, ticket);
+    execution.continuation = run.lifecycle?.continuation ?? execution.continuation;
+    for (const record of run.lifecycle?.recoveryHistory ?? []) {
+      if (record.state === 'paused') record.state = record.started ? 'dispatched' : 'authorized';
+    }
     if (continuing && !execution.setup) {
       const initialized = Promise.withResolvers<void>();
       execution.initialized = initialized.promise;
@@ -618,6 +776,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Execution time budget exhausted; explicit review required'); }, Math.max(1, remaining));
     try {
       if (closed || !owns(execution) || execution.stopping) throw new Error('Execution ownership changed before launch');
+      const reserve = repairReserve(run);
+      if (reserve) throw new Error(reserve);
       if (!run.workspace) throw new Error('Workspace ownership identity is unavailable; assistance required');
       await assertWorkspaceIdentity(repo, run.workspace);
       if (closed || !owns(execution) || execution.stopping) throw new Error('Execution ownership changed before launch');
@@ -643,6 +803,17 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       persist(execution);
       const rpc = await RpcProcess.launch({
         executable: settings.executable, args, cwd: repo.path,
+      readRetry: run.lifecycle ? {
+        signal: execution.abort.signal,
+        guard: () => guard(execution),
+        beforeRetry: async event => {
+          await freshAuthority(execution);
+          authorizeReadRetry(execution);
+          const record = observation(execution, 'rpc_read', `${event.command}: ${event.error}`, 'transient_read', 'read_retry');
+          record.ordinal = event.attempt; record.strategy = 'bounded_read_retry'; record.instructions = `Retry only ${event.command} after ${event.delayMs}ms; never replay a mutation`;
+          record.state = 'dispatched'; record.started ??= Date.now(); persist(execution);
+        },
+      } : undefined,
         onSpawn: async (pid) => {
           run.pid = pid;
           persist(execution);
@@ -658,6 +829,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         if (!execution.stopping && execution.rpc === rpc) fail(execution, 'OMP exited unexpectedly; its session was not inferred complete');
       });
       const state = await rpc.command('get_state');
+      readRecovered(execution, 'get_state');
       if (typeof state.sessionId !== 'string' || typeof state.sessionFile !== 'string') throw new Error('OMP did not expose a durable session identity');
       if (resume && state.sessionId !== run.sessionId) throw new Error('OMP resumed a different session; refusing continuation');
       if (engineeringMode === 'pstack') {
@@ -674,6 +846,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       run.sessionFile = state.sessionFile;
       if (run.lifecycle) {
         if (run.lifecycle.authorSessionId && state.sessionId !== run.lifecycle.authorSessionId) throw new Error('Autonomous correction must resume the original author session');
+        if (run.lifecycle.authorSessionFile && state.sessionFile !== run.lifecycle.authorSessionFile) throw new Error('Autonomous correction must resume original author session file');
         run.lifecycle.authorSessionId = state.sessionId;
         run.lifecycle.authorSessionFile = state.sessionFile;
         if (!run.lifecycle.reviewerModel) {
@@ -685,6 +858,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       persist(execution);
       if (!resume && settings.thinking) {
         const supported = await rpc.command('get_available_thinking_levels');
+        readRecovered(execution, 'get_available_thinking_levels');
         if (!Array.isArray(supported.levels) || !supported.levels.includes(settings.thinking)) throw new Error(`Configured thinking level "${settings.thinking}" is not supported by the selected OMP model`);
         await rpc.command('set_thinking_level', { level: settings.thinking });
         const effective = await rpc.command('get_state');
@@ -706,7 +880,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             verification: { type: 'string', description: 'Original checks to perform after recovery. Max 2000 characters.' },
             recoveryPrompt: { type: 'string', description: 'Suggested recovery instructions for operator review, never permission to bypass policy. No secrets. Max 8000 characters.' },
             files: { type: 'array', items: { type: 'string' }, description: 'Autonomous only: exact repository-relative authored paths, including deleted files. [] for no-op.' },
-            recoverableCause: { type: 'string', enum: ['incomplete_verification'], description: 'Autonomous only: exact blocker is unfinished original verification, not missing permissions/setup/credentials. One bounded original-author continuation; never generic retry.' },
+            recoverableCause: { type: 'string', enum: ['incomplete_verification', 'engineering_failure'], description: 'Suggestion only: original missing verification or scoped engineering blocker. Host independently reproduces safe engineering failures. Never permits setup/credential/permission retries.' },
+            failureCategory: { type: 'string', enum: ['engineering_failure', 'incomplete_verification', 'credentials', 'permissions', 'requirements', 'installation', 'unsafe_operation', 'infrastructure', 'unknown'], description: 'Untrusted blocker classification, never authorization.' },
           }, required: ['revision', 'status', 'evidence'], additionalProperties: false,
         },
       }, {
@@ -790,6 +965,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         execution.polling = true;
         void (async () => {
           const stats = await rpc.command('get_session_stats');
+            readRecovered(execution, 'get_session_stats');
           if (!owns(execution) || execution.stopping) return;
           if (run.lifecycle) guard(execution);
           const tokens = object(stats.tokens);
@@ -799,9 +975,12 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             if (run.lifecycle) run.lifecycle.authorTokens = Math.max(run.lifecycle.authorTokens, total);
             execution.run.progress.tokens = { total: run.lifecycle ? run.lifecycle.authorTokens + (run.lifecycle.reviewerTokens ?? 0) : total, sampled: Date.now(), basis: run.lifecycle ? 'Cumulative OMP author session plus independent reviewer sessions' : 'OMP get_session_stats session total (includes input/output/cache; not goal-only or a spending limit)' };
             persist(execution);
+            const reserve = repairReserve(run);
+            if (reserve) throw new Error(reserve);
           }
           if (settings.tokenBudget !== null && (run.progress?.tokens?.total ?? total) >= settings.tokenBudget) { await stop(execution, 'failed', 'Execution token budget exhausted; explicit review required'); return; }
           const current = await rpc.command('get_state');
+            readRecovered(execution, 'get_state');
           if (!owns(execution) || execution.stopping) return;
           if (current.sessionId !== run.sessionId) throw new Error('OMP changed session identity during execution');
           sampleRunState(run, current);
@@ -853,6 +1032,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       }
       if (uncertain) {
         run.status = 'stopping'; run.error = uncertain; run.dialog = null;
+            if (run.lifecycle) {
+              run.lifecycle.phase = 'assistance'; run.lifecycle.exception = uncertain;
+              for (const record of run.lifecycle.recoveryHistory ?? []) if (['observed', 'authorized', 'dispatched', 'paused'].includes(record.state)) { record.state = 'needs_assistance'; record.finished = Date.now(); }
+            }
         store.save('runs', run); updateTicket(run, 'stopping');
       } else {
         const publicationRepo = store.get('repos', run.repoId);
@@ -872,6 +1055,9 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         run.status = 'interrupted'; run.error = 'Backend or process interrupted this run. Review partial changes and explicitly retry; no actions were replayed.';
         if (run.lifecycle) {
           run.lifecycle.phase = 'assistance';
+            for (const record of run.lifecycle.recoveryHistory ?? []) {
+              if (['observed', 'authorized', 'dispatched', 'paused'].includes(record.state)) { record.state = 'needs_assistance'; record.finished = Date.now(); record.tokensAfter = run.lifecycle.authorTokens + (run.lifecycle.reviewerTokens ?? 0); }
+            }
           run.lifecycle.exception ||= run.error;
         }
         settleConversation(run);
@@ -1046,6 +1232,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       }
       if (!repo) throw new Error('Repository no longer exists');
       if (run.lifecycle && !run.workspace) throw new Error('Autonomous continuation requires its original admitted workspace identity; reconcile partial work and explicitly retry as a new attempt');
+      if (run.lifecycle?.recoveryHistory?.some(record => record.source === 'author_blocked' && record.ordinal === 0 && record.state === 'paused'
+        && run.lifecycle!.verification.some(receipt => receipt.id === record.hostVerificationId && receipt.outcome === 'blocked'))) {
+        throw new Error('Interrupted blocker verification requires reconciliation and an explicit reviewed retry; no uncertain command was replayed');
+      }
       const ticket = JSON.parse(await readFile(join(privateDir(store, run.id), 'ticket.json'), 'utf8')) as Ticket;
       const paused = store.get('runs', runId);
       if (closed || paused?.status !== 'paused' || paused.pid || executions.has(runId)) throw new Error('Paused execution ownership changed before resume');
@@ -1066,10 +1256,14 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       controls.delete(runId);
       completed.resolve();
       store.notify();
-      if (execution.run.lifecycle && ['verifying', 'reviewing', 'publishing'].includes(execution.run.lifecycle.phase)) {
+      const pendingObservation = execution.run.lifecycle?.recoveryHistory?.find(record => record.state === 'paused' && record.ordinal === 0 && ['author_blocked', 'incomplete_verification'].includes(record.source));
+      if (execution.run.lifecycle && (pendingObservation || ['verifying', 'reviewing', 'publishing'].includes(execution.run.lifecycle.phase))) {
         execution.setup = false; execution.initializedResolve(); execution.settling = true;
         execution.deadline = setTimeout(() => { void stop(execution, 'failed', 'Whole-attempt execution deadline exhausted'); }, Math.max(1, (execution.run.progress?.deadline ?? execution.run.started) - Date.now()));
-        execution.phaseWork = autonomous(execution, true);
+        if (pendingObservation) pendingObservation.state = 'observed';
+        execution.phaseWork = pendingObservation
+          ? pendingObservation.source === 'author_blocked' ? recoverBlockedEngineering(execution, pendingObservation) : recoverIncompleteVerification(execution)
+          : autonomous(execution, true);
         try {
           const complete = await execution.phaseWork;
           execution.phaseWork = null;

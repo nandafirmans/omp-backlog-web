@@ -1,5 +1,5 @@
 // Deterministic protocol peer. Never represents a real OMP/provider or semantic reviewer.
-import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { FrameDecoder, type Frame } from '../rpc';
@@ -8,7 +8,7 @@ const args = process.argv.slice(2);
 const argument = (name: string) => args[args.indexOf(name) + 1]!;
 if (args.includes('--version')) { console.log('18.13.3'); process.exit(0); }
 const configPath = argument('--fixture-config');
-const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean };
+const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; repairTokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean };
 const reviewer = args.includes('--no-tools');
 const standard = !reviewer && argument('--append-system-prompt').includes('Engineering mode: standard.');
 if (reviewer && args.includes('--append-system-prompt')) throw new Error('Restricted reviewer must not receive author engineering system instructions');
@@ -29,9 +29,17 @@ let authorToolsRegistered = false;
 let invocationReads = 0;
 const host = (id: string, toolName: string, value: unknown) => send({ type: 'host_tool_call', id, toolName, arguments: value });
 let authorReleased = false;
+let recoveryReleased = false;
+const engineering = config.scenario?.startsWith('engineering-') === true;
+const hostFailure = config.scenario?.startsWith('engineering-host-') === true;
 const finishAuthor = async () => {
-  if (config.authorBarrier && !authorReleased) {
+  if (config.authorBarrier && session.turns === 0 && !authorReleased) {
     send({ type: 'extension_ui_request', id: 'author-barrier', method: 'input', title: 'Release disposable author' });
+    return;
+  }
+  if (config.recoveryBarrier && session.turns > 0 && !recoveryReleased) {
+    await log({ event: 'recovery-barrier', turn: session.turns + 1 });
+    send({ type: 'extension_ui_request', id: 'recovery-barrier', method: 'input', title: 'Release disposable repair' });
     return;
   }
   session.turns++; await writeFile(sessionFile, JSON.stringify(session));
@@ -40,7 +48,32 @@ const finishAuthor = async () => {
     return;
   }
   if (config.holdAuthor) { await writeFile(join(process.cwd(), 'proof.txt'), 'partial'); return; }
-  if (config.scenario !== 'noop') await writeFile(join(process.cwd(), 'proof.txt'), 'verified\n');
+  const broken = engineering && (session.turns === 1 || config.scenario === 'engineering-repeated' || config.scenario === 'engineering-cosmetic');
+  if (config.scenario !== 'noop') {
+    const proof = broken ? config.scenario === 'engineering-cosmetic' && session.turns > 1 ? 'broken \n' : 'broken\n' : 'verified\n';
+    await writeFile(join(process.cwd(), 'proof.txt'), proof);
+    if (config.scenario?.startsWith('engineering-artifact-') && session.turns === 1) await unlink(join(process.cwd(), 'proof.txt'));
+    await log({ event: 'proof-written', turn: session.turns, proof });
+  }
+  if (engineering && !hostFailure && session.turns === 1) {
+    const denial = config.scenario?.endsWith('credentials') ? { prerequisite: 'Registry credentials are unavailable', unblock: 'Owner must provide registry credentials' }
+      : config.scenario?.endsWith('installation') ? { prerequisite: 'Required dependency is not installed', unblock: 'Install the missing dependency' }
+      : config.scenario?.endsWith('requirements') ? { prerequisite: 'Product requirements are ambiguous', unblock: 'Owner must decide expected product behavior' }
+      : config.scenario?.endsWith('unsafe') ? { prerequisite: 'Destructive Git reset is required', unblock: 'Owner must authorize destructive Git operations' }
+      : { prerequisite: 'proof.txt implementation fails the original host assertion', unblock: 'Correct proof.txt and repeat the original recipe' };
+    await log({ event: 'blocked-report', turn: session.turns });
+    const report: Record<string, unknown> = { revision: ticket!.revision, status: 'blocked', files: session.authorFiles, evidence: [], ...denial, attempted: 'Wrote proof.txt, then read it back: broken. The expected verified value was not implemented.', verification: 'verify.ts: AssertionError: proof.txt expected verified but received broken', recoverableCause: 'engineering_failure', failureCategory: 'engineering_failure', ...(config.scenario === 'engineering-spoofed' ? { permission: 'Owner must grant package installation permission' } : {}) };
+    if (config.scenario?.startsWith('engineering-artifact-')) report.verification = "Error: ENOENT: no such file or directory, open 'proof.txt'";
+    if (config.scenario === 'engineering-no-work') delete report.attempted;
+    if (config.scenario === 'engineering-no-verification') delete report.verification;
+    host('result', 'backlog_result', report);
+    if (config.scenario === 'engineering-duplicate') host('duplicate-result', 'backlog_result', report);
+    return;
+  }
+  if (config.scenario === 'engineering-chain' && session.turns === 2) {
+    host('result', 'backlog_result', { revision: ticket!.revision, status: 'blocked', files: session.authorFiles, evidence: ticket!.criteria.map(criterion => ({ criterion, evidence: 'Implementation repaired; original verification remains incomplete.' })), prerequisite: 'Original verification is unfinished', unblock: 'Finish the original checks', recoverableCause: 'incomplete_verification' });
+    return;
+  }
   if (config.scenario === 'blocked' || config.scenario === 'recovery' && session.turns === 1) {
     host('result', 'backlog_result', { revision: ticket!.revision, status: 'blocked', files: session.authorFiles, evidence: ticket!.criteria.map(criterion => ({ criterion, evidence: 'Source implemented; verification remains incomplete.' })), prerequisite: 'Original verification is unfinished', unblock: 'Finish the original checks', ...(config.scenario === 'recovery' ? { recoverableCause: 'incomplete_verification' } : { permission: 'Owner must provide unavailable permission' }) });
   } else host('evidence', 'backlog_evidence', { revision: ticket!.revision, criterion: ticket!.criteria[0], feature: 'disposable proof', entryPoint: 'proof.txt', method: 'fixture read-back', outcome: 'passed', details: 'Synthetic author report: verified, not independent host proof.', recipe: 'verify.ts (host executes independently)' });
@@ -64,7 +97,19 @@ for await (const line of createInterface({ input: process.stdin })) {
       send({ type: 'response', id: frame.id, success: false, error: 'Fixture history unavailable after missing native poteto-mode skill-prompt record' });
     } else respond({ messages: invocationReads === 1 && config.scenario !== 'missing-invocation' ? [] : session.messages ?? [] });
   }
-  else if (frame.type === 'get_session_stats') respond({ tokens: { total: config.tokens ?? (reviewer ? 7 : 11 * session.turns) } });
+  else if (frame.type === 'get_session_stats') {
+    if (config.scenario?.endsWith('stop-accounting')) {
+      const latest = await readFile(`${configPath}.usage`, 'utf8').catch(() => '');
+      if (latest) {
+        await log({ event: 'usage', tokens: Number(latest), turn: session.turns });
+        respond({ tokens: { total: Number(latest) } });
+        continue;
+      }
+    }
+    const tokens = config.tokens ?? (reviewer ? 7 : session.turns > 1 && config.repairTokens !== undefined ? config.repairTokens : 11 * session.turns);
+    await log({ event: 'usage', tokens, turn: session.turns });
+    respond({ tokens: { total: tokens } });
+  }
   else if (frame.type === 'set_auto_compaction') { compaction = frame.enabled === true; respond(); }
   else if (frame.type === 'get_available_thinking_levels') respond({ levels: ['off', 'medium', 'high'] });
   else if (frame.type === 'set_thinking_level') { thinking = String(frame.level); respond(); }
@@ -102,6 +147,10 @@ for await (const line of createInterface({ input: process.stdin })) {
     authorReleased = true;
     await finishAuthor();
   }
+  else if (frame.type === 'extension_ui_response' && frame.id === 'recovery-barrier') {
+    recoveryReleased = true;
+    await finishAuthor();
+  }
   else if (frame.type === 'host_tool_result') {
     if (frame.id === 'bypass-done' || frame.id === 'bypass-review') {
       await log({ event: 'bypass-result', id: frame.id, rejected: frame.isError === true });
@@ -112,13 +161,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
     if (frame.isError === true) { await log({ event: 'host-rejected', id: frame.id }); settled = true; send({ type: 'session_settled' }); continue; }
     if (frame.id === 'evidence') host('result', 'backlog_result', { revision: ticket!.revision, status: 'complete', files: session.authorFiles, evidence: ticket!.criteria.map(criterion => ({ criterion, evidence: 'Synthetic author wrote/read proof.txt: verified.' })) });
-    else if (frame.id === 'result') { if (config.scenario === 'blocked' || config.scenario === 'recovery' && session.turns === 1) continue; settled = true; send({ type: 'session_settled' }); }
+    else if (frame.id === 'result') { if (config.scenario === 'blocked' || config.scenario === 'recovery' && session.turns === 1 || engineering && !hostFailure && session.turns === 1 || config.scenario === 'engineering-chain' && session.turns === 2) continue; settled = true; send({ type: 'session_settled' }); }
     else if (frame.id === 'diff') host('source', 'candidate_source', { path: 'proof.txt' });
     else if (frame.id === 'source') {
       const revision = /revision ([a-f0-9]+)\./.exec(prompt)![1];
       const tree = /Candidate tree: ([a-f0-9]+)/.exec(prompt)![1];
       const criteria = JSON.parse(/Criteria: (\[[^\n]+\])/.exec(prompt)![1]) as string[];
-      const changes = config.scenario === 'always-findings' || config.scenario === 'findings' && reviewNumber === 1;
+      const changes = config.scenario === 'always-findings' || config.scenario === 'engineering-host-review-bound' || config.scenario === 'findings' && reviewNumber === 1;
       const verdict = config.scenario === 'inconclusive' ? 'inconclusive' : changes ? 'changes_required' : 'pass';
       host('review', 'backlog_review', { revision, sessionId: session.id, candidateTree: config.scenario === 'wrong-tree' ? '0'.repeat(40) : tree, verdict, findings: changes ? ['Improve proof implementation and repeat the original checks.'] : verdict === 'inconclusive' ? ['Product intent needs owner clarification.'] : [], criteria: criteria.map(criterion => ({ criterion, evidence: 'Independently read immutable proof.txt candidate blob and actual host command result (synthetic reviewer).' })) });
     } else if (frame.id === 'review') { settled = true; send({ type: 'session_settled' }); }
