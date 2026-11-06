@@ -28,7 +28,7 @@
 - Approvals bind to exact requirement revisions; edits invalidate approval. Automatic mode grants standing execution permission, not exemption from safety or acceptance gates.
 - Completion requires passing criterion reports with no unresolved submitted failed/blocked/not-run checks. Human-reviewed projects settle and stop before Needs review; a human accepts Done. Explicitly opted-in autonomous projects instead require exact-candidate host checks, fresh restricted nonauthor review, guarded local publication and stopped owned work before host Done. Dependencies require Done.
 - Request changes requires durable feedback linked to the reviewed run/revision and passed to later authorized attempts. Ready does not bypass scheduling gates.
-- Blocked work retains partial evidence and actionable unblock instructions; never falsely complete an unmet goal. Autonomous attempts permit only bounded same-session corrections and one commissioned incomplete-verification recovery; other blocked/failed/interrupted attempts require explicit retry, never automatic replay.
+- Blocked work retains partial evidence and actionable unblock instructions; never falsely complete an unmet goal. Autonomous attempts permit bounded same-session corrections and one shared commissioned recovery for incomplete verification or host-reproduced scoped engineering failures. Recovery retains original session, mode, deadline, cumulative accounting, workspace claim, and fresh verification/review/publication gates. Missing authority, ineffective repairs, and other blocked/failed/interrupted attempts require explicit assistance or reviewed retry, never uncertain mutation replay.
 
 ## Evidence and workspace safety
 
