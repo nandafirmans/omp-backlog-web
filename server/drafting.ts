@@ -166,7 +166,7 @@ export async function discoverExecutionModels(executable: string, requested: str
     return { models, model, thinkingLevels: [...new Set(supported.levels as string[])] };
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    throw new HttpError(503, 'OMP model discovery failed. Check audited OMP v18.12.6 or v18.13.1 and local provider authentication outside this application; no unrestricted fallback was attempted.');
+    throw new HttpError(503, `OMP model discovery failed. Check audited OMP ${auditedVersionLabel} and local provider authentication outside this application; no unrestricted fallback was attempted.`);
   } finally {
     try {
       if (rpc) await rpc.shutdown();
@@ -324,7 +324,7 @@ async function create(store: Store, repo: Repo): Promise<Draft> {
     draft.timer = setInterval(() => { void poll(draft); }, 1000); draft.timer.unref();
   } catch (error) {
     draft.snapshot.status = 'failed';
-    draft.snapshot.error ||= error instanceof HttpError ? error.message : `OMP failed while ${stage}. Configure audited OMP v18.12.6 or v18.13.1 and provider authentication outside drafting; unrestricted fallback is prohibited.`;
+    draft.snapshot.error ||= error instanceof HttpError ? error.message : `OMP failed while ${stage}. Configure audited OMP ${auditedVersionLabel} and provider authentication outside drafting; unrestricted fallback is prohibited.`;
   } finally { draft.locked = false; draft.initialize(); }
   if (draft.snapshot.status === 'failed') await stop(draft);
   return draft;

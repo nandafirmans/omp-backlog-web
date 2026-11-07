@@ -136,6 +136,8 @@ Drafts/uploads remain tab-local until creation; reload discards the conversation
 
 Drafting, execution-model discovery, and restricted acceptance review support audited **OMP v18.12.6, v18.13.1, v18.13.3, and v18.16.0** ([18.16.0 compatibility and namespace isolation](docs/omp-18.16.0-compatibility.md)). They use a private HOME/config/discovery namespace and working directory, no ambient executable project discovery, and bounded host-selected context. The reviewer receives only its three host acceptance tools; drafting has no model tools. Existing local OMP authentication stays inside OMP; executable config-based credential resolution and custom model/plugin configuration are not inherited. Configure provider authentication outside this website. These capability restrictions are **not an OS sandbox**. Explicit metadata/model selection can make discovery/auth requests and OMP's credential-less connection probe; no drafting inference runs before Send.
 
+Installed **OMP v18.18.0 remains outside the audited allowlist**. The compatibility review exposed an existing token-accounting limitation, not a regression caused by that release. Phase 7.2 live recovery remains blocked pending acceptance of the outstanding compatibility gates. See [source audit, native evidence, and remaining gates](docs/omp-18.18.0-compatibility.md). Do not bypass the version guard.
+
 Drafting limits: four live conversations; 32 KiB prompt; 128 KiB per text reference; 512 KiB per image subject to 256 KiB combined readable context and the inbound RPC frame limit; 16 turns; 32K accounted session tokens; two minutes/turn; ten-minute idle and 45-minute session expiry. Ordinary ticket attachment limits still apply. Previously transmitted images prevent switching that conversation to a text-only model; start a fresh conversation instead.
 
 ### Editor controls
@@ -224,6 +226,8 @@ Hooks, signing, external diff drivers and clean filters are not executed. Git id
 Each run has a private requirements/attachment snapshot and a fresh OMP session. The scheduler advances between tickets; OMP goal mode continues within a ticket. No additional `/loop` is needed. Time and token limits prevent indefinite unattended continuation.
 
 Token accounting includes the OMP session's reported usage, including repeated context/cache tokens and resumed turns—not just newly generated output. Large global instruction sets can consume the default budget quickly. Set a deliberate budget in Settings, or explicitly choose **No cumulative token limit**. A configured cap still records Failed on exhaustion and requires review rather than silently increasing limits.
+
+**Known token-accounting limitation.** OMP's reported totals can omit consumed tokens from discarded responses outside the active conversation. Backlog Web cannot enforce a token cap against usage the API does not report. Displayed consumption is therefore not a complete billing ledger.
 
 Run details separate **Cumulative run consumption** (formatted total/budget and percentage) from **Current context window · estimate** (used/capacity). They show actual reported model/thinking, sample time and native compaction state; missing legacy telemetry stays unknown. Sampling is periodic, not a hard provider-side spending cap, and usage may overshoot between samples. Context compaction cannot refund consumed tokens.
 

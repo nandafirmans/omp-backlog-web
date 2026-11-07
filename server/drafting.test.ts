@@ -99,9 +99,10 @@ test('execution discovery permits the audited newer release but rejects unknown 
   for (const release of ['18.13.1', '18.13.3', '18.16.0']) await fixture(async ({ executable }) => {
     expect((await discoverExecutionModels(executable, '')).model).toBe('fixture/vision');
   }, `release-${release}`);
-  await fixture(async ({ executable }) => {
-    await expect(discoverExecutionModels(executable, '')).rejects.toThrow('require audited OMP');
-  }, 'unaudited-release');
+  for (const mode of ['release-18.18.0', 'unaudited-release']) await fixture(async ({ root, executable }) => {
+    await expect(discoverExecutionModels(executable, '')).rejects.toMatchObject({ status: 503 });
+    await expect(stat(join(root, 'child.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
+  }, mode);
 }, 15000);
 
 test('draft protocol supports exact models, clamped thinking, safe host context and follow-up without ticket side effects', async () => {

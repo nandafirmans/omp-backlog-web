@@ -246,6 +246,15 @@ Strict TypeScript and full-project ESLint passed; after adding the opt-in test, 
 
 The first combined deterministic command exceeded its 300-second shell deadline without returning test totals. Subsequent smaller batches all passed: 66 tests/352 assertions across `autonomous-recovery`, `recovery`, `runtime`, `rpc-retry`, `autonomy` and `autonomy-policy`; 35 tests/373 assertions in `runtime-integration`; 54 tests/830 assertions in `autonomy-runtime`. Total: **155 passed, 1,555 assertions, zero failures** across eight files. Negative cases include unauthorized prerequisites, revoked policy/revision, exhausted shared allowances and budgets, protected reviewer reserves, ineffective repairs, pause/resume and interrupted/restarted mutation without replay. These are deterministic process/Git checks, not provider evidence.
 
+#### OMP 18.18.0 compatibility assessment, November 7, 2026
+
+The later source and native compatibility assessment keeps **18.18.0 blocked**. Real installed startup/discovery controls and independently executed extension/custom-tool/ancestor-plugin sentinels passed. A native imported-journal accounting probe found that identical known usage totals 146 on the active branch but zero as off-branch discarded-turn usage, including the final RPC sample. The statistics implementation is unchanged from 18.16.0; upstream's improved durable journal does not make `get_session_stats` cumulative across branches or context windows.
+
+This is an existing token-accounting limitation, not a regression caused by the release under review. The API can omit consumed tokens from discarded responses outside the active conversation, so reported totals cannot establish a complete billing ledger.
+
+The allowlist, restricted reviewer authority, original session/mode, token caps, deadlines, correction/recovery allowances, and CSV live scenario remain unchanged. Direct native model metadata includes `openai-codex/gpt-6.1-sol` and `low` thinking, but the application's live preflight still rejects the installed release. No provider-backed implementation or recovery was attempted. See the [exact source comparison, proof tiers, verification results, and actionable unblock requirements](omp-18.18.0-compatibility.md).
+
+
 
 
 ### Publication recovery and workspace limits
