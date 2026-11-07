@@ -95,11 +95,11 @@ test('execution model discovery has no invented default and rejects unsafe or st
   }, 'discovery-stall');
 }, 20000);
 
-test('execution discovery permits the audited newer release but rejects unknown isolation profiles', async () => {
-  for (const release of ['18.13.1', '18.13.3', '18.16.0']) await fixture(async ({ executable }) => {
+test('execution discovery permits audited native releases but rejects unknown isolation profiles', async () => {
+  for (const release of ['18.13.1', '18.13.3', '18.16.0', '18.18.0']) await fixture(async ({ executable }) => {
     expect((await discoverExecutionModels(executable, '')).model).toBe('fixture/vision');
   }, `release-${release}`);
-  for (const mode of ['release-18.18.0', 'unaudited-release']) await fixture(async ({ root, executable }) => {
+  for (const mode of ['release-18.18.1', 'unaudited-release']) await fixture(async ({ root, executable }) => {
     await expect(discoverExecutionModels(executable, '')).rejects.toMatchObject({ status: 503 });
     await expect(stat(join(root, 'child.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, mode);
