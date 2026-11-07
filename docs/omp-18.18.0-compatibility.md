@@ -1,5 +1,17 @@
 # OMP 18.18.0 compatibility assessment
 
+## P0 scoped release acceptance — November 7, 2026
+
+**Current decision: v18.18.0 is enabled for the existing native RPC and restricted-startup boundary.** This is a deliberate, limited acceptance of the known accounting risk for functional live-recovery validation, not evidence that complete lifetime usage reporting was repaired. The earlier blocked decision and failed 146-token regression below are preserved as historical audit evidence. All pre-existing exact-version checks, reviewer restrictions, deadlines, correction/recovery allowances and guarded local publication controls remain in place.
+
+Native audits previously exercised 18.18.0 protocol negotiation, session/goal lifecycle, pstack skill invocation, restricted tool registration and ancestor plugin isolation. They did **not** prove paid-provider recovery or exhaustive task/worker behavior. `get_session_stats` can omit discarded/background usage, and the failing native cumulative-usage regression remains an open known limitation for *all* audited releases, including 18.16.0. Reported token caps are best-effort guardrails, **not guaranteed lifetime usage or monetary spending caps**. Do not increase or reset budgets to compensate.
+
+The next separately authorized P0 gate is `OMP_BACKLOG_LIVE_TESTS=1 bun test server/recovery-live.test.ts` on a machine with installed authenticated OMP v18.18.0. This opt-in test may consume provider usage and might report PARTIAL/INCONCLUSIVE if no actual host-managed repair occurs. No live-provider test is claimed in this compatibility-only change. Keep the 146-token regression red until an upstream cumulative usage source can genuinely satisfy it.
+
+---
+
+### Earlier audit record (historical blocked decision)
+
 ## Supported-version decision
 
 Assessment date is November 7, 2026. **OMP 18.18.0 remains blocked.** Startup isolation passed, but the audit exposed an existing token-accounting limitation: native session statistics omitted known discarded-turn usage. This is not a regression caused by the release. The outstanding accounting guarantee prevents extending the audited allowlist.

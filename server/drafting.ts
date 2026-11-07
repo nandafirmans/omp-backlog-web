@@ -29,7 +29,8 @@ interface Draft {
 }
 interface Prepared extends DraftPreparation { message: string; images: { type: 'image'; mimeType: string; data: string }[]; bytes: number; prompt: string }
 
-// Audited startup controls for v18.12.6, v18.13.1, v18.13.3 and v18.16.0.
+// Audited native startup/isolation controls for v18.12.6, v18.13.1, v18.13.3, v18.16.0 and v18.18.0.
+// These release checks do NOT establish complete lifetime token accounting.
 // Empty namespaces are established BEFORE loading OMP; --no-tools alone is unsafe.
 // Local provider auth stays inside OMP through its existing DB, not application code.
 // This reduces capabilities, not OS permissions; it is deliberately not a sandbox.
@@ -47,7 +48,7 @@ const profile = {
   startup: { checkUpdate: false, setupWizard: false, showSplash: false, quiet: true },
   marketplace: { autoUpdate: 'off' }, power: { sleepPrevention: 'off' }, magicKeywords: { enabled: false },
 };
-const auditedVersions = ['18.12.6', '18.13.1', '18.13.3', '18.16.0'];
+const auditedVersions = ['18.12.6', '18.13.1', '18.13.3', '18.16.0', '18.18.0'];
 const auditedVersionLabel = auditedVersions.map(version => `v${version}`).join(', ');
 
 function launchEnv(directory: string): NodeJS.ProcessEnv {
