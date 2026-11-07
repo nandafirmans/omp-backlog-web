@@ -172,3 +172,99 @@ Starting and ending application HEAD are both `a3d25edb0aac6b51746cf96526f016194
 Final independent security/evidence review found no patch-introduced security finding and endorsed retaining the compatibility block. It did not execute checks or independently certify the supplied runtime results. Its required correction was to qualify unavailable original `/tmp` accounting proof; the retention statements above now do so. The first ordinary reviewer failed with a provider usage limit and produced no verdict. The replacement used a distinct security-reviewer session, not a claim of model-family diversity.
 
 The session-local decision trail also records malformed prefixes in its first three rows and date-only placeholder timestamps. Those timestamps are not measured event times. Some job/output pointers are transient. The trail is an explanatory record, not an execution receipt or clean machine-readable export.
+
+## Phase 7.3 — cumulative accounting feasibility
+
+**Decision: missing native capability; no partial ledger or version enablement.** The raw entry RPC can recover the isolated discarded-turn payload, but it cannot establish complete lifetime consumption for normal author execution. The application therefore still has no authoritative lifetime accounting source. Existing counters and historical “cumulative” labels must not be interpreted as a proven ledger or provider billing.
+
+This follow-up starts at application HEAD `d2a4b5fe3f8e270c21161ec3d352ba6a4b75d50b`. Installed native OMP reports `omp/18.18.0`. The original 146-token assertion remains unchanged; returning zero is still a failure.
+
+### Host accounting audit
+
+| Path | Source and persistence | Guarantee / gap |
+| --- | --- | --- |
+| Author polling, `runtime.ts` launch interval | `get_session_stats`; autonomous `authorTokens` takes a maximum; human-reviewed progress takes the latest sample | Active-window samples, not lifetime events. A maximum cannot recover an unsampled discarded turn. |
+| Author settlement, `authorStopped()` | Same sample before pausing/shutting down | Missing usage is still missing; sampling before shutdown does not prove no later consumption. |
+| Pause/cancel/failure, `stop()` | Best-effort `finalSessionStats()`, followed by goal pause, abort and mandatory owned shutdown | Final-sample errors are swallowed. No accounting-completeness state is persisted. |
+| Independent review, `reviewCandidate()` | Local sampled maximum; callback adds it to the previous reviewer total | Separate session consumption is added once per invocation, but no durable per-session usage-event checkpoint exists. Final-sample failure is swallowed. |
+| Recovery/correction | Same author session, immutable configuration and deadline; `tokensBefore`/`tokensAfter` snapshots | Preserves observed counters, not unobserved consumption. |
+| Limits and reserves | `assertAutonomyAuthority()`, launch/polling checks, `recoveryAllowance()` and `repairReserve()` consume these counters | Whole-attempt cap, 6,144-token repair admission and 4,096-token protected reserve inherit the accounting gap. Verification/review/publication authority checks do not repair it. |
+| Backend restart | `Store.save('runs', run)` persists whole run JSON in SQLite; runtime reconciles process/workspace ownership | No usage-entry IDs, reconciliation cursor, last complete reconciliation or explicit uncertainty checkpoint. |
+| Compaction | `sampleRunState()` records native context estimate and compaction telemetry separately | Context size is not consumption. No ledger reconciliation occurs at compaction or branch changes. |
+| UI / proof | `RunUsage`, `LifecycleProgress`, `RecoveryHistory`, and `recovery-live.test.ts` consume stored samples/snapshots | Displays and proof arithmetic do not independently establish cumulative completeness. |
+
+Standard and pstack use these same paths. No native goal budget, deadline, engineering-mode snapshot, correction/recovery allowance, reviewer tool, host acceptance gate or publication gate was changed.
+
+### Public journal contract and event identities
+
+At both exact endpoint tags, [`selectRpcEntries()`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/modes/rpc/rpc-compat.ts) returns all canonical entries in append order, or entries strictly after the ID supplied in `since`. An unknown ID throws `Unknown entries cursor`; native dispatch returns a failed response with code `unknown_since`. `leafId` identifies the selected conversation branch, not an accounting high-water mark. The [18.16.0 selector](https://github.com/can1357/oh-my-pi/blob/650f3a108229ee11bf68ba3377f4e8c3391cd424/packages/coding-agent/src/modes/rpc/rpc-compat.ts) has the same semantics.
+
+The [actual version-3 schema](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/session-entries.ts) gives entries `id`, `parentId`, `timestamp`, and optional `activeLeafId`. A `model_usage` has `purpose`, `api`, `provider`, `model`, `usage` and `stopReason`; an assistant carries usage inside `message`. These are journal-record identities, not a documented immutable provider-attempt identity. Replaying an entry must not add consumption again. `activeLeafId` must not filter lifetime consumption.
+
+The native regression now also exercises cursor replay, strict-after slicing, an empty tail, off-branch retention and rejection without mutation of an unknown cursor. These checks validate the entry interface; they do not constitute a durable host ledger.
+
+[`SessionEntryIndex.usageSnapshot()`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/session-manager.ts#L425-L455) and [`SessionManager.getUsageStatistics()`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/session-manager.ts#L3222-L3225) are different from RPC statistics: the index totals all currently loaded entries, including assistant usage, `model_usage` and parent task-result usage. That is broader than the active branch, but still not a provider-attempt lifetime ledger. RPC `get_session_stats` does not call it. Merely exposing that index through another RPC would not account for unjournaled side calls.
+
+The [discard implementation](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/session-manager.ts#L4076-L4114) removes the assistant entry, rebuilds the index, then creates a new-ID `model_usage` carrying the removed usage. A host that previously counted the assistant cannot count this replacement as new consumption. There is no `replacesUsageEventId` in that usage entry; matching identical counts/timestamps is not proof. An unknown cursor requires reconciliation, not restarting from zero. A [branched session](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/session-manager.ts#L4144-L4225) can copy only the selected path to a new session/file; original-run accounting must retain the original lineage and cannot inherit the shorter conversation as its total.
+
+`get_entries` has no page-size/byte-limit or journal-generation parameter. Incremental reads avoid old records but can still exceed Backlog's 64 MiB logical-frame bound in one response. A future adapter must fail uncertain on overflow, malformed/truncated records or invalidated history, never silently trim usage. Full reconciliation from the original journal can validate available records, but cannot recreate usage never journaled.
+
+### Decisive missing evidence: background provider calls
+
+Native [skill-description compression](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/extensibility/skill-descriptions.ts#L100-L149) calls `instrumentedCompleteSimple()` on a separately selected fast model. Its `onAttempt` callback records only `message.usage.cost.total` in the tree cost gate. The [description store and scheduling code](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/extensibility/skill-descriptions.ts#L298-L533) persist compressed text/unusable-answer cache rows, not token counts or usage-event identities. The [`CostGate`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/cost-gate.ts#L52-L127) retains a process-local monetary counter; it is not a durable token ledger exposed by RPC.
+
+Therefore a clean, apparently settled parent/child journal can omit independently consumed tokens. Deduplicating all visible `get_entries` records cannot prove completeness. Missing an aggregate RPC alone would not be a blocker; missing durable event evidence is. Disabling native skills/background behavior to make selected fixtures pass would change the requested execution behavior, not repair accounting.
+
+A disposable real-18.18.0 loopback probe exercised this path without paid inference: visible synthetic skill, private empty cache/HOME/config, native discovery enabled only inside that private namespace, explicit `modelRoles.smol`, and a non-secret loopback-only authentication sentinel. One startup compression request received a valid streamed response with input 101, output 17 and total 118. Subsequent `get_session_stats` returned zero and `get_entries` contained neither assistant usage nor `model_usage`; owned shutdown was observed. The successful probe ran as `OMP_BACKLOG_NATIVE_TESTS=1 bun test server/rpc-native.test.ts -t native_skill_compression` while its temporary body was present, then was removed rather than pinning the missing behavior as a passing regression. This is a source-backed observed interface gap, not provider billing evidence or a retained standalone receipt.
+
+Earlier probe iterations did not establish the gap: `auth:none` cannot satisfy the compressor's credential lookup; disabling native discovery kept the skill out of the visible catalog; a non-streaming fixture response was invalid for the selected streaming API. The final probe corrected those fixture prerequisites and passed its observation assertions. It did not launch a foreground prompt, task, worker or real provider.
+
+Cache warming must not be confused with this gap: [`#recordCacheWarmUsage()`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/agent-session.ts#L6243-L6261) does append `model_usage`. Such usage can still be absent from active-window statistics. Compaction side-call completeness remains unproven; no claim of complete compaction accounting follows from a compaction metadata entry.
+
+### Child and reviewer attribution
+
+Completed child usage is aggregated into parent `task` result `details.usage`, which [`SessionStatsTracker`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/session/session-stats.ts) adds alongside parent assistant usage. Child journals and that parent aggregate are alternate representations: adding both double counts. `SingleResult.tokens`/progress counters are not interchangeable with full input/output/cache usage.
+
+[`lostRunResult()`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/thread/executor-routing.ts#L69-L105) returns a failed worker result with `tokens: 0`, `requests: 0`, and no `usage`. This is detectable failure, not evidence of zero consumption; affected work must remain uncertain. It does not by itself make an aggregator impossible, because a host could block that outcome.
+
+[`RpcSubagentRegistry`](https://github.com/can1357/oh-my-pi/blob/b5a6b2f7e5b6606b6562e678ead83f21738f34a0/packages/coding-agent/src/modes/rpc/rpc-subagents.ts) removes terminal snapshots and retains at most 256 transcript references in memory. Child transcript reads use a byte cursor, report reset only when the offset exceeds current size, and return empty data for a missing file. This is observability, not a durable exhaustive child-usage inventory after restart. Completed, discarded, failed, interrupted and still-running children cannot be certified complete from a successful parent sample.
+
+Independent reviewers must use their own immutable session IDs in any future ledger, then aggregate once by event/session identity. Existing reviewer maxima do not satisfy that contract. No new model tool is needed: accounting remains privileged host work; `candidate_diff`, `candidate_source`, and `backlog_review` remain the only reviewer tools.
+
+### Minimal upstream API enhancement
+
+Proposed new public `get_usage_ledger` RPC, not an API currently available in either audited tag:
+
+- Immutable root/session identity and durable child lineage; unique provider-attempt/event identity surviving transcript discard, compaction and branch rewrites.
+- Append-only usage receipts for foreground, child/worker and side calls, including skill compression, compaction and cache warming. Parent task aggregates explicitly reference covered events rather than masquerading as new consumption.
+- Input/output/cache-read/cache-write and reported total tokens; reasoning metadata with documented overlap, not another blindly added field. Monetary cost remains separate.
+- Durable attempt-start/finish or uncertainty markers. Lost workers, interrupted requests, provider-reported incomplete usage and failed persistence cannot become zero; completeness must explicitly remain unknown.
+- Bounded incremental pages with stable cursor, journal generation, explicit invalid-cursor/error responses, and a reconciliation/completeness watermark covering all owned pending calls. Settlement alone is insufficient.
+
+With that contract, Backlog can checkpoint `(runId, role, sessionId)`, event IDs, cursor/generation, token subtotals, last successful reconciliation and completeness in the existing SQLite store, transactionally before author/recovery/review/publication admission. Replays become idempotent; separate reviewer sessions aggregate once; missing evidence requires assistance. Original budgets and deadlines remain unchanged. This is a proposed architecture, **not implemented functionality**.
+
+Polling and asynchronous in-flight requests can overshoot a token threshold even with a correct ledger. Neither tokens nor OMP cost estimates establish an exact provider monetary spending cap.
+
+### Phase 7.3 executed checks and remaining acceptance
+
+| Check | Observed result |
+| --- | --- |
+| Full ordinary `bun test` | 287 passed, 15 opt-in skips, zero failures across 36 files; 447.80 seconds. An earlier 300-second attempt timed out, not a completed suite result. |
+| Focused `recovery`, `autonomous-recovery`, `rpc-retry`, `execution` | 44 passed, zero failures. |
+| Native `engineering-native`, `restricted-native`, `rpc-native` | Seven passed, one failed. The unchanged off-branch 146-token invariant is the sole failure; active-branch 146 and the new cursor checks execute before it. |
+| Focused native imported-journal check | Fails at the unchanged expected-146 assertion; observed off-branch total remains zero. Cursor replay/strict-after/empty-tail/unknown-cursor checks passed before that assertion in both branches. |
+| Disposable native compression probe | One passed observation probe: supplied 118-token response, no journal usage receipt, zero RPC total. Not an acceptance pass. Probe removed afterward. |
+| Strict TypeScript and full ESLint | Passed. |
+| `bunx vite build` | Passed; warning about chunks above 500 kB remains. |
+
+The full ordinary suite covers the existing autonomous runtime, engineering modes, recovery and publication fixtures; those passing protocol fixtures do not prove native accounting completeness. A combined six-file focused runtime attempt also exceeded its initial 300-second deadline. No paid Phase 7.2 live-recovery test ran. Native completed/failed/discarded/interrupted child and worker provider workloads were not launched; their attribution findings above are source evidence, not native execution claims.
+
+Phase 7.3's durable ledger, completeness gates and requested new ledger regression matrix are **not delivered**: the prerequisite native event evidence is missing. The original native accounting regression intentionally remains red, and previously supported versions remain listed without inventing stronger accounting guarantees for them. OMP 18.18.0 is unsupported; Phase 7.2 real-provider validation remains blocked.
+
+Changed files: `server/rpc-native.test.ts` (native cursor boundary assertions), `server/restricted-native.test.ts` (exact native model/thinking selection), `server/engineering-native.test.ts` (prevent discovery-only skill compression), `README.md`, `docs/current-agent-workflow.md`, and this document. Production runtime, contracts, store, recovery/live scenario and version/error-message allowlist remain unchanged. Starting and ending HEAD: `d2a4b5fe3f8e270c21161ec3d352ba6a4b75d50b`. No application commit, push, merge, deployment, tool installation or global OMP configuration change occurred.
+
+After the final restricted-test assertions were added, `OMP_BACKLOG_NATIVE_TESTS=1 bun test server/restricted-native.test.ts` passed its one test, followed by passing strict TypeScript and full ESLint. Protected startup selected exact `openai-codex/gpt-6.1-sol`, exposed `low` as supported, retained exact model plus `low` after host selection, and registered only the three review tools. This submitted no inference.
+
+The metadata-only author discovery fixture now sets `skills.manualSkills: ['*']` in its disposable overlay. Command discovery stays enabled; hiding catalog descriptions prevents startup description compression. Its final native run passed all four discovery controls, followed by passing strict TypeScript and full ESLint. Earlier discovery invocations inherited the installed author configuration and did not monitor background provider requests, so “no prompt submitted” must not be read as proof of zero incidental provider activity. No paid foreground/live-recovery workload was launched. Production author behavior and global configuration remain unchanged.
+
+The separate `autonomy-runtime` diagnostic attempt exceeded 240 seconds without a completed verdict. Its cases are covered by the completed full-suite pass above; this timeout is not reported as a focused pass. The previously observed owned fixture PID no longer existed after that attempt; no unrelated process was stopped.

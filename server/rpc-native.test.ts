@@ -364,6 +364,15 @@ nativeTest('native_imported_journal: cumulative stats retain discarded-turn 146 
       assert.equal(retained.purpose, 'discarded-turn');
       assert.deepEqual(retained.usage, usage);
       if (offBranch) assert.equal(retained.activeLeafId, 'user');
+      assert.equal(journal.leafId, 'branch');
+      const afterUser = await rpc.command('get_entries', { since: 'user' });
+      assert.deepEqual((afterUser.entries as unknown[]).map(value => object(value).id), ['usage', 'branch']);
+      assert.deepEqual(await rpc.command('get_entries', { since: 'user' }), afterUser, 'Cursor replay must return the same durable records');
+      const afterUsage = await rpc.command('get_entries', { since: 'usage' });
+      assert.deepEqual((afterUsage.entries as unknown[]).map(value => object(value).id), ['branch']);
+      assert.deepEqual((await rpc.command('get_entries', { since: 'branch' })).entries, []);
+      await assert.rejects(rpc.command('get_entries', { since: 'unknown-accounting-cursor' }), /Unknown entries cursor/);
+      assert.deepEqual(await rpc.command('get_entries'), journal, 'Rejected cursor must not mutate the journal');
       const messages = await rpc.command('get_messages');
       assert(Array.isArray(messages.messages));
       assert(!messages.messages.some(value => object(value).role === 'assistant'));

@@ -37,6 +37,13 @@ nativeTest('restricted startup rejects ancestor plugin imports; removing only th
         expect(await stat(marker).then(() => true, () => false)).toBe(positive);
         expect(forbidden).toEqual([]);
         if (!positive) {
+          expect(state.model).toMatchObject({ provider: 'openai-codex', id: 'gpt-6.1-sol' });
+          const thinking = await rpc.command('get_available_thinking_levels');
+          expect(thinking.levels).toContain('low');
+          await rpc.command('set_thinking_level', { level: 'low' });
+          const selected = await rpc.command('get_state');
+          expect(selected.model).toMatchObject({ provider: 'openai-codex', id: 'gpt-6.1-sol' });
+          expect(selected.thinkingLevel).toBe('low');
           const names = ['candidate_diff', 'candidate_source', 'backlog_review'];
           await rpc.command('set_host_tools', { tools: names.map(name => ({ name, label: name, description: 'Synthetic restricted host tool.', loadMode: 'essential', parameters: { type: 'object', properties: {}, additionalProperties: false } })) });
           const active = await rpc.command('get_state');

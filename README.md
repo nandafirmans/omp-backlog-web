@@ -138,6 +138,8 @@ Drafting, execution-model discovery, and restricted acceptance review support au
 
 Installed **OMP v18.18.0 remains outside the audited allowlist**. The compatibility review exposed an existing token-accounting limitation, not a regression caused by that release. Phase 7.2 live recovery remains blocked pending acceptance of the outstanding compatibility gates. See [source audit, native evidence, and remaining gates](docs/omp-18.18.0-compatibility.md). Do not bypass the version guard.
 
+Phase 7.3 found that a host ledger derived only from `get_entries` would still be incomplete: background skill-description compression records cost without durable token events, discarded assistant replacements change entry IDs, and child observability is not a durable exhaustive usage inventory. No partial ledger or support bypass was added. Existing token samples are not proven lifetime consumption, including on previously supported releases. See [accounting audit and proposed minimal upstream API](docs/omp-18.18.0-compatibility.md#phase-73--cumulative-accounting-feasibility).
+
 Drafting limits: four live conversations; 32 KiB prompt; 128 KiB per text reference; 512 KiB per image subject to 256 KiB combined readable context and the inbound RPC frame limit; 16 turns; 32K accounted session tokens; two minutes/turn; ten-minute idle and 45-minute session expiry. Ordinary ticket attachment limits still apply. Previously transmitted images prevent switching that conversation to a text-only model; start a fresh conversation instead.
 
 ### Editor controls

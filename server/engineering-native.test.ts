@@ -35,7 +35,7 @@ async function withInstalledOmp(
     await mkdir(skill, { recursive: true, mode: 0o700 });
     await writeFile(join(skill, 'SKILL.md'), '---\nname: verify-synthetic\ndescription: Verify this disposable synthetic project.\n---\n\n# Synthetic project verification\n\nInspect only this disposable project. Do not invoke providers or modify global configuration.\n', { mode: 0o600 });
     const overlay = join(privateDirectory, 'config.yml');
-    await writeFile(overlay, 'goal:\n  enabled: true\n  continuationModes:\n    - rpc\n', { mode: 0o600 });
+    await writeFile(overlay, "goal:\n  enabled: true\n  continuationModes:\n    - rpc\nskills:\n  manualSkills:\n    - '*'\n", { mode: 0o600 });
     const env: NodeJS.ProcessEnv = { ...process.env, PI_NO_PTY: '1', PI_NO_TITLE: '1' };
     if (options.isolated) {
       env.HOME = join(privateDirectory, 'home');
