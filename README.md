@@ -261,6 +261,8 @@ Markdown preview skips raw HTML and unsafe URL protocols. Mermaid uses strict se
 
 ## Verification commands
 
+Pull requests targeting `main` and pushes to `main` use [ordinary GitHub CI](docs/ci.md): frozen Bun install, strict TypeScript, ESLint, Vite production build and deterministic tests. Native OMP checks remain explicit; paid-provider validation is never part of ordinary CI. Hosted results must be observed separately from local checks.
+
 ```bash
 bun run lint
 bun run typecheck
@@ -278,6 +280,8 @@ This uses private disposable configuration, a loopback synthetic model provider 
 For isolated verification, use a disposable repository and a separate `OMP_BACKLOG_DATA` directory. Do not run smoke tickets against existing projects. A real model run requires working OMP provider authentication; provider failures are execution failures, not completion evidence.
 
 Project-local recipe: [verify-backlog](.omp/skills/verify-backlog/SKILL.md), with a starter [feature map](.omp/skills/verify-backlog/features/README.md). Its helper uses installed Playwright, terminal-only owner setup and private disposable data; no automatic installs. Optional `--review-fixture` drives review paths using a protocol child, not a live provider. Explicit map maintenance lives in [maintain-backlog-verification](.omp/skills/maintain-backlog-verification/SKILL.md).
+
+For another repository, follow [verification commissioning](docs/verification-commissioning.md): scope authorization, map real entry points, prove a disposable defect fails and its correction passes, establish bounded host recipes and restricted candidate inspection, then record coverage limits. Preparing a recipe does not approve tickets, enable autonomy or change completion policy.
 
 New ticket runs submit `backlog_evidence` receipts before `backlog_result`: criterion, feature/entry point, method/command, reported outcome/details and recipe identity, optionally a sanitized png/jpg/txt/json artifact. Each criterion needs reported passing checks; unresolved failed/blocked/not-run journeys prevent completion. Reports are **agent claims**, not independent command verification. Host records receipt identity/time and artifact bytes/hash. Proof is private and run-owned (100 receipts, 512 KiB/file, 10 MiB/run), authenticated on download, retained after run teardown, and never uploaded as requirement attachments. Legacy runs remain readable with unverified text evidence.
 
