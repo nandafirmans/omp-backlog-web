@@ -23,7 +23,7 @@ export function recoveryCategory(diagnostic: string): RecoveryHistory['category'
   if (/(network|econn|enotfound|timed? ?out|infrastructure|out of memory|disk full|service unavailable)/iu.test(diagnostic)) return 'infrastructure';
   if (/no progress|repeated diagnostic/iu.test(diagnostic)) return 'no_progress';
   if (/bound reached|already claimed|retry.*exhaust/iu.test(diagnostic)) return 'retry_exhausted';
-  if (/budget|deadline|reserve/iu.test(diagnostic)) return 'budget_exhausted';
+  if (/\b(?:budget|deadline|reserve)\b/iu.test(diagnostic)) return 'budget_exhausted';
   return 'unknown';
 }
 
