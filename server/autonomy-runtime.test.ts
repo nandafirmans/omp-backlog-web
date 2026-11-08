@@ -95,6 +95,38 @@ test('autonomous author report alone never accepts; host recipe, independent ses
   });
 }, 30000);
 
+test('a different OMP major stops author admission before provider work or publication', async () => {
+  await fixture('unsupported-major', async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(['blocked', 'failed']).toContain(run.status);
+    expect(run.sessionId).toBeNull();
+    expect(run.pid).toBeNull();
+    expect(run.lifecycle?.verification).toEqual([]);
+    expect(run.lifecycle?.reviews).toEqual([]);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    expect(await readFile(join(h.repo.path, 'proof.txt'), 'utf8')).toBe('pending\n');
+    await expect(readFile(`${h.config}.events`, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  }, { engineeringMode: 'standard' });
+}, 30000);
+
+for (const scenario of ['reviewer-startup-tools', 'reviewer-startup-goal', 'reviewer-missing-tools', 'reviewer-extra-tools']) test(`${scenario} blocks reviewer inference and publication`, async () => {
+  await fixture(scenario, async h => {
+    const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start();
+    const run = await terminal(h);
+    expect(['blocked', 'failed']).toContain(run.status);
+    expect(run.lifecycle?.verification.at(-1)?.outcome).toBe('passed');
+    expect(run.lifecycle?.reviews).toEqual([]);
+    expect(run.lifecycle?.publication).toBeUndefined();
+    expect((await protocolEvents(h)).filter(event => event.reviewer && event.event === 'prompt')).toEqual([]);
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(parent);
+    expect(run.pid).toBeNull();
+  }, { engineeringMode: 'standard' });
+}, 30000);
+
 for (const engineeringMode of ['standard', 'pstack'] as const) test(`${engineeringMode} repairs eligible blocked engineering in its original session before one verified local commit`, async () => {
   await fixture('engineering-blocked', async h => {
     const parent = await git(h.repo.path, 'rev-parse', 'HEAD');

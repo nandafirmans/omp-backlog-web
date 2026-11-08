@@ -2,6 +2,37 @@
 
 This guide describes the implemented workflow, not full pstack parity. See [PLAN.md](../PLAN.md#10-planned-execution-loop-improvements) for delivery boundaries and remaining work, and [README.md](../README.md) for setup and navigation.
 
+## Current CLI compatibility
+
+OMP admission permits minor/patch upgrades within **major 18**, rather than an exact release allowlist. Different majors and unreadable version output fail before author, drafting, model-discovery or reviewer RPC startup; a new major requires compatibility review. RPC v2 negotiation, required command responses and restricted tool/goal state must also pass before inference. The reviewer starts without tools or a goal and must expose exactly the three host acceptance tools after registration. Private startup namespaces, disabled executable discovery and existing ownership, accounting, recovery and publication gates remain in place.
+
+Runtime capability reports cannot certify pre-startup plugin isolation for arbitrary future releases. Run native discovery/import-sentinel checks after upgrading OMP; these checks are not an OS sandbox or a live-provider recovery proof.
+
+## Latest real-provider validation
+
+The November 8, 2026 authorized CSV trial on installed OMP 18.18.1 is **PARTIAL**, not a recovery pass: first-attempt Standard implementation, exact-candidate host verification, distinct restricted reviewer Pass, one guarded local commit and automatic Done were independently confirmed. No recovery history, host repair authorization or author-session resume occurred. The original recipe passed again independently.
+
+The paid test stopped after publication on a separate harness assertion that counted normal host-owned `.omp-backlog/` metadata as a dirty workspace. That assertion was corrected without changing CSV acceptance or production behavior for the fixture; no second paid trial ran. Original proof remains unchanged; the independent assessment records the justified PARTIAL classification. P0 recovery remains unproven.
+
+| Observation | Retained evidence |
+| --- | --- |
+| Run / ticket | `d65da880-12cc-43f2-87e8-017d992e9444` / `recovery-live/T001` |
+| Requirement revision | `4741c4a6c71d150511685d112ad70d567ae7350dff7c94a5ebf2450fb9052c24` |
+| Original author session | `01a1b8be-6f27-714e-9015-582b2908c403` |
+| Restricted reviewer session | `01a1b8bf-b50c-7120-90e8-98af419472fd` |
+| Elapsed / reported tokens | 116.872 seconds / 422,342 (406,838 author + 15,504 reviewer); not complete lifetime usage or billing |
+| Recovery history / consumed allowances | Empty / zero corrections and zero recoveries |
+| Host receipt | `e1272f87-a8ff-4ca1-9afb-91775a73c28f`, original recipe exit 0 |
+| Candidate tree | `0e56c0aa66600591721c2969c2a93a7a1f73dece` |
+| Guarded commit | `7a9e3dca24aa92a7566a55551974222bee6e8e64`, parent `2adfeccd77871d9745599baf50ffea36fd2e4756`; only `csv.ts` changed |
+| Final durable state | Run Done / lifecycle complete / ticket Done / PID null |
+
+Observed UTC order on November 8: admission `01:20:49.727`; original author identity `01:20:51.685`; host verification finished `01:22:12.530`; reviewer Pass recorded `01:22:35.370`; publication intent recorded `01:22:40.753`; Done `01:22:41.357`. Independent inspection confirmed the durable records, unchanged recipe, exact commit parent/tree and stopped owned processes. Reviewer journal tool calls were only `candidate_diff`, `candidate_source` and `backlog_review`. Author claims, host-command receipts and reviewer judgments remain distinct.
+
+Private proof: `/tmp/omp-recovery-live-QZJEoL/proof.json`, `/tmp/omp-recovery-live-QZJEoL/independent-assessment.json` and `/tmp/omp-recovery-live-QZJEoL/private/backlog.sqlite`, with journals under the private runtime directory. Original proof still says INCONCLUSIVE because of the harness assertion; the independent assessment establishes PARTIAL. Disposable paths are not guaranteed across machine cleanup. Another paid trial requires new authorization; never inject a failure to manufacture recovery.
+
+
+
 ## What changed
 
 | Addition | Current behavior |
@@ -18,7 +49,7 @@ This guide describes the implemented workflow, not full pstack parity. See [PLAN
 
 ### Agent-assisted creation
 
-See [Create with agent](../README.md#create-with-agent-optional) for controls and limits. Conversation state is separate from ticket/run storage. Drafting uses a private startup namespace for audited OMP v18.12.6, disables executable discovery and model tools, resolves bounded selected context in host code, and escapes OMP's implicit file/model mention dispatch. Skills supply text only; their scripts cannot run. Normal execution retains its existing permissions and tools.
+See [Create with agent](../README.md#create-with-agent-optional) for controls and limits. Conversation state is separate from ticket/run storage. Drafting uses a private startup namespace, disables executable discovery and model tools, resolves bounded selected context in host code, and escapes OMP's implicit file/model mention dispatch. Skills supply text only; their scripts cannot run. Normal execution retains its existing permissions and tools.
 
 Model/thinking changes affect drafting only. PDF/Office and WebP remain explicitly reference-only unless replaced with readable input; unsupported context cannot silently disappear. Cancellation/errors preserve available output without replay. Drafting has no goal continuation, implementation evidence tools, approval or scheduler mutation.
 
@@ -71,7 +102,7 @@ Fresh admission snapshots effective model/thinking, token budget and time limit.
 
 Run details display formatted cumulative consumption/budget and estimated current context/capacity separately, with actual reported model/thinking, timestamps and native automatic-compaction state. Missing telemetry stays unknown. Native `set_auto_compaction` is enabled and confirmed before execution prompts; OMP owns threshold/method selection. The toggle is session-scoped in supported releases, not a global config write. Native compaction lifecycle events and polled state are surfaced without a second host compaction loop. Compaction can consume tokens and never resets the host's cumulative budget; periodic sampling may overshoot the limit. Context/compaction activity is not completion evidence.
 
-Installed OMP 18.13.3 was reproduced failing the old discovery guard, then passed restricted metadata discovery (18 models) after scoped source review and exact-version support. Unknown versions still reject; diagnostics identify detected versions. See [compatibility scope and primary sources](omp-18.13.3-compatibility.md). Optional-budget blank-to-zero formatting was reproduced by the browser and fixed; clearing now preserves inheritance.
+Optional-budget blank-to-zero formatting was reproduced by the browser and fixed; clearing now preserves inheritance. Current CLI admission follows the major-version and capability checks above.
 
 Verification: changed-code ESLint and actual-React/synthetic-API UI checks passed. Covered model/thinking/budget selection, canceled save/navigation, stale-save reconciliation, saved choices/reload, cleared-budget inheritance, separate usage meters, simulated compaction/context reduction without cumulative reset and missing legacy telemetry. Dark/Light desktop/mobile were inspected. UI proof is recorded in the design-language entry. Existing blocker-recovery UI was also re-driven at `/tmp/opencode/blocker-recovery-ui-KORDXe`. Backend/API/guard/protocol regression tests were added or extended, not run under lint-only policy. No live ticket/provider/native compaction, strict TypeScript or build was run; metadata discovery success does not verify those journeys.
 
@@ -130,7 +161,7 @@ Extension-disabled Standard proof: `/tmp/omp-engineering-standard-live-hJfaaG/pr
 
 These successful greeting samples all exceeded the unchanged 100,000-token new-store default. They do not establish that default as sufficient for either mode. No cap was automatically raised or reset within a run.
 
-Frontend verification used actual React/styles in isolated Chromium with synthetic APIs, separate from backend/native proof. Settings/ticket mode save/cancel/inheritance, unsaved-navigation/restore, active-owner disabling, legacy labels, immutable history and author/reviewer totals were exercised. Tokyo Night/Light desktop and 390px mobile were inspected without document overflow or recorded runtime errors. Helper contrast measured 6.43:1 dark and 6.04:1 Light. Private UI proof: `/tmp/omp-engineering-ui-mQQjTW/result.json`; [requested AFTER audit](../anti-slop/audit-001-2026-11-06.md).
+Frontend verification used actual React/styles in isolated Chromium with synthetic APIs, separate from backend/native proof. Settings/ticket mode save/cancel/inheritance, unsaved-navigation/restore, active-owner disabling, legacy labels, immutable history and author/reviewer totals were exercised. Tokyo Night/Light desktop and 390px mobile were inspected without document overflow or recorded runtime errors. Helper contrast measured 6.43:1 dark and 6.04:1 Light. Private UI proof: `/tmp/omp-engineering-ui-mQQjTW/result.json`.
 
 Remaining limits of the Phase 7.1 evidence above include exhaustive feature-map/provider/playbook/theme/accessibility coverage, native-compaction triggers, and live pause/correction/blocker-restart journeys. Those continuation paths have protocol coverage, not live-provider proof. General blocker repair was not part of that checkpoint. Reviewed pstack restart context retains previously observed `skill://poteto-mode/playbooks/*.md` reads; legacy runs without those observations cannot recover an unrecorded selected playbook.
 
@@ -139,7 +170,7 @@ Remaining limits of the Phase 7.1 evidence above include exhaustive feature-map/
 
 Baseline was clean `main` at `652d5d746f7c87b395a802dbc35f2c9aee5849f1`. Installed OMP was 18.16.0. Separate installation inspection found enabled `pstack-pi` 0.15.36-pi.1; installed router/adapter bytes matched the local intended fork. Runtime provenance records only OMP's observed invocation path and tool reads, not an invented package revision or adherence claim.
 
-The installed-version audit found and reproduced an existing restricted-startup ancestor-plugin import gap. The private working directory now has its own empty `.omp` namespace anchor as well as `.git`. Exact 18.16.0 support was added only after source review and real positive/negative executable-import controls. Reviewer plugin discovery was not enabled. See [compatibility evidence and source links](omp-18.16.0-compatibility.md).
+The installed-version audit found and reproduced an existing restricted-startup ancestor-plugin import gap. The private working directory now has its own empty `.omp` namespace anchor as well as `.git`. Real positive/negative executable-import controls passed; reviewer plugin discovery was not enabled.
 
 Executed checks:
 
@@ -232,32 +263,53 @@ Run Evidence and the blocked-ticket panel show recovery history, failure categor
 - Real Chromium exercised the actual React run and blocker panels using synthetic intercepted API data. Dark and Light passed at 1,440 and 390 pixels without document overflow. Native Enter/Space disclosure, attempt token display, all recovery outcomes and manual retry cancellation preserved the operator note. Synthetic API screenshots are UI evidence, not backend/provider lifecycle proof.
 - Separate source correctness and security reviews passed after fixing diagnostic-scope authorization and final role-accounting defects. Review judgments are distinct from executed checks. No live-provider tests, production build, project commit, PR, push, merge or deployment were performed. The 100,000-token production default is unchanged.
 
-#### Real-provider recovery validation, November 7, 2026
+#### Native synthetic-provider recovery
 
-Validation is **INCONCLUSIVE**, not a live recovery pass. Baseline application HEAD was `0ecff9c30298f2b0377e690aa51b642e711e645f` with a clean working tree. Installed OMP reported `18.18.0`; the existing restricted-review startup guard accepts only audited `18.12.6`, `18.13.1`, `18.13.3` and `18.16.0`. The actual guard rejected `18.18.0` with HTTP 503 before model discovery or any author inference. No version spoofing, guard bypass, installation, methodology switch or repeated provider attempt occurred.
+`OMP_BACKLOG_NATIVE_TESTS=1 bun test server/recovery-native.test.ts` exercises installed `omp`, not a replacement RPC executable. The test reuses the private profile from `server/fixtures/native-provider.ts` (also used by `rpc-native.test.ts`). Each scenario runs in a separate Bun process with allowlisted environment and private HOME/XDG/auth-discovery roots before runtime initialization, so host commands and version checks cannot inherit real provider keys or the operator's auth database.
 
-`OMP_BACKLOG_LIVE_TESTS=1 bun test server/recovery-live.test.ts` now prepares a disposable committed TypeScript CSV module, unchanged verification recipe, approved two-criterion ticket and explicit autonomous policy. It uses Standard, `openai-codex/gpt-6.1-sol`, low thinking, one slot, a fixed 500,000-accounted-token cap, ten-minute deadline and one correction plus one recovery allowance. The scenario requires correct CSV encoding and independent parsing, covering delimiters, escaped quotes, LF/CR, whitespace and empty fields. It never instructs the author to leave a defect or invent evidence. First-attempt completion without host-managed engineering repair is reported as partial validation, not recovery success.
+Only test launch configuration is redirected to the loopback, no-auth `native-proof/synthetic-proof` model. Production scheduler, immutable approval/configuration, workspace ownership, RPC v2 negotiation, native tools/session journals, recovery classification/authorization, host verifier, restricted reviewer and guarded publication execute unchanged. Retries/fallback and unrelated background model features are disabled. Requests and responses have count/time/size bounds; unexpected requests fail. Every observed native model state must retain the loopback endpoint. This is configuration/process isolation, not an OS network or filesystem sandbox.
 
-Observed setup check exited 1 with `AssertionError: csv.ts encodeRow assertion failed`. This is a baseline engineering failure, **not** a provider-backed author failure or host-managed recovery. Private proof and isolated SQLite data remain at `/tmp/omp-recovery-live-aThBjU/proof.json` and `/tmp/omp-recovery-live-aThBjU/private`. The database contains one repository and one approved Ready ticket, with zero Runs. Initial disposable commit: `7aa3f5a312163c33169efae0a421cbf9976ff4e7`. No completion commit exists.
+| Scenario | Required native observation |
+| --- | --- |
+| `host_failure` | Native `write` creates a real whitespace defect; unchanged host recipe exits nonzero with `label.ts`/AssertionError; one correction resumes the original author; corrected tree gets fresh exit-zero verification, restricted review, one commit and Done. |
+| `author_blocker` | Native author executes the failing check and reports a scoped blocker; host independently reproduces it before consuming the shared recovery allowance once. |
+| `incomplete_verification` | Correct source but missing criterion receipt; narrow original-session recovery completes actual checks/reporting, without manufacturing a code failure. |
+| `nonreproducible` | Claimed source blocker contradicts a passing commissioned host command; assistance, no permission consumed, no reviewer/publication. |
+| `reviewer_escalation` | Separate reviewer inspects diff/source then requests unavailable shell access; native denial, absent write sentinel and no publication. |
 
-Preflight/scenario setup took 159 ms. Initial author, repair and reviewer consumption were all zero; all 500,000 tokens remain. Authentication and actual model availability were not established. Author continuation, recovery classification/history, fresh host verification, independent reviewer Pass, publication and automatic Done remain unverified with a real provider. Host-verification, author-reported-blocker and reviewer recovery sources remain distinct and none gained live proof here. Unblocking requires an already-audited installed executable or a separately reviewed compatibility/isolation audit for the new OMP version; simply adding a version string is insufficient.
+Continuity assertions inspect native state, real `--resume` arguments, one author journal/inode and correlated original write/check/report exchanges in the resumed model request. Durable observations retain observed → authorized → dispatched → recovered states and unchanged run/revision/mode/deadline/budget/workspace. Reviewer startup must be empty/no goal, then expose exactly `candidate_diff`, `candidate_source`, `backlog_review`; source inspection is correlated to its own tool-call result. A synthetic “pass” alone cannot satisfy host review. Success requires reopening SQLite, restarting the runtime and preserving the same Done record, refs/index and one publication commit without new sessions or requests.
 
-Strict TypeScript and full-project ESLint passed; after adding the opt-in test, TypeScript and changed-file ESLint passed again. The new test skips without the opt-in environment variable. Requested `bunx vite build` passed with the existing large-chunk warning (over 500 kB); no bundle optimization was attempted. The opted-in test itself failed at the genuine version guard, not at recovery execution. No confirmed application recovery defect was established, and production code/defaults were left unchanged.
+Private proof is retained on success and failure at the printed `/tmp/omp-recovery-native-*/proof.json` paths: selected native events, request metadata/result hashes (not complete provider requests or reasoning), session identities, durable recovery transitions, host receipts, candidate trees, reviewer calls, publication/restart metadata and final records. Fixed synthetic non-reasoning responses contain no provider credentials; string values are redacted before JSON serialization. Event/request streams are also retained incrementally for interrupted workers. An earlier worker deadline attempts shutdown; parent fallback validates communicated PID/start/boot/group identities before stopping only owned groups, including the host verifier. The ownership control checks mismatched identities and truncated records independently. Generated private native-addon caches are removed after shutdown; journals, proof, Git and SQLite remain. Proof directories are disposable; retention is not guaranteed across machine cleanup.
 
-The first combined deterministic command exceeded its 300-second shell deadline without returning test totals. Subsequent smaller batches all passed: 66 tests/352 assertions across `autonomous-recovery`, `recovery`, `runtime`, `rpc-retry`, `autonomy` and `autonomy-policy`; 35 tests/373 assertions in `runtime-integration`; 54 tests/830 assertions in `autonomy-runtime`. Total: **155 passed, 1,555 assertions, zero failures** across eight files. Negative cases include unauthorized prerequisites, revoked policy/revision, exhausted shared allowances and budgets, protected reviewer reserves, ineffective repairs, pause/resume and interrupted/restarted mutation without replay. These are deterministic process/Git checks, not provider evidence.
+Broader negative controls remain in `autonomous-recovery.test.ts`, `autonomy-runtime.test.ts` and `runtime-integration.test.ts`: credential/permission/dependency assistance, shared recovery exhaustion, ineffective/cosmetic repair, revision/policy revocation, recipe/candidate drift, unknown ownership, pre-authorization failure and publication restart reconciliation. Native tests add only CLI-sensitive source/tool/session/reviewer paths and owned-process cleanup, not a duplicate policy suite.
 
-#### OMP 18.18.0 compatibility assessment, November 7, 2026
+Evidence tiers are not interchangeable:
 
-The original source and native compatibility assessment kept **18.18.0 blocked**; its native security/RPC findings and accounting limitations remain valid. Real installed startup/discovery controls and independently executed extension/custom-tool/ancestor-plugin sentinels passed. A native imported-journal accounting probe found that identical known usage totals 146 on the active branch but zero as off-branch discarded-turn usage, including the final RPC sample. The statistics implementation is unchanged from 18.16.0; upstream's improved durable journal does not make `get_session_stats` cumulative across branches or context windows.
+- **Protocol fixtures:** deterministic host-policy/process/Git behavior with protocol-speaking child programs.
+- **Native synthetic provider:** deterministic injected recovery through actual installed OMP and native tools, without external inference. Successful positive scenarios report **NATIVE_INJECTED_RECOVERY_PASS**; exercised recovery failures report **NATIVE_INJECTED_RECOVERY_FAILED**; environment/native/infrastructure/ownership uncertainty reports **NATIVE_INJECTED_RECOVERY_INCONCLUSIVE**. Expected negative controls report their own pass, not successful recovery.
+- **Real-model evaluation:** provider/model quality and naturally occurring failures. **NATURAL_LIVE_RECOVERY_PASS** is reserved for a real-provider run with natural failure and observed recovery. The November 8 CSV result above remains PARTIAL.
 
-This is an existing token-accounting limitation, not a regression caused by the release under review. The API can omit consumed tokens from discarded responses outside the active conversation, so reported totals cannot establish complete lifetime token consumption. Token statistics alone do not establish provider billing.
+Known limitation found during harness development: the existing diagnostic category regex `/reserve/` also matches “preserve.” The recipe uses “retain internal spacing” to produce an unambiguous engineering diagnostic. Production classification was not changed; this validation does not establish recovery for every natural diagnostic wording. The separate native discarded-turn usage assertion remains intact and failing; original-session accounting continuity is not complete lifetime usage proof.
 
-The allowlist, restricted reviewer authority, original session/mode, token caps, deadlines, correction/recovery allowances, and CSV live scenario remain unchanged. Direct native model metadata includes `openai-codex/gpt-6.1-sol` and `low` thinking, but the application's live preflight still rejects the installed release. No provider-backed implementation or recovery was attempted. See the [exact source comparison, proof tiers, verification results, and actionable unblock requirements](omp-18.18.0-compatibility.md).
+November 8 installed OMP **18.18.1** validation: native recovery suite **6 passed**, focused recovery policy/runtime suites **70 passed**, full ordinary suite **293 passed, 21 skipped, zero failures** across 37 files. Existing RPC/engineering/restricted native suites had **7 passed, 1 failed**: the unchanged discarded-turn 146-token assertion. Strict TypeScript, full ESLint and the explicitly requested Vite build passed; Vite reported large-chunk warnings. No paid live test ran.
 
-Phase 7.3 audited author/reviewer sampling, limits/reserves, same-session recovery, shutdown, restart persistence and consumed-token display. The current implementation persists sampled maxima/latest statistics, not unique lifetime usage events. `get_entries` exposes off-branch records and rejects unknown cursors, but cannot establish complete consumption: native skill-description compression meters only cost without durable token receipts, discarded assistant replacement records get new IDs, and child transcript observability is not a durable exhaustive ledger. No partial adapter, private SDK import, fork, cap increase, security-boundary change or 18.18.0 enablement was introduced. See [source evidence, cursor/deduplication rules and proposed upstream capability](omp-18.18.0-compatibility.md#phase-73--cumulative-accounting-feasibility). Earlier “cumulative” UI/proof descriptions report application counters, not a newly proven lifetime guarantee; Phase 7.2 live recovery was blocked by the version guard during this investigation.
+Representative final positive proof bundles:
 
-**P0 scoped compatibility decision (November 7, 2026):** OMP v18.18.0 is accepted by the exact-version guard based on the previously recorded native RPC, pstack discovery and restricted-startup checks. The pre-existing discarded-turn/background/worker token-accounting limitation remains unresolved and is explicitly accepted for this functional-validation milestone: current caps are best-effort reported-usage controls, **not guaranteed lifetime token or billing limits**. Original deadlines, bounded corrections/recoveries, reviewer isolation and publication checks remain in force. The opt-in provider-backed CSV recovery test (`OMP_BACKLOG_LIVE_TESTS=1 bun test server/recovery-live.test.ts`) is now eligible to run in an authorized authenticated environment; it has **not** been executed or passed by this change.
+- Host correction: `/tmp/omp-recovery-native-host_failure-pqzn08/proof.json`.
+- Reproduced author blocker: `/tmp/omp-recovery-native-author_blocker-sXvsKG/proof.json`.
+- Incomplete verification: `/tmp/omp-recovery-native-incomplete_verification-kfLWI2/proof.json`.
 
+Host correction run `676f8b40-c38e-44ae-af9b-e9eba4474645` retained author session `01a1b8fe-3b87-7542-b52c-8f85e8dea26a`; reviewer `01a1b8fe-5ab0-725f-9f32-371fee1bd3cd` was distinct. Failed receipt `26bd070e-ee0d-43e3-be36-0b1fcb920e03` exited 1 on tree `fbe14f55739e5a66ac6fa3e9535f64a72cba5085`; fresh receipt `0656c887-db2a-4127-9fdc-69077ac8b513` exited 0 on corrected tree `23eb2b4d7116ac3ba926ed65fbe1ac26cd5f3fba`. One guarded commit `1366ddcf225e565b0bc448ad85e4dd810c62e219` changed only `label.ts`. SQLite/runtime restart preserved Done, refs/index, fourteen model requests and three native launches (original author, resumed author, reviewer), without another commit. Both other positive scenarios also reached durable Done with exactly one commit.
+
+
+
+#### Live recovery fixture and accounting limits
+
+`OMP_BACKLOG_LIVE_TESTS=1 bun test server/recovery-live.test.ts` prepares a disposable committed TypeScript CSV module, unchanged verification recipe, approved two-criterion ticket and explicit autonomous policy. It uses Standard, `openai-codex/gpt-6.1-sol`, low thinking, one slot, a fixed 500,000-reported-token cap, ten-minute deadline and one correction plus one recovery allowance. CSV acceptance covers delimiters, escaped quotes, LF/CR, whitespace and empty fields. A deliberately failing pre-author baseline is not a failed author attempt. First-attempt success without host-managed repair is PARTIAL; see the latest real-provider validation above.
+
+The known accounting regression remains unresolved: identical known usage totals 146 tokens on the active branch but zero as off-branch discarded-turn usage, including the final RPC sample. It is not a passing accounting test or a release-specific regression. Reported caps are best-effort controls, not guaranteed lifetime token or billing limits.
+
+Phase 7.3 found that sampled maxima/latest statistics and `get_entries` cannot establish complete consumption: skill-description compression lacks durable token receipts, discarded assistant replacements change IDs, and child observability is not an exhaustive durable ledger. No partial ledger was added. Recovery retains the original session, mode, deadline and reported accounting; compatibility admission does not repair this limitation.
 
 
 

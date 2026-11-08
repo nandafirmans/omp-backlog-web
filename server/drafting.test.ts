@@ -95,14 +95,20 @@ test('execution model discovery has no invented default and rejects unsafe or st
   }, 'discovery-stall');
 }, 20000);
 
-test('execution discovery permits audited native releases but rejects unknown isolation profiles', async () => {
-  for (const release of ['18.13.1', '18.13.3', '18.16.0', '18.18.0']) await fixture(async ({ executable }) => {
+test('execution discovery permits minor and patch upgrades but rejects a different or unknown major before RPC', async () => {
+  for (const release of ['18.18.1', '18.99.0']) await fixture(async ({ executable }) => {
     expect((await discoverExecutionModels(executable, '')).model).toBe('fixture/vision');
   }, `release-${release}`);
-  for (const mode of ['release-18.18.1', 'unaudited-release']) await fixture(async ({ root, executable }) => {
+  for (const mode of ['release-17.99.0', 'release-19.0.0', 'malformed-version']) await fixture(async ({ root, executable }) => {
     await expect(discoverExecutionModels(executable, '')).rejects.toMatchObject({ status: 503 });
     await expect(stat(join(root, 'child.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, mode);
+}, 15000);
+
+test('execution discovery rejects peers without the required RPC protocol', async () => {
+  await fixture(async ({ executable }) => {
+    await expect(discoverExecutionModels(executable, '')).rejects.toThrow('discovery failed');
+  }, 'incompatible-protocol');
 }, 15000);
 
 test('draft protocol supports exact models, clamped thinking, safe host context and follow-up without ticket side effects', async () => {
