@@ -263,6 +263,46 @@ Run Evidence and the blocked-ticket panel show recovery history, failure categor
 - Real Chromium exercised the actual React run and blocker panels using synthetic intercepted API data. Dark and Light passed at 1,440 and 390 pixels without document overflow. Native Enter/Space disclosure, attempt token display, all recovery outcomes and manual retry cancellation preserved the operator note. Synthetic API screenshots are UI evidence, not backend/provider lifecycle proof.
 - Separate source correctness and security reviews passed after fixing diagnostic-scope authorization and final role-accounting defects. Review judgments are distinct from executed checks. No live-provider tests, production build, project commit, PR, push, merge or deployment were performed. The 100,000-token production default is unchanged.
 
+#### Native synthetic-provider recovery
+
+`OMP_BACKLOG_NATIVE_TESTS=1 bun test server/recovery-native.test.ts` exercises installed `omp`, not a replacement RPC executable. The test reuses the private profile from `server/fixtures/native-provider.ts` (also used by `rpc-native.test.ts`). Each scenario runs in a separate Bun process with allowlisted environment and private HOME/XDG/auth-discovery roots before runtime initialization, so host commands and version checks cannot inherit real provider keys or the operator's auth database.
+
+Only test launch configuration is redirected to the loopback, no-auth `native-proof/synthetic-proof` model. Production scheduler, immutable approval/configuration, workspace ownership, RPC v2 negotiation, native tools/session journals, recovery classification/authorization, host verifier, restricted reviewer and guarded publication execute unchanged. Retries/fallback and unrelated background model features are disabled. Requests and responses have count/time/size bounds; unexpected requests fail. Every observed native model state must retain the loopback endpoint. This is configuration/process isolation, not an OS network or filesystem sandbox.
+
+| Scenario | Required native observation |
+| --- | --- |
+| `host_failure` | Native `write` creates a real whitespace defect; unchanged host recipe exits nonzero with `label.ts`/AssertionError; one correction resumes the original author; corrected tree gets fresh exit-zero verification, restricted review, one commit and Done. |
+| `author_blocker` | Native author executes the failing check and reports a scoped blocker; host independently reproduces it before consuming the shared recovery allowance once. |
+| `incomplete_verification` | Correct source but missing criterion receipt; narrow original-session recovery completes actual checks/reporting, without manufacturing a code failure. |
+| `nonreproducible` | Claimed source blocker contradicts a passing commissioned host command; assistance, no permission consumed, no reviewer/publication. |
+| `reviewer_escalation` | Separate reviewer inspects diff/source then requests unavailable shell access; native denial, absent write sentinel and no publication. |
+
+Continuity assertions inspect native state, real `--resume` arguments, one author journal/inode and correlated original write/check/report exchanges in the resumed model request. Durable observations retain observed → authorized → dispatched → recovered states and unchanged run/revision/mode/deadline/budget/workspace. Reviewer startup must be empty/no goal, then expose exactly `candidate_diff`, `candidate_source`, `backlog_review`; source inspection is correlated to its own tool-call result. A synthetic “pass” alone cannot satisfy host review. Success requires reopening SQLite, restarting the runtime and preserving the same Done record, refs/index and one publication commit without new sessions or requests.
+
+Private proof is retained on success and failure at the printed `/tmp/omp-recovery-native-*/proof.json` paths: selected native events, request metadata/result hashes (not complete provider requests or reasoning), session identities, durable recovery transitions, host receipts, candidate trees, reviewer calls, publication/restart metadata and final records. Fixed synthetic non-reasoning responses contain no provider credentials; string values are redacted before JSON serialization. Event/request streams are also retained incrementally for interrupted workers. An earlier worker deadline attempts shutdown; parent fallback validates communicated PID/start/boot/group identities before stopping only owned groups, including the host verifier. The ownership control checks mismatched identities and truncated records independently. Generated private native-addon caches are removed after shutdown; journals, proof, Git and SQLite remain. Proof directories are disposable; retention is not guaranteed across machine cleanup.
+
+Broader negative controls remain in `autonomous-recovery.test.ts`, `autonomy-runtime.test.ts` and `runtime-integration.test.ts`: credential/permission/dependency assistance, shared recovery exhaustion, ineffective/cosmetic repair, revision/policy revocation, recipe/candidate drift, unknown ownership, pre-authorization failure and publication restart reconciliation. Native tests add only CLI-sensitive source/tool/session/reviewer paths and owned-process cleanup, not a duplicate policy suite.
+
+Evidence tiers are not interchangeable:
+
+- **Protocol fixtures:** deterministic host-policy/process/Git behavior with protocol-speaking child programs.
+- **Native synthetic provider:** deterministic injected recovery through actual installed OMP and native tools, without external inference. Successful positive scenarios report **NATIVE_INJECTED_RECOVERY_PASS**; exercised recovery failures report **NATIVE_INJECTED_RECOVERY_FAILED**; environment/native/infrastructure/ownership uncertainty reports **NATIVE_INJECTED_RECOVERY_INCONCLUSIVE**. Expected negative controls report their own pass, not successful recovery.
+- **Real-model evaluation:** provider/model quality and naturally occurring failures. **NATURAL_LIVE_RECOVERY_PASS** is reserved for a real-provider run with natural failure and observed recovery. The November 8 CSV result above remains PARTIAL.
+
+Known limitation found during harness development: the existing diagnostic category regex `/reserve/` also matches “preserve.” The recipe uses “retain internal spacing” to produce an unambiguous engineering diagnostic. Production classification was not changed; this validation does not establish recovery for every natural diagnostic wording. The separate native discarded-turn usage assertion remains intact and failing; original-session accounting continuity is not complete lifetime usage proof.
+
+November 8 installed OMP **18.18.1** validation: native recovery suite **6 passed**, focused recovery policy/runtime suites **70 passed**, full ordinary suite **293 passed, 21 skipped, zero failures** across 37 files. Existing RPC/engineering/restricted native suites had **7 passed, 1 failed**: the unchanged discarded-turn 146-token assertion. Strict TypeScript, full ESLint and the explicitly requested Vite build passed; Vite reported large-chunk warnings. No paid live test ran.
+
+Representative final positive proof bundles:
+
+- Host correction: `/tmp/omp-recovery-native-host_failure-pqzn08/proof.json`.
+- Reproduced author blocker: `/tmp/omp-recovery-native-author_blocker-sXvsKG/proof.json`.
+- Incomplete verification: `/tmp/omp-recovery-native-incomplete_verification-kfLWI2/proof.json`.
+
+Host correction run `676f8b40-c38e-44ae-af9b-e9eba4474645` retained author session `01a1b8fe-3b87-7542-b52c-8f85e8dea26a`; reviewer `01a1b8fe-5ab0-725f-9f32-371fee1bd3cd` was distinct. Failed receipt `26bd070e-ee0d-43e3-be36-0b1fcb920e03` exited 1 on tree `fbe14f55739e5a66ac6fa3e9535f64a72cba5085`; fresh receipt `0656c887-db2a-4127-9fdc-69077ac8b513` exited 0 on corrected tree `23eb2b4d7116ac3ba926ed65fbe1ac26cd5f3fba`. One guarded commit `1366ddcf225e565b0bc448ad85e4dd810c62e219` changed only `label.ts`. SQLite/runtime restart preserved Done, refs/index, fourteen model requests and three native launches (original author, resumed author, reviewer), without another commit. Both other positive scenarios also reached durable Done with exactly one commit.
+
+
+
 #### Live recovery fixture and accounting limits
 
 `OMP_BACKLOG_LIVE_TESTS=1 bun test server/recovery-live.test.ts` prepares a disposable committed TypeScript CSV module, unchanged verification recipe, approved two-criterion ticket and explicit autonomous policy. It uses Standard, `openai-codex/gpt-6.1-sol`, low thinking, one slot, a fixed 500,000-reported-token cap, ten-minute deadline and one correction plus one recovery allowance. CSV acceptance covers delimiters, escaped quotes, LF/CR, whitespace and empty fields. A deliberately failing pre-author baseline is not a failed author attempt. First-attempt success without host-managed repair is PARTIAL; see the latest real-provider validation above.

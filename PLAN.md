@@ -503,6 +503,13 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 - Extend existing run and blocker panels with category, original blocker, attempt history, observed action, linked checks/reviews, token consumption, elapsed time, and outcome. Operator recovery instructions remain separate.
 - Verification evidence and limitations are recorded in [Current agent workflow](docs/current-agent-workflow.md#bounded-recovery-exceptions). Deterministic process/Git fixtures remain distinct from explicitly opt-in live-provider checks. Phase 6B, adaptive mode switching, new installations, and external shipping remain deferred.
 
+#### P0.3: native injected recovery validation
+
+- Added opt-in `server/recovery-native.test.ts`, reusing the RPC native test's private synthetic-provider profile. Actual installed OMP executes source writes/checks and same-journal continuation; production recovery behavior is unchanged.
+- Native synthetic scenarios cover failed host verification correction, independently reproduced author blocker and incomplete original criterion reporting. Each successful recovery requires fresh host verification, a distinct restricted native reviewer, exactly one guarded local commit and durable Done after SQLite/runtime restart. Native negative controls reject nonreproducible blocker claims and reviewer tool escalation; protocol suites retain broader policy/budget/revision/ownership/drift controls.
+- November 8 validation passed all six native recovery/negative/cleanup tests on OMP 18.18.1, closing the scripted native recovery integration gap as **NATIVE_INJECTED_RECOVERY_PASS**. This is not **NATURAL_LIVE_RECOVERY_PASS**: November 8's CSV real-provider result remains PARTIAL, with natural recovery and complete lifetime usage still unproven. [Commands, retained proof and limitations](docs/current-agent-workflow.md#native-synthetic-provider-recovery).
+
+
 
 
 ## 12. Opt-in autonomous local completion

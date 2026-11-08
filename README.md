@@ -267,6 +267,14 @@ bun run typecheck
 bun run test
 ```
 
+Installed-OMP deterministic recovery, with no paid provider or real authentication:
+
+```bash
+OMP_BACKLOG_NATIVE_TESTS=1 bun test server/recovery-native.test.ts
+```
+
+This uses private disposable configuration, a loopback synthetic model provider and real native tools, host checks, same-session repair, restricted review and guarded publication. Proof paths are printed and retained under `/tmp/omp-recovery-native-*/proof.json`. See [native recovery validation](docs/current-agent-workflow.md#native-synthetic-provider-recovery) for scenarios, negative-control coverage and limits. This is not natural real-model recovery. The separate `rpc-native.test.ts` suite retains its known failing discarded-turn cumulative-usage assertion; do not describe the entire native suite as green.
+
 For isolated verification, use a disposable repository and a separate `OMP_BACKLOG_DATA` directory. Do not run smoke tickets against existing projects. A real model run requires working OMP provider authentication; provider failures are execution failures, not completion evidence.
 
 Project-local recipe: [verify-backlog](.omp/skills/verify-backlog/SKILL.md), with a starter [feature map](.omp/skills/verify-backlog/features/README.md). Its helper uses installed Playwright, terminal-only owner setup and private disposable data; no automatic installs. Optional `--review-fixture` drives review paths using a protocol child, not a live provider. Explicit map maintenance lives in [maintain-backlog-verification](.omp/skills/maintain-backlog-verification/SKILL.md).
