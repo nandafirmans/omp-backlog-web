@@ -349,7 +349,7 @@ These checks establish the exercised scenarios, not sandboxing or universal prov
 
 ## 10. Planned execution-loop improvements
 
-Status: partially implemented; delivery boundaries below. Research and primary sources: [Agent completion and autonomous ticket loops](docs/agent-completion-loop-research.md) and [Cursor pstack verification workflow](docs/cursor-verification-skill-research.md). Section 11 expands the verification and workflow adoption scope.
+Status: partially implemented; delivery boundaries below. Section 11 expands the verification and workflow adoption scope.
 
 Keep the existing ownership model: scheduler selects tickets; native OMP goal mode continues within one ticket. No additional `/loop` or mandatory completion skill. Preserve revision guards, fixed lifetime limits and explicit interrupted retry. Human acceptance remains default; section 12 adds the separately authorized exact-candidate autonomous path.
 
@@ -391,7 +391,7 @@ Add focused deterministic coverage for evidence provenance, failed/missing check
 
 ## 11. Planned pstack workflow adoption
 
-Status: partially implemented; delivery boundaries below. Adopt the useful workflow discipline from [Cursor's official pstack plugin](https://github.com/cursor/plugins/tree/main/pstack), adapted to OMP and this application's existing safety gates. [Full inventory and current-state comparison](docs/pstack-comparison-research.md) inspect pstack 0.15.32 at commit `e73df471cd4bd918367e99f3dd9c51bd53ddf5f0`: 58 registered skills, 23 playbooks, two agents, helpers and optional Benny automation. Primary metadata credits Lauren Tan. Upstream supplies no OMP adapter or bundled enforcement hooks; inventory completion does not authorize wholesale installation or execution.
+Status: partially implemented; delivery boundaries below. Adopt the useful workflow discipline from [Cursor's official pstack plugin](https://github.com/cursor/plugins/tree/main/pstack), adapted to OMP and this application's existing safety gates. Upstream supplies no OMP adapter or bundled enforcement hooks; inventory completion does not authorize wholesale installation or execution.
 
 ### Scope and compatibility
 
@@ -465,13 +465,13 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 - Added structured, bounded agent blocker details and editable private source-run recovery notes, separate from requirements. Save alone grants no approval/execution. Legacy runs remain readable; no database schema migration.
 - Added explicit Review fix & retry bound to current revision, source run and saved note identity. Fresh runs snapshot reviewed recovery context; no inherited passing checks. Panel, board Actions and blocked-to-Ready dragging converge on recovery review. Existing workspace/ownership/dependency/permission gates remain authoritative.
 - Verification: changed-code ESLint and synthetic-API real-browser checks passed; details/limits in [current workflow](docs/current-agent-workflow.md#reviewed-blocker-recovery). Backend regression tests added, not run under lint-only policy. No live-provider recovery claim.
-- Not delivered: stronger bounded same-run remediation, install/setup preauthorization, unattended fresh retries, or independent host-observed command verification. [Research and proposed later stages](docs/blocker-recovery-research.md).
+- At this checkpoint, stronger bounded same-run remediation, install/setup preauthorization, unattended fresh retries and independent host-observed command verification were not delivered. Section 12 records the later autonomous extension.
 
 ### Ticket execution settings and context telemetry (October 29, 2026)
 
 - Added private per-ticket model/thinking/optional budget overrides with explicit save, version/revision checks and active-run rejection. Save grants no retry or approval. Fresh runs snapshot configuration; new snapshots preserve limits/model across pause/resume. Existing gates and explicit Failed retry remain.
 - Run details distinguish cumulative consumption from estimated current context and surface model, native compaction status and sample age. Execution enables/validates native session-scoped automatic compaction; OMP owns thresholds, no second host compaction loop or budget reset.
-- Added exact OMP 18.13.3 support after source review and installed restricted metadata smoke. Unknown releases still fail closed. Corrected blank optional budget displaying zero. [Compatibility scope](docs/omp-18.13.3-compatibility.md).
+- Corrected blank optional budget displaying zero. Current OMP admission permits major 18 minor/patch upgrades subject to capability checks; other majors require review.
 - Verification: changed-code ESLint, synthetic-API browser journeys and installed metadata discovery passed. Backend/API/runtime/guard regression tests added or extended but not run under lint-only policy. No live-provider/native compaction or current strict-typecheck/build claim. [Current workflow and proof boundaries](docs/current-agent-workflow.md#ticket-model-overrides-and-context-compaction).
 
 - Later explicit extension: global and per-ticket **No cumulative token limit** with cost warning/save confirmation. `null` is uncapped; omitted ticket cap inherits; numeric cap still bounds usage. Native goal omits `token_budget` and host skips only that token check; accounting, native compaction, fixed finite deadline, ownership and acceptance gates remain. Existing defaults/runs are not silently changed. Legacy resumes retain recorded progress limits when available. Browser/UI and lint verification only; additional backend/protocol tests added, not run. No guarantee of automatic completion or waived provider/account limits.
@@ -482,7 +482,7 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 - Fresh authors invoke the installed router through native `/skill:poteto-mode` dispatch, not an implicit ticket mention. The host observes OMP's prompt-bound native skill record and retains its resolved path in existing run conversation/transcript storage. Playbook and project-verification reads remain observed tool activity, not proof of workflow compliance or acceptance.
 - Same-session resume, bounded correction, and recovery retain the original workflow and do not initialize another router run. Model/thinking overrides, native goal continuation/compaction, budgets, evidence contracts, Human Needs review, and Autonomous host checks/restricted review/publication remain separate.
 - Imported pstack autonomy/shipping instructions are subordinate to the host contract in the author system prompt and immutable objective. No scheduler, generic retry loop, settings UI, copied skills, ticket-agent commit grant, or executable plugin discovery in the restricted reviewer is added.
-- Installed OMP 18.16.0 support includes a reproduced and corrected restricted-startup ancestor-plugin namespace gap. Private `work/.omp` now anchors plugin resolution; executable discovery remains disabled for acceptance review. Exact-version source audit and real positive/negative import controls are documented in [compatibility evidence](docs/omp-18.16.0-compatibility.md).
+- Corrected a restricted-startup ancestor-plugin namespace gap. Private `work/.omp` now anchors plugin resolution; executable discovery remains disabled for acceptance review.
 - Verification and current installed-version limits are recorded in [Current agent workflow](docs/current-agent-workflow.md#implementation-and-verification). Broader pstack parity, external shipping automation, and exhaustive provider/playbook coverage remain outside this delivery.
 
 ### Phase 7 prerequisite: engineering mode and token efficiency
@@ -507,7 +507,7 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 
 ## 12. Opt-in autonomous local completion
 
-Authorized implementation extends the existing OMP scheduler, not Cursor/Codex execution or an imported pstack loop. Current operating contract: [Autonomous completion](docs/current-agent-workflow.md#autonomous-completion); original pre-implementation design: [lifecycle research](docs/autonomous-ticket-lifecycle-research.md).
+Authorized implementation extends the existing OMP scheduler, not Cursor/Codex execution or an imported pstack loop. Current operating contract: [Autonomous completion](docs/current-agent-workflow.md#autonomous-completion).
 
 - Separate revisioned Completion policy, Human review by default; explicit owner commissioning binds actual recipe bytes/argv, reviewer choice and bounded corrections/recovery. Start permission remains independent. Disabling revokes future autonomous phases, while pausing new starts leaves admitted work running.
 - Clean baseline → author criterion reports/exact path declaration → stopped owned author → immutable candidate → actual commissioned host command → fresh restricted nonauthor review → bounded original-session correction if demonstrated findings → guarded local CAS publication → stopped-work host Done.

@@ -126,7 +126,7 @@ Changed-code ESLint, strict TypeScript and the focused transcript/runtime protoc
 
 ### Card drag interactions
 
-Desktop board cards and their grips initiate native dragging; links and Actions retain their own interactions. Midpoint targeting shows insertion before a card or a dashed end placeholder using existing accent/surface tokens. Edge scrolling stays inside the horizontal board and vertical ticket lists. Status transitions still require explicit lifecycle confirmation; Actions remain the keyboard/touch alternative, not a claim of native touch-drag parity. Interaction research: [Trello-like kanban](kanban-drag-drop-research.md).
+Desktop board cards and their grips initiate native dragging; links and Actions retain their own interactions. Midpoint targeting shows insertion before a card or a dashed end placeholder using existing accent/surface tokens. Edge scrolling stays inside the horizontal board and vertical ticket lists. Status transitions still require explicit lifecycle confirmation; Actions remain the keyboard/touch alternative, not a claim of native touch-drag parity.
 
 Changed-code ESLint passed. Isolated real-browser checks with synthetic API responses passed whole-card reordering after the last card, canceled approval without a request, confirmed cross-column placement, Actions reordering, keyboard menu open/Escape, vertical/horizontal edge scrolling and drag Escape cancellation. Dark/Light desktop and 390px layouts were inspected without horizontal document overflow or recorded runtime errors. Proof: `/tmp/opencode/kanban-ui-proof/result.json`. Backend regression tests were added but not run under the lint-only check policy; no backend/provider execution or touch hardware was verified.
 
@@ -156,7 +156,7 @@ Ticket execution controls now sit in a native keyboard-accessible disclosure, co
 
 Changed-code ESLint passed. Actual React UI with synthetic APIs covered explicit model discovery/selection, thinking/budget choices, canceled save/navigation, stale-save reconciliation, persisted overrides, cleared-budget inheritance and unchanged global settings/failed status/workspace gate. Separate usage/context meters, simulated compaction/context reduction without consumption reset, paused-spinner suppression and unknown legacy telemetry were checked. Dark/Light at 1440px and 390px were visually inspected, including enabled save controls, without document/drawer horizontal overflow or recorded browser runtime errors. Final proof: `/tmp/opencode/ticket-model-usage-ui-tRKyIB`; owned Vite/browser stopped. Blocker-recovery UI was separately re-driven at `/tmp/opencode/blocker-recovery-ui-KORDXe`.
 
-Installed OMP 18.13.3 restricted metadata discovery returned 18 models after the guard fix; no inference. Both the old-version rejection and blank-budget `0` display were reproduced before fixes. Source review and limits: [compatibility note](omp-18.13.3-compatibility.md). No real backend/provider/native compaction UI journey, backend regression suite, strict TypeScript or build was run for this change.
+Installed OMP 18.13.3 restricted metadata discovery returned 18 models after the guard fix; no inference. Both the old-version rejection and blank-budget `0` display were reproduced before fixes. No real backend/provider/native compaction UI journey, backend regression suite, strict TypeScript or build was run for this change.
 
 ### Global and ticket uncapped-token controls
 
@@ -196,5 +196,5 @@ Global and saved-ticket engineering-mode selectors reuse existing Ant Design fie
 
 Actual-React/synthetic-API browser checks covered global mode save without model discovery or budget changes, ticket override save/cancel/inheritance, unsaved Settings navigation/restore, active-owner disabling, legacy pstack labels, immutable history and 22 author + 14 reviewer = 36 total without double counting. Tokyo Night/Light desktop (1440px) and mobile (390px) were visually inspected without horizontal document overflow or recorded browser runtime errors. Global-helper contrast measured 6.43:1 dark and 6.04:1 Light; selector focus and accessible names were inspected. Native 32px controls remain intentional repository geometry, not blanket touch-target certification.
 
-Private UI proof: `/tmp/omp-engineering-ui-mQQjTW/result.json` and adjacent screenshots. Requested AFTER audit: `anti-slop/audit-001-2026-11-06.md`. This is frontend/synthetic-API proof; backend/native/provider results and limitations are recorded separately in `docs/current-agent-workflow.md`.
+Private UI proof: `/tmp/omp-engineering-ui-mQQjTW/result.json` and adjacent screenshots. This is frontend/synthetic-API proof; backend/native/provider results and limitations are recorded separately in `docs/current-agent-workflow.md`.
 
