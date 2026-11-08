@@ -509,6 +509,13 @@ This extends section 10 rather than replacing its remaining handoff/proof requir
 - Native synthetic scenarios cover failed host verification correction, independently reproduced author blocker and incomplete original criterion reporting. Each successful recovery requires fresh host verification, a distinct restricted native reviewer, exactly one guarded local commit and durable Done after SQLite/runtime restart. Native negative controls reject nonreproducible blocker claims and reviewer tool escalation; protocol suites retain broader policy/budget/revision/ownership/drift controls.
 - November 8 validation passed all six native recovery/negative/cleanup tests on OMP 18.18.1, closing the scripted native recovery integration gap as **NATIVE_INJECTED_RECOVERY_PASS**. This is not **NATURAL_LIVE_RECOVERY_PASS**: November 8's CSV real-provider result remains PARTIAL, with natural recovery and complete lifetime usage still unproven. [Commands, retained proof and limitations](docs/current-agent-workflow.md#native-synthetic-provider-recovery).
 
+#### P1: recovery reliability, CI and verification readiness
+
+- Budget diagnostic keywords now require word boundaries, so “preserve” no longer denies an otherwise eligible engineering repair. Regression cases retain protected blockers and authored-path requirements; native recovery uses realistic whitespace diagnostics without weakening assertions or limits.
+- [Ordinary GitHub CI](docs/ci.md) checks pull requests to `main` and pushes to `main` with frozen installation, TypeScript, lint, production build and deterministic tests. Installed native OMP and paid-provider validation remain separate; the native off-branch 146-token regression remains an unresolved failure.
+- [Project verification commissioning](docs/verification-commissioning.md) defines scoped onboarding, feature/entry-point mapping, disposable defect sensitivity, bounded host recipes, restricted candidate review and explicit coverage limits. Guidance does not onboard another repository or enable autonomous completion.
+- Phase 8 PR creation/CI consumption remains separately scoped: hosted CI must be observed, external-write authority designed and granted explicitly, and existing exact-candidate acceptance/security gates retained. No push, PR, merge or deployment automation is included here.
+
 
 
 

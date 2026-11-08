@@ -37,6 +37,40 @@ test('repair classification requires a failed real command and scoped engineerin
   expect(classifyEngineeringFailure(receipt(output), [])).toBe(false);
 });
 
+test('preserve diagnostics remain eligible only with scoped engineering evidence', () => {
+  const diagnostic = 'AssertionError: label.ts must preserve internal whitespace';
+  expect(recoveryCategory(diagnostic)).toBe('unknown');
+  expect(classifyEngineeringFailure(receipt(diagnostic), ['label.ts'])).toBe(true);
+  expect(engineeringBlockerCategory({
+    prerequisite: diagnostic, unblock: 'Correct label.ts to preserve internal whitespace',
+    attempted: 'Ran bun verify.ts', verification: diagnostic, suggestedPrompt: '',
+  }, ['label.ts'])).toBe('unknown');
+  expect(recoveryCategory('Expected parseRow to preserve quoted content')).toBe('unknown');
+  expect(classifyEngineeringFailure(receipt('Expected parseRow to preserve quoted content'), ['label.ts'])).toBe(false);
+  expect(classifyEngineeringFailure(receipt(diagnostic), ['unrelated.ts'])).toBe(false);
+  expect(classifyEngineeringFailure(receipt('label.ts: Unidentified command failure'), ['label.ts'])).toBe(false);
+  expect(recoveryAllowance(run(), 'recoveries', recoveryFingerprint('recipe', diagnostic))).toBeNull();
+});
+
+test('protected blockers retain precise categories and cannot authorize an assertion repair', () => {
+  for (const [diagnostic, category] of [
+    ['Insufficient token reserve for independent review', 'budget_exhausted'],
+    ['Execution deadline exceeded', 'budget_exhausted'],
+    ['Original token budget exhausted', 'budget_exhausted'],
+    ['Missing API credentials', 'credentials'],
+    ['Permission denied', 'permissions'],
+    ['Dependency installation required', 'installation'],
+    ['Network ECONNREFUSED', 'infrastructure'],
+    ['Unsafe operation outside approved scope', 'unsafe_operation'],
+  ] as const) {
+    expect(recoveryCategory(diagnostic)).toBe(category);
+    expect(classifyEngineeringFailure(receipt(`AssertionError: label.ts: ${diagnostic}`), ['label.ts'])).toBe(false);
+    expect(engineeringBlockerCategory({
+      prerequisite: diagnostic, unblock: 'Assistance needed', verification: 'Ran bun verify.ts', suggestedPrompt: '',
+    }, ['label.ts'])).toBe(category);
+  }
+});
+
 test('broken relative imports are engineering failures, not permission to install packages', () => {
   const local = "src/entry.ts(1,20): error TS2307: Cannot find module './math' or its corresponding type declarations.";
   expect(classifyEngineeringFailure(receipt(local), ['src/entry.ts'])).toBe(true);
