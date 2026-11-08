@@ -16,6 +16,7 @@ import { reviewCandidate } from './autonomy-review';
 import { assertEngineeringWorkflow, ENGINEERING_AUTHORITY, observeEngineeringInvocation, PSTACK_ENGINEERING, STANDARD_ENGINEERING } from './engineering';
 import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
 import { workspaceOperation } from './workspace-commit';
+import { checkOmpMajor } from './drafting';
 
 const CLAIMED: Status[] = ['running', 'stopping', 'paused'];
 const QUIET_MS = 1_000;
@@ -798,6 +799,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         if (!run.sessionFile || !run.sessionId) throw new Error('No persisted session identity is available to resume');
         args.push('--resume', run.sessionFile);
       }
+      await checkOmpMajor(settings.executable, repo.path);
       await assertWorkspaceIdentity(repo, run.workspace);
       if (closed || !owns(execution) || execution.stopping) throw new Error('Execution ownership changed before launch');
       persist(execution);

@@ -7,6 +7,7 @@ import type { Frame } from '../rpc';
 import type { Ticket } from '../contracts';
 
 const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('omp/18.18.1'); process.exit(0); }
 function argument(name: string) {
   const index = args.indexOf(name);
   if (index < 0 || !args[index + 1]) throw new Error(`Missing fixture argument ${name}`);

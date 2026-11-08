@@ -4,7 +4,10 @@ import { readFile } from 'node:fs/promises';
 import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-if (process.argv.includes('--version')) { console.log(`omp/${process.argv.map(arg => /^release-(\d+\.\d+\.\d+)$/.exec(arg)?.[1]).find(Boolean) ?? (process.argv.includes('unaudited-release') ? '99.0.0' : '18.12.6')}`); process.exit(0); }
+if (process.argv.includes('--version')) {
+  console.log(process.argv.includes('malformed-version') ? 'not-a-version' : `omp/${process.argv.map(arg => /^release-(\d+\.\d+\.\d+)$/.exec(arg)?.[1]).find(Boolean) ?? '18.18.1'}`);
+  process.exit(0);
+}
 const logIndex = process.argv.indexOf('--fixture-log');
 const log = (value: unknown) => { if (logIndex >= 0) appendFileSync(process.argv[logIndex + 1]!, JSON.stringify(value) + '\n'); };
 log({ event: 'spawn', pid: process.pid, cwd: process.cwd() });
@@ -20,7 +23,7 @@ const models = [
   { provider: 'fixture', id: 'text', name: 'Fixture text', input: ['text'] },
 ];
 let model = process.argv.includes('unselected') ? { ...models[0], id: 'unavailable-default' } : models[0]; let thinking = 'medium'; let streaming = false; let turns = 0; let tokenTotal = 10;
-send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: [1, 2], maxFrameBytes: 1024 * 1024, maxReassembledFrameBytes: 1024 * 1024 });
+send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: process.argv.includes('incompatible-protocol') ? [1] : [1, 2], maxFrameBytes: 1024 * 1024, maxReassembledFrameBytes: 1024 * 1024 });
 const input = createInterface({ input: process.stdin });
 input.on('line', line => {
   const frame = JSON.parse(line);

@@ -6,9 +6,9 @@ import { FrameDecoder, type Frame } from '../rpc';
 import type { Ticket } from '../contracts';
 const args = process.argv.slice(2);
 const argument = (name: string) => args[args.indexOf(name) + 1]!;
-if (args.includes('--version')) { console.log('18.13.3'); process.exit(0); }
 const configPath = argument('--fixture-config');
 const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; repairTokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean };
+if (args.includes('--version')) { console.log(config.scenario === 'unsupported-major' ? 'omp/19.0.0' : 'omp/18.18.1'); process.exit(0); }
 const reviewer = args.includes('--no-tools');
 const standard = !reviewer && argument('--append-system-prompt').includes('Engineering mode: standard.');
 if (reviewer && args.includes('--append-system-prompt')) throw new Error('Restricted reviewer must not receive author engineering system instructions');
@@ -27,6 +27,7 @@ let settled = false; let compaction = false; let thinking = 'medium'; let prompt
 let engineeringDiscovered = false;
 let authorToolsRegistered = false;
 let invocationReads = 0;
+let reviewerTools: { name: string }[] = [];
 const host = (id: string, toolName: string, value: unknown) => send({ type: 'host_tool_call', id, toolName, arguments: value });
 let authorReleased = false;
 let recoveryReleased = false;
@@ -84,7 +85,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   await log({ event: 'command', command: frame.type, op: frame.op, ...(frame.type === 'set_host_tools' && Array.isArray(frame.tools) ? { tools: frame.tools.map(tool => tool.name) } : {}), ...(frame.type === 'goal' && frame.op === 'create' ? { objective: frame.objective } : {}) });
   const respond = (data: Record<string, unknown> = {}) => send({ type: 'response', id: frame.id, success: true, data });
   if (frame.type === 'negotiate_protocol') respond({ protocolVersion: 2 });
-  else if (frame.type === 'get_state') respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, dumpTools: reviewer || config.scenario === 'disabled-plugin' ? [] : [{ name: 'task' }], model: { provider: session.model.split('/')[0], id: session.model.split('/').slice(1).join('/') }, thinkingLevel: thinking, autoCompactionEnabled: compaction });
+  else if (frame.type === 'get_state') respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, dumpTools: reviewer ? config.scenario === 'reviewer-startup-tools' ? [{ name: 'bash' }] : reviewerTools : config.scenario === 'disabled-plugin' ? [] : [{ name: 'task' }], goal: reviewer && config.scenario === 'reviewer-startup-goal' ? { enabled: true } : null, model: { provider: session.model.split('/')[0], id: session.model.split('/').slice(1).join('/') }, thinkingLevel: thinking, autoCompactionEnabled: compaction });
   else if (frame.type === 'get_available_commands') {
     if (reviewer) throw new Error('Restricted reviewer must not discover engineering commands');
     engineeringDiscovered = true;
@@ -117,6 +118,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (!reviewer && !standard && !engineeringDiscovered) throw new Error('Pstack author tool registration must follow engineering preflight');
     const names = Array.isArray(frame.tools) ? frame.tools.map(tool => tool.name) : [];
     if (reviewer && JSON.stringify(names) !== JSON.stringify(['candidate_diff', 'candidate_source', 'backlog_review'])) throw new Error('Restricted reviewer received non-review capabilities');
+    if (reviewer) reviewerTools = config.scenario === 'reviewer-missing-tools' ? [] : [...names.map(name => ({ name })), ...(config.scenario === 'reviewer-extra-tools' ? [{ name: 'bash' }] : [])];
     authorToolsRegistered = !reviewer;
     respond();
   }

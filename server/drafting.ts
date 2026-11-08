@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -29,8 +29,7 @@ interface Draft {
 }
 interface Prepared extends DraftPreparation { message: string; images: { type: 'image'; mimeType: string; data: string }[]; bytes: number; prompt: string }
 
-// Audited native startup/isolation controls for v18.12.6, v18.13.1, v18.13.3, v18.16.0 and v18.18.0.
-// These release checks do NOT establish complete lifetime token accounting.
+// Minor/patch upgrades use capability checks; a new OMP major needs review.
 // Empty namespaces are established BEFORE loading OMP; --no-tools alone is unsafe.
 // Local provider auth stays inside OMP through its existing DB, not application code.
 // This reduces capabilities, not OS permissions; it is deliberately not a sandbox.
@@ -48,8 +47,6 @@ const profile = {
   startup: { checkUpdate: false, setupWizard: false, showSplash: false, quiet: true },
   marketplace: { autoUpdate: 'off' }, power: { sleepPrevention: 'off' }, magicKeywords: { enabled: false },
 };
-const auditedVersions = ['18.12.6', '18.13.1', '18.13.3', '18.16.0', '18.18.0'];
-const auditedVersionLabel = auditedVersions.map(version => `v${version}`).join(', ');
 
 function launchEnv(directory: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
@@ -95,22 +92,19 @@ export async function installProfile(directory: string): Promise<NodeJS.ProcessE
   return env;
 }
 
-export async function checkVersion(executable: string, cwd: string, env: NodeJS.ProcessEnv): Promise<void> {
-  const { promise, resolve: resolveVersion, reject } = Promise.withResolvers<void>();
-  const child = spawn(executable, ['--version'], { cwd, env, stdio: ['ignore', 'pipe', 'ignore'] });
-  let output = ''; let exceeded = false;
-  const timeout = setTimeout(() => { child.kill('SIGKILL'); reject(new HttpError(503, 'OMP version discovery timed out')); }, 10000);
-  child.stdout.on('data', (data: Buffer) => { if (output.length + data.length > 4096) { exceeded = true; child.kill('SIGKILL'); } else output += data.toString('utf8'); });
-  child.once('error', () => { clearTimeout(timeout); reject(new HttpError(503, `Cannot launch the configured OMP executable; supported audited releases: ${auditedVersionLabel}`)); });
-  child.once('close', code => {
-    clearTimeout(timeout);
-    const version = /^(?:omp\/)?(\d{1,4}\.\d{1,4}\.\d{1,4})$/.exec(output.trim())?.[1];
-    if (code !== 0 || exceeded || !version || !auditedVersions.includes(version)) reject(new HttpError(503, `Model discovery and drafting require audited OMP ${auditedVersionLabel}. Detected: ${version ? `v${version}` : 'unrecognized version'}. Other CLI isolation profiles have not been verified`));
-    else resolveVersion();
+export async function checkOmpMajor(executable: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    execFile(executable, ['--version'], { cwd, env, timeout: 10000, killSignal: 'SIGKILL', maxBuffer: 4096 }, (error, stdout) => {
+      if (error) { reject(new HttpError(503, 'Cannot read the configured OMP version; OMP 18.x is required')); return; }
+      const version = /^(?:omp\/)?(0|[1-9]\d*)\.\d+\.\d+$/.exec(stdout.trim());
+      if (!version || version[1] !== '18') {
+        reject(new HttpError(503, `OMP 18.x is required; detected ${version ? `major ${version[1]}` : 'an unrecognized version'}. Different majors require compatibility review`));
+        return;
+      }
+      resolve();
+    });
   });
-  await promise;
 }
-
 export const privateArgs = (directory: string) => ['--mode', 'rpc', '--no-ui', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir', join(directory, 'sessions')];
 let discoveries = 0;
 
@@ -126,7 +120,7 @@ export async function discoverExecutionModels(executable: string, requested: str
     directory = await mkdtemp(join(tmpdir(), 'omp-model-discovery-'));
     const env = await installProfile(directory);
     const cwd = join(directory, 'work');
-    await checkVersion(executable, cwd, env);
+    await checkOmpMajor(executable, cwd, env);
     if (expired) throw new Error('Discovery deadline exceeded');
     rpc = await RpcProcess.launch({ executable, env, cwd, args: privateArgs(directory),
       onSpawn: async childPid => { pid = childPid; },
@@ -167,7 +161,7 @@ export async function discoverExecutionModels(executable: string, requested: str
     return { models, model, thinkingLevels: [...new Set(supported.levels as string[])] };
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    throw new HttpError(503, `OMP model discovery failed. Check audited OMP ${auditedVersionLabel} and local provider authentication outside this application; no unrestricted fallback was attempted.`);
+    throw new HttpError(503, 'OMP model discovery failed. Check RPC v2 compatibility and local provider authentication outside this application; no unrestricted fallback was attempted.');
   } finally {
     try {
       if (rpc) await rpc.shutdown();
@@ -292,7 +286,8 @@ async function create(store: Store, repo: Repo): Promise<Draft> {
     const env = await installProfile(draft.directory);
     const cwd = join(draft.directory, 'work');
     const executable = store.settings().executable;
-    await checkVersion(executable, cwd, env);
+    stage = 'checking OMP major compatibility';
+    await checkOmpMajor(executable, cwd, env);
     stage = 'negotiating the headless RPC connection';
     const rpc = await RpcProcess.launch({ executable, env, cwd,
       args: privateArgs(draft.directory),
@@ -325,7 +320,7 @@ async function create(store: Store, repo: Repo): Promise<Draft> {
     draft.timer = setInterval(() => { void poll(draft); }, 1000); draft.timer.unref();
   } catch (error) {
     draft.snapshot.status = 'failed';
-    draft.snapshot.error ||= error instanceof HttpError ? error.message : `OMP failed while ${stage}. Configure audited OMP ${auditedVersionLabel} and provider authentication outside drafting; unrestricted fallback is prohibited.`;
+    draft.snapshot.error ||= error instanceof HttpError ? error.message : `OMP failed while ${stage}. Check CLI capability compatibility and provider authentication outside drafting; unrestricted fallback is prohibited.`;
   } finally { draft.locked = false; draft.initialize(); }
   if (draft.snapshot.status === 'failed') await stop(draft);
   return draft;
