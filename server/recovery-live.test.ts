@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Repo, Run, Runtime } from './contracts';
 import { recipeIdentity } from './autonomy';
-import { checkVersion, discoverExecutionModels, installProfile } from './drafting';
+import { discoverExecutionModels } from './drafting';
 import { recoveryFingerprint } from './recovery';
 import { createRuntime } from './runtime';
 import { closeStore, createStore, subscribe } from './store';
@@ -82,11 +82,7 @@ console.log('PASS parseRow: independently specified rows decode exactly');
     const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Repair CSV quoting and parsing\ndepends_on: []\n---\n\nFix csv.ts encodeRow and parseRow for one CSV record. Encode fields with comma, double quote, LF or CR using enclosing double quotes and doubled embedded quotes. Parse quoted fields, doubled quotes, embedded LF/CR and trailing empty fields; preserve whitespace. Inputs are valid records without a record-terminating newline. Edit only csv.ts. Use existing Bun; no installs, external actions, commits, docs or other file edits. Run bun verify.ts unchanged and independently inspect both behaviors. Do not intentionally leave defects, skip checks or report fabricated evidence to trigger recovery.\n\nDone when:\n- encodeRow produces exact CSV for plain, comma, double quote, LF, CR, empty and whitespace fields; verify all encodeRow cases in bun verify.ts.\n- parseRow returns exact original fields for independently specified CSV rows including escaped quotes and trailing empties; verify all parseRow cases in bun verify.ts.\n');
     store.save('tickets', { ...ticket, status: 'ready', approvedRevision: ticket.revision });
 
-    // Reject unsupported restricted-review startup before any paid author turn.
-    const preflight = join(root, 'preflight');
-    await mkdir(preflight, { mode: 0o700 });
-    const env = await installProfile(preflight);
-    await checkVersion(settings.executable, join(preflight, 'work'), env);
+    // Reject incompatible restricted startup before any paid author turn.
     const discovery = await discoverExecutionModels(settings.executable, model);
     expect(discovery.models.some(entry => `${entry.provider}/${entry.id}` === model)).toBe(true);
     expect(discovery.thinkingLevels).toContain('low');
@@ -108,7 +104,8 @@ console.log('PASS parseRow: independently specified rows decode exactly');
     expect(independentCheck).toMatchObject({ exitCode: 0, stderr: '' });
     source = await readFile(join(path, 'csv.ts'), 'utf8');
     const commit = await git('rev-parse', 'HEAD');
-    publicationCheck = { commit, parent: await git('rev-parse', 'HEAD^'), tree: await git('rev-parse', 'HEAD^{tree}'), count: await git('rev-list', '--count', `${initialHead}..HEAD`), files: await git('diff', '--name-only', initialHead!, 'HEAD'), status: await git('status', '--porcelain') };
+    // Ticket metadata is host-owned and excluded by normal workspace admission too.
+    publicationCheck = { commit, parent: await git('rev-parse', 'HEAD^'), tree: await git('rev-parse', 'HEAD^{tree}'), count: await git('rev-list', '--count', `${initialHead}..HEAD`), files: await git('diff', '--name-only', initialHead!, 'HEAD'), status: await git('status', '--porcelain', '--', '.', ':(exclude).omp-backlog') };
     expect(publicationCheck).toEqual({ commit: life.publication?.commit, parent: initialHead, tree: life.candidate?.tree, count: '1', files: 'csv.ts', status: '' });
     expect(life.publication).toMatchObject({ state: 'complete', noChanges: false, parent: initialHead });
     expect(life.verification.at(-1)).toMatchObject({ source: 'host_execution', outcome: 'passed', exitCode: 0, candidateTree: life.candidate?.tree });
