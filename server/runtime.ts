@@ -1,6 +1,6 @@
 import { watch } from 'node:fs';
 import type { FSWatcher } from 'node:fs';
-import { appendFile, chmod, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Dialog, HostVerification, RecoveryHistory, Repo, Run, Runtime, Status, Store, Ticket } from './contracts';
@@ -17,12 +17,11 @@ import { assertEngineeringWorkflow, ENGINEERING_AUTHORITY, observeEngineeringInv
 import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
 import { workspaceOperation } from './workspace-commit';
 import { checkOmpMajor } from './drafting';
+import { groupMembers, identity, processInfo } from './process-identity';
 
 const CLAIMED: Status[] = ['running', 'stopping', 'paused'];
 const QUIET_MS = 1_000;
 const TRANSCRIPT_LIMIT = 192_000;
-interface Identity { pid: number; start: string; boot: string }
-interface ProcessInfo { pid: number; group: number; start: string; state: string }
 interface Result { status: 'complete' | 'blocked'; evidence: string[]; blocker: string | null; details?: Run['blockerDetails'] }
 interface Execution {
   run: Run;
@@ -51,29 +50,6 @@ function key(ticket: Pick<Ticket, 'repoId' | 'id'>) { return `${ticket.repoId}/$
 function privateDir(store: Store, runId: string) { return join(store.dataDir, 'runtime', runId); }
 const redact = redactTranscript;
 
-async function processInfo(pid: number): Promise<ProcessInfo | null> {
-  try {
-    const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
-    const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
-    return { pid, state: fields[0], group: Number(fields[2]), start: fields[19] };
-  } catch (error) { if (object(error).code === 'ENOENT' || object(error).code === 'ESRCH') return null; throw error; }
-}
-
-async function groupMembers(pid: number): Promise<ProcessInfo[]> {
-  const members: ProcessInfo[] = [];
-  for (const entry of await readdir('/proc')) {
-    if (!/^\d+$/.test(entry)) continue;
-    const info = await processInfo(Number(entry));
-    if (info?.group === pid && info.state !== 'Z' && info.state !== 'X') members.push(info);
-  }
-  return members;
-}
-
-async function identity(pid: number): Promise<Identity> {
-  const info = await processInfo(pid);
-  if (!info) throw new Error('OMP exited before its process identity could be recorded');
-  return { pid, start: info.start, boot: (await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim() };
-}
 
 async function command(cwd: string, args: string[]): Promise<string> {
   const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });

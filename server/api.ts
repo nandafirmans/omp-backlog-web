@@ -12,6 +12,7 @@ import { proofDownload } from './evidence';
 import { inspectWorkspaceHandoff } from './runtime';
 import { discoverExecutionModels, handleDraftRequest } from './drafting';
 import { handleAssistedCreation } from './assisted-creation';
+import { assertWorkspaceOwners, handleAgentWorkspaceRequest } from './agent-workspaces';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
@@ -190,8 +191,13 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (segments.some(part => part.includes('/') || part.includes('\\') || part === '..' || part.includes('\0'))) throw new HttpError(400, 'Unsafe route path');
       if (segments[1] === 'repos' && segments[2]) {
         const repo = store.get('repos', segments[2]); if (!repo) throw new HttpError(404, 'Repository not found');
+        if (segments[3] === 'agent-workspaces') {
+          await permittedPath(store, repo.path);
+          return await handleAgentWorkspaceRequest(store, repo, request, segments);
+        }
         if (segments[3] === 'drafts') {
           await permittedPath(store, repo.path);
+          if (segments.length === 4 && request.method === 'POST') await assertWorkspaceOwners(store);
           return await handleDraftRequest(store, repo, request, segments);
         }
         if (segments.length === 4 && (segments[3] === 'assisted-prepare' || segments[3] === 'assisted-create') && request.method === 'POST') {

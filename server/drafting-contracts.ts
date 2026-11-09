@@ -1,6 +1,6 @@
 // Browser-safe drafting data. Never include provider credentials or session paths.
 export interface DraftModel { provider: string; id: string; name: string; images: boolean }
-export interface DraftMessage { role: 'user' | 'assistant'; text: string; model?: string; thinking?: string }
+export interface DraftMessage { role: 'user' | 'assistant'; text: string; model?: string; thinking?: string; status?: 'complete' | 'partial' | 'failed' }
 export interface DraftContext { key: string; label: string; status: 'ready' | 'unsupported' | 'failed' | 'excluded'; detail: string }
 export interface DraftSnapshot {
   id: string;
