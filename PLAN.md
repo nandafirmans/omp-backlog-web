@@ -533,6 +533,22 @@ Authorized implementation extends the existing OMP scheduler, not Cursor/Codex e
 
 This does not claim full pstack parity, OS sandboxing/authorship attestation, universal provider/environment readiness, exhaustive acceptance coverage, or push/PR/merge/deploy authority. Each project needs its own commissioned meaningful recipe; unsupported workspace/file modes require assistance.
 
+## 13. Unified Create with Agent — incremental delivery
+
+**U1 scope:** extend `/projects/:repoId/tickets/new/agent`, not a separate Planning Workspace. One project-scoped SQLite workspace owns discussion, saved composer and ticket-review text, selected model/thinking, and immutable plan revisions. Discussion / Plan / Tasks retain the same conversation; Tasks currently reviews one Markdown ticket. Quick ticket creation does not require a formal plan.
+
+Reuse native restricted OMP drafting, host-selected context, existing Markdown/Preview editors, attachment staging, authentication/CSRF and reviewed single-ticket publication. Explicit Connect is distinct from Send. New native sessions receive bounded persisted text only on explicit Send; no historical inference replay, hidden summarizer, tools/skills/goal expansion or external-research credentials. Saved history is not proof of a live native process. Reconnection must fail closed on uncertain prior-child ownership.
+
+Manual editor saves are version-bound. Plans remain independently editable; each save produces a new immutable revision, and approval binds to that revision only. Changing a plan does not grant ticket approval. Pasted attachment bytes remain tab-local; after reload, their Markdown references cannot publish without reattaching the required files.
+
+**Unavailable later stages:** U2 source-provenance findings, authorized external research, schema-validated Auto/Single/Multiple extraction; U3 multi-proposal editing/reordering/selection/dependency validation and durable batch publication; U4 stale-proposal detection, individual regeneration, durable published-ticket/workspace/plan traceability and full feature acceptance coverage. These are not exposed as functional.
+
+U3 must add a durable staging/publication journal and scheduler activation barrier with crash reconciliation, exact reviewed payload/revision confirmation, deterministic collision-safe IDs and retry identity. It cannot reuse an unchecked loop of single-ticket assisted-create calls or claim multi-directory renames are atomic. Publication must not grant execution permission. Until then, only the existing explicitly confirmed single-ticket path publishes; Automatic mode retains its existing warned execution consequence.
+
+Verification results and limits for this slice are recorded in [Current agent workflow](docs/current-agent-workflow.md#agent-assisted-creation). Full-feature readiness requires U2–U4, not merely a passing U1 suite.
+
+U1 validation: requested TypeScript, full lint, Vite build and ordinary test suite passed (309 tests, 21 opt-in skips); three installed restricted/native synthetic-transport checks passed separately. Actual-backend/protocol-child browser journeys covered persistence, plan and single-ticket review/publication, concurrency conflicts, failures and responsive Dark/Light layouts. The later focused runtime re-drive passed 16 overlapping tests. Current workflow records exact scope and the loss of transient screenshot files after runtime restart; neither full U2–U4 delivery nor live-provider planning is claimed.
+
 ## Initialization delivery
 
 Provide a runnable Bun/React/Vite development app, strict TypeScript and lint commands, loopback-only development server, a read-only health endpoint, and a project overview linking this plan. Keep runtime state and local secrets out of source control. Do not start an OMP worker, register repositories, or mutate other projects during initialization.
