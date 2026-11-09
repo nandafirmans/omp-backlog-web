@@ -3,10 +3,8 @@
 .agent-page-heading > .page-breadcrumb { grid-column: 1 / -1; }
 .agent-page-heading h1 { margin: 0; }
 .agent-page-heading > p { grid-column: 1; max-width: 75ch; margin: 0; font-size: 13px; line-height: 1.8; }
-.agent-page-heading > .ant-segmented { grid-column: 2; grid-row: 2 / 4; align-self: end; max-width: 100%; }
-.agent-creation-page > form { padding: 18px; border: 1px solid var(--line); background: var(--surface-elevated); }
+.agent-single-ticket > form { min-width: 0; }
 .agent-creation-page .agent-ticket-draft { margin-bottom: 0; }
-.agent-discuss-view[hidden] { display: none; }
 .agent-ticket-draft { display: flex; flex-direction: column; min-width: 0; margin-bottom: 24px; border: 1px solid var(--line); background: var(--surface-elevated); }
 .agent-draft-heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px 18px; padding: 12px 16px; border-bottom: 1px solid var(--line); background: linear-gradient(110deg, var(--surface-elevated), color-mix(in srgb, var(--accent) 4%, var(--surface-elevated))); }
 .agent-connection-status { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
@@ -40,30 +38,48 @@
 .agent-model-controls label:first-child { flex: 1 1 230px; }
 .agent-model-controls label:first-child .ant-select { width: 100%; min-width: 0; }
 .agent-model-controls label:last-child .ant-select { width: 120px; }
-.agent-send-actions { margin-left: auto; }
 .agent-turn-status { color: var(--muted); margin: 0; font: 11px/1.7 var(--font-mono); }
 .agent-context { min-width: 0; border-top: 1px solid var(--line); }
 .agent-context > summary { padding-block: 9px; color: var(--muted); }
-.agent-context > summary > span + span { margin-left: 12px; font-size: 11px; }
 .agent-context-body { padding: 0 0 12px 16px; }
 .agent-context-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; }
 .agent-context-heading p { flex: 1 1 280px; margin: 0; font-size: 12px; line-height: 1.7; }
-.agent-effective-model { font: 11px/1.8 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; margin: 8px 0; }
 .agent-context-body > p { font-size: 12px; margin-bottom: 0; }
 .agent-context ul { list-style: none; margin: 12px 0 0; padding: 0; }
 .agent-context li { display: grid; gap: 8px; padding: 12px 0; border-top: 1px solid var(--line); min-width: 0; }
 .agent-context li strong { font: 600 12px/1.8 var(--font-mono); margin-right: 10px; overflow-wrap: anywhere; }
 .agent-context li p { margin: 5px 0 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .agent-context .ant-checkbox-wrapper { font-size: 12px; align-items: start; }
-.agent-context-warning { margin: 0; font-size: 12px; }
-.agent-ticket-draft .error-banner { margin-block: 12px 0; }
-.agent-ticket-draft .error-banner p { margin-block: 4px; overflow-wrap: anywhere; }
 .assisted-publication-note { border-left: 2px solid var(--warning); padding: 10px 14px; margin-block: 16px; background: var(--surface-elevated); font-size: 13px; }
 .assisted-publication-note p { margin: 0; }
+.agent-workspace { min-width: 0; }
+.agent-workspace-toolbar, .agent-workspace-title { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 14px 16px; border: 1px solid var(--line); background: var(--surface-elevated); }
+.agent-workspace-title { border-top: 0; margin-bottom: 16px; }
+.agent-workspace-picker, .agent-workspace-title > label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; flex: 1 1 280px; }
+.agent-workspace-picker .ant-select { width: 100%; min-width: 0; }
+.agent-workspace-title > label { max-width: 540px; }
+.agent-workspace-toolbar > .ant-checkbox-wrapper { align-self: center; }
+.agent-workspace-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: start; gap: 16px; min-width: 0; }
+.agent-workspace-columns > *, .agent-workspace-review > * { min-width: 0; }
+.agent-workspace-review { border: 1px solid var(--line); background: var(--surface-elevated); }
+.agent-review-toolbar { padding: 12px 16px; border-bottom: 1px solid var(--line); background: var(--surface-inset); }
+.agent-discussion-summary, .agent-plan-panel, .agent-single-ticket { padding: 16px; }
+.agent-workspace-review [hidden] { display: none; }
+.agent-workspace-review h2, .agent-draft-heading h2 { margin: 0 0 8px; font-size: 16px; }
+.agent-draft-heading h2 { margin: 0; }
+.agent-discussion-summary p { max-width: 70ch; line-height: 1.8; }
+.agent-plan-panel > label { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; margin: 16px 0; }
+.agent-plan-panel > label .ant-select { width: 100%; min-width: 0; }
+.agent-plan-panel .markdown-editor { margin-bottom: 16px; }
+.agent-plan-panel .cm-scroller { min-height: 260px; max-height: 65dvh; }
+.agent-single-ticket > form > .markdown-editor .cm-scroller { min-height: 320px; max-height: 65dvh; }
+.agent-workspace > .error-banner { margin-bottom: 16px; }
+@media (max-width: 1050px) {
+  .agent-workspace-columns { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 600px) {
   .agent-creation-page.editor-panel { padding-inline: 0; }
   .agent-page-heading { grid-template-columns: minmax(0, 1fr); gap: 10px; padding-bottom: 16px; }
-  .agent-page-heading > .ant-segmented { grid-column: 1; grid-row: auto; justify-self: start; }
   .agent-draft-heading { align-items: start; }
   .agent-session-actions { width: 100%; }
   .agent-conversation-empty { margin: 12px; padding: 18px; }
@@ -72,10 +88,10 @@
   .agent-model-controls label:first-child { flex-basis: 100%; }
   .agent-model-controls label:last-child { flex: 1; }
   .agent-model-controls label:last-child .ant-select { width: 100%; }
-  .agent-send-actions { width: 100%; }
-  .agent-send-actions > .ant-btn { flex: 1; }
   .agent-context-body { padding-left: 8px; }
-  .agent-context > summary > span + span { margin-left: 8px; }
+  .agent-workspace-toolbar, .agent-workspace-title, .agent-discussion-summary, .agent-plan-panel, .agent-single-ticket { padding: 12px; }
+  .agent-review-toolbar { padding: 12px; }
+  .agent-workspace-title > .ant-btn { width: 100%; }
 }
 @media (max-height: 650px) {
   .agent-conversation { max-height: none; }
