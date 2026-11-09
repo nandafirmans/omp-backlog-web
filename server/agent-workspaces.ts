@@ -1,12 +1,14 @@
 import { mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AgentWorkspace, AgentWorkspaceRecord, AgentWorkspaceSnapshot, AgentWorkspaceSummary } from './agent-workspace-contracts';
+import type { AgentWorkspace, AgentWorkspaceRecord, AgentWorkspaceSnapshot, AgentWorkspaceSummary, WorkspaceTurnReceipt } from './agent-workspace-contracts';
 import type { Repo, Store } from './contracts';
-import type { DraftContext, DraftSnapshot } from './drafting-contracts';
+import type { DraftContext, DraftSnapshot, DraftTurnOptions } from './drafting-contracts';
 import { createWorkspaceDraft, handleDraftRequest, readDraftBody, workspaceDraftSnapshot } from './drafting';
 import { groupMembers, identity } from './process-identity';
 import { digest } from './store';
 import { HttpError, MAX_ATTACHMENTS_TOTAL } from './tickets';
+import { researchRepository } from './agent-research';
+import { EXTRACTION_LIMITS, extractionInstruction, validateTaskExtraction } from './task-extraction';
 
 export const WORKSPACE_LIMITS = { perRepo: 16, global: 64, revisions: 32, editorBytes: 256 * 1024, planBytes: 32 * 1024, historyBytes: 512 * 1024, messages: 128, turns: 64, contextBytes: 64 * 1024, contextMessages: 12 } as const;
 const live = new Map<string, { store: Store; draftId: string }>();
@@ -20,6 +22,14 @@ interface TurnReceipt { request: Request; key: string; hash: string }
 function record(store: Store, repo: Repo, id: string): AgentWorkspaceRecord {
   const value = store.get('agentWorkspaces', id);
   if (!value || value.repoId !== repo.id || value.repoPath !== repo.path) throw new HttpError(404, 'Agent workspace not found for this repository');
+  value.proposalSets ??= []; value.researchReferences ??= []; value.researchResults ??= []; value.extraction ??= null; value.rejectedTurns ??= [];
+  value.acceptedTurns.forEach((turn, index) => {
+    if (turn.status) return;
+    turn.userMessageIndex = index * 2; turn.assistantMessageIndex = index * 2 + 1;
+    const message = value.messages[turn.assistantMessageIndex];
+    turn.status = message?.status === 'partial' ? 'accepted' : message?.status === 'complete' ? 'complete' : 'failed';
+    turn.intent = 'ticket_drafting'; turn.sourceWorkspaceId = value.id; turn.legacyContextUnavailable = true;
+  });
   return value;
 }
 function publicWorkspace(value: AgentWorkspaceRecord): AgentWorkspace {
@@ -29,6 +39,7 @@ function publicWorkspace(value: AgentWorkspaceRecord): AgentWorkspace {
     prompt: value.prompt, ticketMarkdown: value.ticketMarkdown,
     currentPlanRevisionId: value.currentPlanRevisionId, planRevisions: value.planRevisions,
     messages: value.messages, model: value.model, thinking: value.thinking,
+    proposalSets: value.proposalSets, researchReferences: value.researchReferences, extraction: value.extraction,
   };
 }
 function summary(value: AgentWorkspaceRecord): AgentWorkspaceSummary {
@@ -44,6 +55,7 @@ function snapshot(store: Store, repo: Repo, id: string): AgentWorkspaceSnapshot 
   const value = record(store, repo, id);
   if (!draft && value.messages.some(message => message.status === 'partial')) {
     value.messages = value.messages.map(message => message.status === 'partial' ? { ...message, status: 'failed' } : message);
+    settleTurns(value, 'Native session disconnected before completion; no inference was replayed.');
     value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
   }
   return { workspace: publicWorkspace(value), draft };
@@ -63,25 +75,55 @@ function editorLimit(value: AgentWorkspaceRecord): void {
   if (bytes(value.prompt) > 32768 || value.planRevisions.some(revision => bytes(revision.markdown) > WORKSPACE_LIMITS.planBytes)
     || bytes(value.title) + bytes(value.prompt) + bytes(value.ticketMarkdown) + value.planRevisions.reduce((total, revision) => total + bytes(revision.markdown), 0) > WORKSPACE_LIMITS.editorBytes) throw new HttpError(413, 'Workspace editor text exceeds its 256 KiB total, 32 KiB prompt or 32 KiB plan limit; saved text was not changed');
 }
-function savedContext(value: AgentWorkspaceRecord, includeHistory: boolean): { message: string; context: DraftContext } {
+function savedContext(value: AgentWorkspaceRecord, includeHistory: boolean, turn: DraftTurnOptions): { message: string; context: DraftContext; instruction?: string } {
   const plan = value.planRevisions.find(revision => revision.id === value.currentPlanRevisionId);
   const messages = includeHistory ? value.messages.slice(-WORKSPACE_LIMITS.contextMessages).map(message => ({ ...message })) : [];
-  const data = { plan: plan ? { id: plan.id, markdown: plan.markdown, approved: plan.approvedAt !== undefined } : null, messages };
+  const data = { plan: plan ? { id: plan.id, markdown: plan.markdown, approved: plan.approvedAt !== undefined } : null, messages, research: value.researchResults };
   const encoded = () => JSON.stringify(data).replaceAll('@', '\\u0040').replaceAll('^', '\\u005e');
   while (bytes(encoded()) > WORKSPACE_LIMITS.contextBytes && messages.length) messages.shift();
   let planTruncated = false;
-  while (bytes(encoded()) > WORKSPACE_LIMITS.contextBytes && data.plan) {
+  while (bytes(encoded()) > WORKSPACE_LIMITS.contextBytes && data.plan && data.plan.markdown.length) {
     data.plan.markdown = data.plan.markdown.slice(0, Math.floor(data.plan.markdown.length / 2));
     planTruncated = true;
   }
+  if (bytes(encoded()) > WORKSPACE_LIMITS.contextBytes) throw new HttpError(413, 'Saved research exceeds the bounded encoded context; nothing was sent');
   const message = encoded();
+  const instruction = turn.intent === 'task_extraction' ? extractionInstruction({ workspaceId: value.id, planRevisionId: value.currentPlanRevisionId, strategy: turn.strategy!, referenceIds: value.researchReferences.map(reference => reference.id) }) : undefined;
   const omitted = value.messages.length - messages.length;
-  return { message, context: { key: 'workspace:history', label: 'Saved discussion and current plan', status: 'ready', detail: `${includeHistory ? `Seeds ${messages.length} latest saved messages on the next Send; ${omitted} older/oversized messages omitted` : 'Conversation already seeded in this native session; saved messages are not retransmitted'}. Supplies the current plan as untrusted JSON, at most 64 KiB total (plan at most 32 KiB); plan ${planTruncated ? 'truncated to fit encoded context' : 'supplied in full'}; no hidden summary. Previously transmitted image bytes and old file contents are not replayed. The native session retains its own already-sent turns until disconnected.` } };
+  return { message, instruction, context: { key: 'workspace:history', label: 'Saved discussion, plan and host research', status: 'ready', detail: `${includeHistory ? `Seeds ${messages.length} latest saved messages on the next Send; ${omitted} older/oversized messages omitted` : 'Conversation already seeded in this native session; saved messages are not retransmitted'}. Supplies the current plan and explicitly retrieved research as untrusted JSON, at most 64 KiB total (plan at most 32 KiB); plan ${planTruncated ? 'truncated to fit encoded context' : 'supplied in full'}; no hidden summary. Previously transmitted image bytes and old file contents are not replayed. The native session retains its own already-sent turns until disconnected.` } };
+}
+function settleTurns(value: AgentWorkspaceRecord, disconnectedError?: string): void {
+  for (const turn of value.acceptedTurns) {
+    if (turn.status !== 'accepted') continue;
+    const message = value.messages[turn.assistantMessageIndex];
+    if (!disconnectedError && message?.status === 'partial') continue;
+    if (message?.status !== 'complete') {
+      turn.status = 'failed'; turn.error = disconnectedError || 'Native turn failed; no automatic retry was performed.';
+      if (turn.intent === 'task_extraction') value.extraction = { key: turn.key, status: 'failed', error: turn.error };
+      continue;
+    }
+    turn.status = 'complete';
+    if (turn.intent !== 'task_extraction') continue;
+    try {
+      const payload = validateTaskExtraction(message.text, { workspaceId: value.id, planRevisionId: turn.sourcePlanRevisionId, strategy: turn.strategy!, referenceIds: turn.researchReferenceIds });
+      if (value.proposalSets.length >= EXTRACTION_LIMITS.sets || bytes(JSON.stringify(value.proposalSets)) + bytes(JSON.stringify(payload)) + bytes(JSON.stringify(value.researchReferences)) > EXTRACTION_LIMITS.storedBytes) throw new Error('Proposal set storage limit reached; previous sets were retained.');
+      const set = { id: crypto.randomUUID(), strategy: payload.strategy, sourceWorkspaceId: value.id, sourcePlanRevisionId: turn.sourcePlanRevisionId, createdAt: Date.now(), validationStatus: 'valid' as const, payload, researchReferences: structuredClone(value.researchReferences.filter(reference => turn.researchReferenceIds.includes(reference.id))) };
+      value.proposalSets.push(set); turn.proposalSetId = set.id;
+      value.extraction = { key: turn.key, status: 'valid', proposalSetId: set.id };
+    } catch (error) {
+      turn.status = 'failed'; turn.error = error instanceof Error ? error.message : 'Task extraction validation failed; previous sets were retained.';
+      value.extraction = { key: turn.key, status: 'failed', error: turn.error };
+    }
+  }
 }
 function saveNative(store: Store, repo: Repo, id: string, draft: DraftSnapshot): void {
   const value = record(store, repo, id);
   value.messages = structuredClone(draft.messages);
-  if (draft.model) { value.model = { ...draft.model }; value.thinking = draft.thinking; }
+  if (draft.model) {
+    if (value.model && (value.model.provider !== draft.model.provider || value.model.id !== draft.model.id || value.thinking !== draft.thinking)) value.version++;
+    value.model = { ...draft.model }; value.thinking = draft.thinking;
+  }
+  settleTurns(value);
   value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
 }
 
@@ -118,19 +160,24 @@ async function connect(store: Store, repo: Repo, id: string): Promise<AgentWorks
   try {
     const draft = await createWorkspaceDraft(store, repo, {
       messages: value.messages, model: value.model, thinking: value.thinking,
-      context: () => savedContext(record(store, repo, id), !seeded),
-      validateTurn: prompt => {
+      context: turn => savedContext(record(store, repo, id), !seeded, turn),
+      validateTurn: (prompt, turn) => {
         const current = record(store, repo, id);
         if (current.archived) throw new HttpError(409, 'Archived workspace cannot send');
+        if (turn.contextVersion !== undefined && turn.contextVersion !== current.version) throw new HttpError(409, 'Saved workspace context changed; nothing was accepted. Discard this unaccepted request and prepare a new explicit action.');
+        if (turn.intent === 'task_extraction' && (current.proposalSets.length >= EXTRACTION_LIMITS.sets || bytes(JSON.stringify(current.proposalSets)) + EXTRACTION_LIMITS.payloadBytes > EXTRACTION_LIMITS.storedBytes)) throw new HttpError(413, 'Proposal set storage limit reached; saved sets were retained');
         if (current.acceptedTurns.length >= WORKSPACE_LIMITS.turns || current.messages.length + 2 > WORKSPACE_LIMITS.messages
           || current.messages.reduce((total, message) => total + bytes(message.text), 0) + bytes(prompt) + 256 * 1024 > WORKSPACE_LIMITS.historyBytes) throw new HttpError(413, 'Workspace history limit reached; saved history is retained. Create another workspace to continue.');
       },
-      acceptTurn: draft => {
+      acceptTurn: (draft, turn) => {
         const receipt = accepted.get(keyFor(store, id));
         if (!receipt) throw new HttpError(409, 'Turn has no idempotency reservation');
         store.transaction(() => {
           const current = record(store, repo, id);
-          current.acceptedTurns.push(receipt); store.save('agentWorkspaces', current);
+          const acceptedTurn: WorkspaceTurnReceipt = { ...receipt, contextHash: turn.contextHash, contextVersion: current.version, acceptedAt: Date.now(), intent: turn.intent, ...(turn.strategy ? { strategy: turn.strategy } : {}), sourceWorkspaceId: id, sourcePlanRevisionId: current.currentPlanRevisionId, model: structuredClone(draft.model), thinking: draft.thinking, researchReferenceIds: current.researchReferences.map(reference => reference.id), userMessageIndex: draft.messages.length - 2, assistantMessageIndex: draft.messages.length - 1, status: 'accepted' };
+          current.acceptedTurns.push(acceptedTurn);
+          if (turn.intent === 'task_extraction') current.extraction = { key: receipt.key, status: 'pending' };
+          store.save('agentWorkspaces', current);
           saveNative(store, repo, id, draft);
         });
         seeded = true;
@@ -176,13 +223,22 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
       const all = store.list('agentWorkspaces');
       if (all.length >= WORKSPACE_LIMITS.global || all.filter(value => value.repoId === repo.id).length >= WORKSPACE_LIMITS.perRepo) throw new HttpError(429, 'Workspace count limit reached (16 per repository, 64 global, including archived); existing workspaces were retained');
       const now = Date.now();
-      const value: AgentWorkspaceRecord = { id: crypto.randomUUID(), repoId: repo.id, repoPath: repo.path, title: typeof input.title === 'string' ? input.title.trim() : 'Untitled workspace', createdAt: now, updatedAt: now, archived: false, version: 1, prompt: '', ticketMarkdown: '', currentPlanRevisionId: null, planRevisions: [], messages: [], model: null, thinking: '', acceptedTurns: [] };
+      const value: AgentWorkspaceRecord = { id: crypto.randomUUID(), repoId: repo.id, repoPath: repo.path, title: typeof input.title === 'string' ? input.title.trim() : 'Untitled workspace', createdAt: now, updatedAt: now, archived: false, version: 1, prompt: '', ticketMarkdown: '', currentPlanRevisionId: null, planRevisions: [], messages: [], model: null, thinking: '', acceptedTurns: [], rejectedTurns: [], researchReferences: [], researchResults: [], proposalSets: [], extraction: null };
       store.save('agentWorkspaces', value); return value;
     });
     return json({ workspace: publicWorkspace(workspace), draft: null }, 201);
   }
   record(store, repo, id || '');
   if (segments.length === 5 && request.method === 'GET') return json(snapshot(store, repo, id!));
+  if (segments.length === 7 && action === 'turns' && request.method === 'GET') {
+    snapshot(store, repo, id!);
+    const value = record(store, repo, id!);
+    const turn = value.acceptedTurns.find(turn => turn.key === segments[6]);
+    if (!turn) return json(value.rejectedTurns.includes(segments[6]!) ? { accepted: false, resolved: true, status: 'rejected' } : { accepted: false });
+    const receipt: Omit<WorkspaceTurnReceipt, 'hash'> & { hash?: string } = { ...turn };
+    delete receipt.hash;
+    return json({ accepted: true, receipt });
+  }
   if (segments.length === 5 && request.method === 'PATCH') {
     const input = await payload(request, ['version', 'title', 'archived', 'prompt', 'ticketMarkdown', 'planMarkdown', 'approvePlanRevisionId']);
     if (!Number.isSafeInteger(input.version)) throw new HttpError(400, 'A workspace editor version is required');
@@ -222,10 +278,44 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
   operations.add(operationKey);
   try {
     if (segments.length === 6 && action === 'connect' && request.method === 'POST') { await payload(request, []); return json(await connect(store, repo, id)); }
+    if (segments.length === 8 && action === 'turns' && segments[7] === 'abandon' && request.method === 'POST') {
+      await payload(request, []);
+      const key = segments[6]!;
+      if (!/^[A-Za-z0-9_-]{16,128}$/.test(key)) throw new HttpError(400, 'Invalid turn key');
+      const value = record(store, repo, id);
+      const turn = value.acceptedTurns.find(turn => turn.key === key);
+      if (turn) {
+        const receipt: Omit<WorkspaceTurnReceipt, 'hash'> & { hash?: string } = { ...turn };
+        delete receipt.hash;
+        return json({ accepted: true, receipt });
+      }
+      if (!value.rejectedTurns.includes(key)) {
+        if (value.rejectedTurns.length >= WORKSPACE_LIMITS.turns) throw new HttpError(413, 'Rejected turn key limit reached; previous reservations were retained');
+        value.rejectedTurns.push(key); store.save('agentWorkspaces', value);
+      }
+      return json({ accepted: false, resolved: true, status: 'rejected' });
+    }
+    if (segments.length === 6 && action === 'research' && request.method === 'POST') {
+      const input = await payload(request, ['paths', 'version']);
+      let value = record(store, repo, id);
+      if (value.archived) throw new HttpError(409, 'Unarchive this workspace before research');
+      if (!Number.isSafeInteger(input.version) || input.version !== value.version) throw new HttpError(409, 'Research requires the current saved workspace version');
+      if (!Array.isArray(input.paths) || input.paths.some(path => typeof path !== 'string')) throw new HttpError(400, 'Research paths must be a string array');
+      const results = await researchRepository(store, repo, input.paths as string[]);
+      value = record(store, repo, id);
+      if (value.version !== input.version) throw new HttpError(409, 'Workspace context changed while retrieving research; no sources were saved');
+      const existingIds = new Set(value.researchReferences.map(reference => reference.id));
+      const added = results.filter(result => !existingIds.has(result.reference.id));
+      if (value.researchResults.length + added.length > 32 || bytes(JSON.stringify([...value.researchResults, ...added]).replaceAll('@', '\\u0040').replaceAll('^', '\\u005e')) > 48 * 1024) throw new HttpError(413, 'Workspace research limit reached (32 references, 48 KiB encoded including content); existing references were retained');
+      value.researchResults.push(...added); value.researchReferences.push(...added.map(result => result.reference));
+      value.version++; value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
+      return json(snapshot(store, repo, id));
+    }
     if (action !== 'session' || segments.length < 6 || segments.length > 7) throw new HttpError(404, 'Unknown agent workspace route');
     let receipt: TurnReceipt | undefined;
     if (segments.length === 7 && segments[6] === 'turn' && request.method === 'POST') {
       receipt = await turnReceipt(request);
+      if (record(store, repo, id).rejectedTurns.includes(receipt.key)) throw new HttpError(409, 'This unaccepted turn key was explicitly discarded; it cannot be sent or replayed');
       const prior = record(store, repo, id).acceptedTurns.find(turn => turn.key === receipt!.key);
       if (prior) {
         if (prior.hash !== receipt.hash) throw new HttpError(409, 'Idempotency-Key already belongs to a different Send');
