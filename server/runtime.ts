@@ -4,7 +4,7 @@ import { appendFile, chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Dialog, HostVerification, RecoveryHistory, Repo, Run, Runtime, Status, Store, Ticket } from './contracts';
-import { reconcileTickets, snapshotTicket } from './tickets';
+import { batchInactive, reconcileTickets, snapshotTicket } from './tickets';
 import { object, RpcProcess } from './rpc';
 import type { Frame } from './rpc';
 import { assertVerifiedCriteria, recordEvidence } from './evidence';
@@ -103,6 +103,7 @@ export async function inspectWorkspaceHandoff(repo: Repo, runId: string | null =
 }
 
 export function eligible(store: Store, repo: Repo, ticket: Ticket) {
+  if (batchInactive(store, repo.path, ticket.id)) return false;
   if (repo.mode === 'paused' || repo.handoff || ticket.removed || ticket.error || ticket.criteria.length === 0) return false;
   if (ticket.status !== 'ready' && ticket.status !== 'draft') return false;
   if (repo.mode === 'approved' && ticket.approvedRevision !== ticket.revision) return false;
@@ -110,7 +111,7 @@ export function eligible(store: Store, repo: Repo, ticket: Ticket) {
   if (ticket.status === 'draft' && store.list('runs').some((run) => run.repoId === repo.id && run.ticketId === ticket.id)) return false;
   return ticket.dependencies.every((id) => {
     const dependency = store.get('tickets', `${repo.id}/${id}`);
-    return dependency && !dependency.removed && !dependency.error && dependency.status === 'done';
+    return dependency && !batchInactive(store, repo.path, id) && !dependency.removed && !dependency.error && dependency.status === 'done';
   });
 }
 

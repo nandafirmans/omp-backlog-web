@@ -9,6 +9,7 @@ import { digest } from './store';
 import { HttpError, MAX_ATTACHMENTS_TOTAL } from './tickets';
 import { researchRepository } from './agent-research';
 import { EXTRACTION_LIMITS, extractionInstruction, validateTaskExtraction } from './task-extraction';
+import { operationFor, previewBatch, publicOperation, publishBatch, saveBatchReview } from './batch-publication';
 
 export const WORKSPACE_LIMITS = { perRepo: 16, global: 64, revisions: 32, editorBytes: 256 * 1024, planBytes: 32 * 1024, historyBytes: 512 * 1024, messages: 128, turns: 64, contextBytes: 64 * 1024, contextMessages: 12 } as const;
 const live = new Map<string, { store: Store; draftId: string }>();
@@ -40,6 +41,7 @@ function publicWorkspace(value: AgentWorkspaceRecord): AgentWorkspace {
     currentPlanRevisionId: value.currentPlanRevisionId, planRevisions: value.planRevisions,
     messages: value.messages, model: value.model, thinking: value.thinking,
     proposalSets: value.proposalSets, researchReferences: value.researchReferences, extraction: value.extraction,
+    batchReview: value.batchReview ?? null,
   };
 }
 function summary(value: AgentWorkspaceRecord): AgentWorkspaceSummary {
@@ -58,7 +60,7 @@ function snapshot(store: Store, repo: Repo, id: string): AgentWorkspaceSnapshot 
     settleTurns(value, 'Native session disconnected before completion; no inference was replayed.');
     value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
   }
-  return { workspace: publicWorkspace(value), draft };
+  return { workspace: publicWorkspace(value), draft, batchOperations: store.list('batchOperations').filter(operation => operation.repoId === repo.id && operation.repoPath === repo.path && operation.workspaceId === id).map(publicOperation) };
 }
 function detached(value: AgentWorkspaceRecord): DraftSnapshot {
   return { id: value.id, status: 'stopped', models: [], model: value.model, thinking: value.thinking, thinkingLevels: [], messages: value.messages, error: 'No native session is connected. Saved text is retained; Connect never replays inference.' };
@@ -229,6 +231,21 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
     return json({ workspace: publicWorkspace(workspace), draft: null }, 201);
   }
   record(store, repo, id || '');
+  if (segments.length === 6 && action === 'batch-review' && request.method === 'PUT') {
+    const input = await payload(request, ['version', 'reviewVersion', 'proposalSetId', 'proposals', 'selectedKeys']);
+    const review = saveBatchReview(store, repo, id!, input);
+    return json({ ...snapshot(store, repo, id!), review });
+  }
+  if (segments.length === 7 && action === 'batch-operations' && request.method === 'GET') return json(publicOperation(operationFor(store, repo, id!, segments[6]!)));
+  if (segments.length === 6 && action === 'batch-preview' && request.method === 'POST') {
+    const input = await payload(request, ['version', 'reviewId', 'reviewVersion', 'acknowledgeStalePlan']);
+    return json(publicOperation(await previewBatch(store, repo, id!, input)));
+  }
+  if (segments.length === 6 && action === 'batch-publish' && request.method === 'POST') {
+    const input = await payload(request, ['confirmation']);
+    if (typeof input.confirmation !== 'string') throw new HttpError(400, 'Confirmation is required');
+    return json(publicOperation(await publishBatch(store, repo, id!, input.confirmation)));
+  }
   if (segments.length === 5 && request.method === 'GET') return json(snapshot(store, repo, id!));
   if (segments.length === 7 && action === 'turns' && request.method === 'GET') {
     snapshot(store, repo, id!);

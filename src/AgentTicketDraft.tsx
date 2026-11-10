@@ -5,6 +5,8 @@ import type { AgentWorkspace, AgentWorkspaceSnapshot, AgentWorkspaceSummary } fr
 import type { DraftContext, DraftPreparation, DraftSnapshot } from '../server/drafting-contracts';
 import type { UploadAttachments } from './attachments';
 import MarkdownEditor from './MarkdownEditor';
+import AgentBatchReview from './AgentBatchReview';
+import type { BatchOperation } from './AgentBatchReview';
 import type { RequestApi } from './Workspace';
 import { proposedTicketMarkdown } from './ticketProposal';
 import { currentPlan, mergeWorkspaceRuntime, workspaceEditorsChanged } from './agentWorkspaceState';
@@ -56,6 +58,10 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   const [operation, setOperation] = useState('Loading workspaces…');
   const [error, setError] = useState('');
   const [modal, modalContext] = Modal.useModal();
+  const [batchDirty, setBatchDirty] = useState(false);
+  const [batchBusy, setBatchBusy] = useState(false);
+  const [batchOperations, setBatchOperations] = useState<BatchOperation[]>([]);
+  const batchSaveRef = useRef<(() => Promise<AgentWorkspace | undefined>) | null>(null);
   const alive = useRef(true);
   const locked = useRef(false);
   const session = useRef('');
@@ -63,7 +69,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   const root = `/api/repos/${encodeURIComponent(repoId)}/agent-workspaces`;
   const selectionKey = `omp-agent-workspace:${repoId}`;
   const path = workspace ? `${root}/${encodeURIComponent(workspace.id)}` : '';
-  const busy = !!operation || snapshot?.status === 'busy';
+  const busy = !!operation || snapshot?.status === 'busy' || batchBusy;
   const unavailable = disabled || busy || !workspace || workspace.archived;
   const connected = !!snapshot && snapshot.status !== 'stopped';
   const dirty = !!workspace && workspaceEditorsChanged(workspace, { title, prompt, plan, ticketMarkdown }, initialTicketMarkdown);
@@ -78,7 +84,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   const latestPlan = currentPlan(workspace);
   const inspectingHistory = !!selectedRevision && selectedRevision.id !== workspace?.currentPlanRevisionId;
 
-  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange(dirty || batchDirty); }, [dirty, batchDirty, onDirtyChange]);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
   useEffect(() => { onReadyChange(!!workspace && !workspace.archived); }, [workspace, onReadyChange]);
   useEffect(() => {
@@ -97,6 +103,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
       if (!alive.current || openedWorkspace.current !== value.workspace.id) return;
       setPending(turn); setPendingReady(true);
     }).catch(cause => { if (alive.current) setError(failure(cause)); });
+    setBatchOperations((value as AgentWorkspaceSnapshot & { batchOperations?: BatchOperation[] }).batchOperations ?? []);
     setWorkspace(value.workspace); remember(value.workspace);
     setObservedPlanId(value.workspace.currentPlanRevisionId);
     setSnapshot(value.draft); session.current = value.draft && value.draft.status !== 'stopped' ? value.workspace.id : '';
@@ -169,9 +176,9 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
     finally { locked.current = false; if (alive.current) setOperation(''); }
   }
 
-  async function saveEditors() {
+  async function saveEditors(version = workspace?.version) {
     if (!workspace) throw new Error('Open a workspace first.');
-    const value = await api<AgentWorkspaceSnapshot>(path, json({ version: workspace.version, title, prompt, ticketMarkdown, ...(plan !== (latestPlan?.markdown ?? '') ? { planMarkdown: plan } : {}) }, 'PATCH'));
+    const value = await api<AgentWorkspaceSnapshot>(path, json({ version, title, prompt, ticketMarkdown, ...(plan !== (latestPlan?.markdown ?? '') ? { planMarkdown: plan } : {}) }, 'PATCH'));
     if (!alive.current) return value;
     setWorkspace(value.workspace); remember(value.workspace); setSnapshot(value.draft);
     setObservedPlanId(value.workspace.currentPlanRevisionId);
@@ -187,9 +194,10 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   });
 
   async function protectSwitch() {
-    if (dirty) {
-      if (!await modal.confirm({ title: 'Save editors before switching workspace?', content: 'Save the message, title, plan revision and single-ticket review before opening another workspace. A conflicting save keeps you here with all edits available.', okText: 'Save and continue', cancelText: 'Keep editing' })) return false;
-      await saveEditors();
+    if (dirty || batchDirty) {
+      if (!await modal.confirm({ title: 'Save editors before switching workspace?', content: 'Save all workspace and task review edits before opening another workspace. A conflicting save keeps you here with all edits available.', okText: 'Save and continue', cancelText: 'Keep editing' })) return false;
+      const saved = batchDirty ? await batchSaveRef.current?.() : undefined;
+      if (dirty) await saveEditors(saved?.version);
     }
     return onBeforeWorkspaceChange();
   }
@@ -408,8 +416,8 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
             {!!set.payload.openQuestions.length && <div><h4>Open questions / unresolved assumptions</h4><ul>{set.payload.openQuestions.map((question, index) => <li key={index}>{question}</li>)}</ul></div>}
             {set.payload.proposals.map(proposal => <details key={proposal.key} className="agent-task-proposal"><summary>{proposal.key} · {proposal.title}</summary><pre>{proposal.description}</pre><h4>Acceptance criteria</h4><ul>{proposal.acceptanceCriteria.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul><h4>Verification</h4><ul>{proposal.verification.map((step, index) => <li key={index}>{step}</li>)}</ul><p>Depends on: {proposal.dependsOn.join(', ') || 'None'}</p><p>Host source references: {proposal.sourceReferences.join(', ') || 'None — treat repository-specific claims as unverified'}</p></details>)}
           </section>)}
-          <p className="muted">U3 remains unavailable: full multi-ticket editing, dependency editing/reordering, final ID allocation, crash-safe batch publication and scheduler activation barrier.</p>
-          <details className="agent-legacy-ticket" open><summary>Existing reviewed single-ticket publication</summary><p className="muted">The separate legacy ticket editor remains available for quick-ticket drafting. Generated task keys are not final ticket IDs. No batch publication is available.</p>{children}</details>
+          <AgentBatchReview key={workspace.id} workspace={workspace} initialOperations={batchOperations} path={path} api={api} disabled={disabled || !!operation || snapshot?.status === 'busy' || workspace.archived} workspaceDirty={dirty} onWorkspace={setWorkspace} onDirty={setBatchDirty} onBusy={setBatchBusy} saveRef={batchSaveRef} />
+          <details className="agent-legacy-ticket" open><summary>Existing reviewed single-ticket publication</summary><p className="muted">The separate legacy ticket editor remains available for quick-ticket drafting.</p>{children}</details>
         </div>
       </section>
     </div>}

@@ -186,18 +186,28 @@ async function reconcile(store: Store, force: boolean): Promise<void> {
 }
 // One local owner; serialize website file mutations to make revision checks meaningful.
 const writes = new WeakMap<Store, Promise<unknown>>();
-function serializeWrite<T>(store: Store, operation: () => Promise<T>): Promise<T> {
+export function serializeWrite<T>(store: Store, operation: () => Promise<T>): Promise<T> {
   const pending = (writes.get(store) || Promise.resolve()).then(operation);
   writes.set(store, pending.then(() => undefined, () => undefined));
   return pending;
+}
+export function batchInactive(store: Store, repoPath: string, id: string): boolean {
+  return store.list('batchOperations').some(operation => operation.repoPath === repoPath
+    && (operation.state === 'publishing' || operation.state === 'blocked') && operation.tickets.some(ticket => ticket.id === id));
+}
+export function batchReserved(store: Store, repo: Repo, id: string): boolean {
+  return store.list('batchOperations').some(operation => operation.repoPath === repo.path && operation.state !== 'complete'
+    && (operation.state !== 'prepared' || operation.expires > Date.now()) && operation.tickets.some(ticket => ticket.id === id));
 }
 export function writeTicket(store: Store, repo: Repo, markdown: string, revision?: string, expectedId?: string): Promise<Ticket> {
   return serializeWrite(store, () => saveTicket(store, repo, markdown, revision, expectedId));
 }
 async function saveTicket(store: Store, repo: Repo, markdown: string, revision?: string, expectedId?: string): Promise<Ticket> {
   const parsed = parseTicket(markdown, expectedId);
+  if (revision === undefined && batchReserved(store, repo, parsed.id)) throw new HttpError(409, 'Ticket ID is reserved by an agent batch review');
   attachmentReferences(markdown);
   await reconcileTickets(store, true);
+  if (batchInactive(store, repo.path, parsed.id)) throw new HttpError(404, 'Ticket not found');
   const old = store.get('tickets', `${repo.id}/${parsed.id}`);
   if (revision === undefined ? Boolean(old && !old.removed) : !old || old.revision !== revision) throw new HttpError(409, 'Ticket changed on disk. Reload and reconcile your edits before saving.');
   const directory = await ticketDirectory(repo, parsed.id, true);
@@ -238,7 +248,7 @@ export function validateCompleteTicket(markdown: string, files: CompleteTicketFi
 }
 
 let publishDirectory: ((source: string, destinationFd: number, id: string) => void) | undefined;
-function atomicPublish(source: string, destinationFd: number, id: string): void {
+export function atomicPublish(source: string, destinationFd: number, id: string): void {
   if (!publishDirectory) {
     if (process.platform !== 'linux') throw new HttpError(503, 'Assisted creation requires atomic no-overwrite directory publication on Linux; manual creation remains available');
     try {
@@ -269,6 +279,7 @@ function atomicPublish(source: string, destinationFd: number, id: string): void 
 export function createCompleteTicket(store: Store, repo: Repo, markdown: string, files: CompleteTicketFile[], publication: CompleteTicketPublication): Promise<Ticket> {
   return serializeWrite(store, async () => {
     const payload = validateCompleteTicket(markdown, files);
+    if (batchReserved(store, repo, payload.id)) throw new HttpError(409, 'Ticket ID is reserved by an agent batch review');
     const checkMode = () => {
       const latest = store.get('repos', repo.id);
       if (!latest || latest.path !== repo.path || latest.mode !== publication.mode || Date.now() >= publication.expires) throw new HttpError(409, 'Creation review expired or the project mode changed; review the complete ticket again');
@@ -375,6 +386,7 @@ async function saveAttachment(store: Store, repo: Repo, id: string, name: string
   if (!validAttachmentName(name) || basename(name) !== name) throw new HttpError(400, 'Unsupported or unsafe attachment filename');
   if (bytes.length > MAX_ATTACHMENT || !bytes.length) throw new HttpError(400, 'Attachment must be 1 byte–10 MiB');
   await reconcileTickets(store, true);
+  if (batchInactive(store, repo.path, id)) throw new HttpError(404, 'Ticket not found');
   const ticket = store.get('tickets', `${repo.id}/${id}`);
   if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
   if (ticket.revision !== revision) throw new HttpError(409, 'Ticket changed; reload before uploading');

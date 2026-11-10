@@ -2,7 +2,7 @@ import type { TaskExtraction } from './agent-workspace-contracts';
 import type { ExtractionStrategy } from './drafting-contracts';
 
 export const EXTRACTION_LIMITS = { proposals: 12, payloadBytes: 64 * 1024, sets: 12, storedBytes: 256 * 1024, questions: 24, listItems: 32, stringBytes: 8192 } as const;
-export interface ExtractionSource { workspaceId: string; planRevisionId: string | null; strategy: ExtractionStrategy; referenceIds: string[] }
+export interface ExtractionSource { workspaceId: string; planRevisionId: string | null; strategy: ExtractionStrategy; referenceIds: string[]; existingTicketIds?: string[] }
 function invalid(reason: string): never { throw new Error(`Task extraction invalid: ${reason}. Previous proposal sets were retained; no repair or retry was attempted.`); }
 function exact(value: unknown, fields: string[], label: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== fields.length || fields.some(field => !Object.hasOwn(value, field))) invalid(`${label} must contain exactly ${fields.join(', ')}`);
@@ -48,8 +48,9 @@ export function validateTaskExtraction(output: string, source: ExtractionSource)
     if (visited.has(key)) return;
     visiting.add(key);
     for (const dependency of dependencies.get(key)!) {
-      if (dependency === key || !dependencies.has(dependency)) invalid('dependency must exist and must not name itself');
-      visit(dependency);
+      if (dependency === key) invalid('dependency must not name itself');
+      if (dependencies.has(dependency)) visit(dependency);
+      else if (!source.existingTicketIds?.includes(dependency)) invalid('dependency must name a selected task or existing ticket');
     }
     visiting.delete(key); visited.add(key);
   }
