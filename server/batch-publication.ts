@@ -1,11 +1,11 @@
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import type { BatchOperation, BatchReview, TaskProposal } from './agent-workspace-contracts';
 import type { Repo, Store } from './contracts';
-import { digest, token } from './store';
+import { database, digest, token } from './store';
 import { validateTaskExtraction } from './task-extraction';
-import { atomicPublish, batchInactive, batchReserved, HttpError, MAX_MARKDOWN, readSafe, reconcileTickets, safePath, serializeWrite, validateCompleteTicket } from './tickets';
+import { atomicPublish, batchInactive, batchReserved, HttpError, MAX_MARKDOWN, readSafe, readTicket, reconcileTickets, safePath, serializeWrite, validTicketId, validateCompleteTicket } from './tickets';
 
 function workspace(store: Store, repo: Repo, id: string) {
   const value = store.get('agentWorkspaces', id);
@@ -75,18 +75,41 @@ function externalGraph(store: Store, repo: Repo, tickets: BatchOperation['ticket
   return Object.fromEntries(Object.entries(revisions).sort(([a], [b]) => a.localeCompare(b)));
 }
 function payloadHash(op: BatchOperation): string {
-  return digest(JSON.stringify({ id: op.id, repoId: op.repoId, repoPath: op.repoPath, workspaceId: op.workspaceId, reviewId: op.reviewId, reviewVersion: op.reviewVersion, workspaceVersion: op.workspaceVersion, sourcePlanRevisionId: op.sourcePlanRevisionId, mode: op.mode, expires: op.expires, acknowledgeStalePlan: op.acknowledgeStalePlan, externalRevisions: op.externalRevisions, tickets: op.tickets.map(({ key, id, markdown, dependencies }) => ({ key, id, markdown, dependencies })) }));
+  return digest(JSON.stringify({ id: op.id, repoId: op.repoId, repoPath: op.repoPath, rootIdentity: op.rootIdentity, workspaceId: op.workspaceId, reviewId: op.reviewId, reviewVersion: op.reviewVersion, workspaceVersion: op.workspaceVersion, sourcePlanRevisionId: op.sourcePlanRevisionId, mode: op.mode, expires: op.expires, acknowledgeStalePlan: op.acknowledgeStalePlan, externalRevisions: op.externalRevisions, tickets: op.tickets.map(({ key, id, markdown, dependencies }) => ({ key, id, markdown, dependencies })) }));
+}
+function validateJournal(op: BatchOperation): void {
+  if (!op.rootIdentity || ![op.rootIdentity.dev, op.rootIdentity.ino, op.rootIdentity.birthtimeMs].every(value => typeof value === 'number' && Number.isFinite(value) && value > 0)) throw new HttpError(409, 'Repository root identity was not recorded; inspect the legacy publication and request a new review');
+  if (!Array.isArray(op.tickets) || op.tickets.length < 1 || op.tickets.length > 12 || op.tickets.some(ticket => !ticket || typeof ticket.key !== 'string' || typeof ticket.id !== 'string' || typeof ticket.markdown !== 'string' || !Array.isArray(ticket.dependencies) || ticket.dependencies.some(dependency => typeof dependency !== 'string') || (ticket.stage !== undefined && typeof ticket.stage !== 'string')) || new Set(op.tickets.map(ticket => ticket.id)).size !== op.tickets.length || !op.externalRevisions || typeof op.externalRevisions !== 'object' || Array.isArray(op.externalRevisions) || Object.values(op.externalRevisions).some(value => typeof value !== 'string')) throw new HttpError(409, 'Publication journal ticket manifest is invalid');
+  if (!op.payloadHash || payloadHash(op) !== op.payloadHash) throw new HttpError(409, 'Publication journal payload identity is invalid');
+  const base = join(op.repoPath, '.omp-backlog');
+  for (const ticket of op.tickets) {
+    if (!validTicketId(ticket.id) || validateCompleteTicket(ticket.markdown, []).id !== ticket.id) throw new HttpError(409, 'Publication journal ticket identity is invalid');
+    if (ticket.stage && (dirname(ticket.stage) !== base || !/^\.batch-stage-[a-f0-9]{64}$/.test(basename(ticket.stage)))) throw new HttpError(409, 'Publication journal staging location is invalid');
+    const identity = [ticket.dev, ticket.ino, ticket.birthtimeMs];
+    if (identity.some(value => value !== undefined) && (!ticket.stage || identity.some(value => typeof value !== 'number' || !Number.isFinite(value)))) throw new HttpError(409, 'Publication journal staging identity is incomplete');
+  }
+}
+async function checkRootIdentity(repo: Repo, expected: NonNullable<BatchOperation['rootIdentity']>): Promise<void> {
+  await safePath(repo.path, repo.path);
+  const info = await lstat(repo.path);
+  if (!info.isDirectory() || info.dev !== expected.dev || info.ino !== expected.ino || info.birthtimeMs !== expected.birthtimeMs) throw new HttpError(409, 'Repository root identity changed; restore the reviewed repository before recovery');
 }
 export function previewBatch(store: Store, repo: Repo, id: string, input: Record<string, unknown>): Promise<BatchOperation> {
   return serializeWrite(store, async () => {
     await reconcileTickets(store, true);
     const { review, set } = checkReview(store, repo, id, input);
     const base = join(repo.path, '.omp-backlog', 'tickets');
+    const root = await lstat(repo.path);
+    if (!root.isDirectory() || !root.birthtimeMs || !root.dev || !root.ino) throw new HttpError(409, 'Repository root identity cannot be recorded safely');
+    const rootIdentity = { dev: root.dev, ino: root.ino, birthtimeMs: root.birthtimeMs };
     await safePath(repo.path, base, true);
     let entries: string[] = [];
     try { entries = await readdir(base); } catch (error) { if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
     checkReview(store, repo, id, input);
     const latest = store.get('repos', repo.id);
+    database(store).query("UPDATE records SET value=json_set(value,'$.invalidated',json('true'),'$.compacted',json('true'),'$.tickets',json('[]')) WHERE kind='batchOperations' AND id IN (SELECT DISTINCT operation_id FROM batch_reservations WHERE state='prepared' AND expires<=? LIMIT 128)").run(Date.now());
+    const activePreviews = database(store).query<{ count: number }, [string, string, number]>("SELECT count(DISTINCT r.operation_id) AS count FROM batch_reservations r JOIN records x ON x.kind='batchOperations' AND x.id=r.operation_id WHERE r.repo_path=? AND json_extract(x.value,'$.workspaceId')=? AND (r.state IN ('publishing','blocked') OR (r.state='prepared' AND r.expires>?))").get(repo.path, id, Date.now());
+    if ((activePreviews?.count ?? 0) >= 64) throw new HttpError(429, 'Too many outstanding publication operations; recover or inspect them, or wait for previews to expire');
     if (!latest || latest.path !== repo.path) throw new HttpError(409, 'Project changed');
     const used = new Set(entries);
     for (const ticket of store.list('tickets')) if (ticket.repoId === repo.id && !ticket.removed) used.add(ticket.id);
@@ -110,7 +133,8 @@ export function previewBatch(store: Store, repo: Repo, id: string, input: Record
       validateCompleteTicket(markdown, []);
       return { key, id: ids.get(key)!, markdown, dependencies };
     });
-    const operation: BatchOperation = { id: token(), repoId: repo.id, repoPath: repo.path, workspaceId: id, reviewId: review.id, reviewVersion: review.version, workspaceVersion: input.version as number, sourcePlanRevisionId: set.sourcePlanRevisionId, payloadHash: '', externalRevisions: externalGraph(store, repo, tickets), mode: latest.mode, expires: Date.now() + 600000, acknowledgeStalePlan: input.acknowledgeStalePlan as boolean, state: 'prepared', tickets };
+    const operation: BatchOperation = { id: token(), repoId: repo.id, repoPath: repo.path, rootIdentity, workspaceId: id, reviewId: review.id, reviewVersion: review.version, workspaceVersion: input.version as number, sourcePlanRevisionId: set.sourcePlanRevisionId, payloadHash: '', externalRevisions: externalGraph(store, repo, tickets), mode: latest.mode, expires: Date.now() + 600000, acknowledgeStalePlan: input.acknowledgeStalePlan as boolean, state: 'prepared', tickets };
+    await checkRootIdentity(repo, rootIdentity);
     operation.payloadHash = payloadHash(operation);
     store.save('batchOperations', operation); return operation;
   });
@@ -121,43 +145,143 @@ export function operationFor(store: Store, repo: Repo, workspaceId: string, conf
   return operation;
 }
 export function publicOperation(operation: BatchOperation) {
-  return { confirmation: operation.id, publicationId: operation.id, reviewId: operation.reviewId, state: operation.state, phase: operation.phase, mode: operation.mode, expires: operation.expires, error: operation.error, tickets: operation.tickets.map(({ key, id, markdown, dependencies }) => ({ key, id, markdown, dependencies })) };
+  return { confirmation: operation.id, publicationId: operation.id, reviewId: operation.reviewId, state: operation.state, phase: operation.phase, mode: operation.mode, expires: operation.expires, error: operation.error, compacted: operation.compacted ?? false, tickets: operation.tickets.map(({ key, id, markdown, dependencies, revision }) => ({ key, id, markdown, dependencies, ...(revision ? { revision } : {}) })) };
 }
-export function publishBatch(store: Store, repo: Repo, workspaceId: string, confirmation: string, fault?: (stage: string) => void): Promise<BatchOperation> {
+type DirectoryInspection = {
+  status: 'missing' | 'match' | 'mismatch' | 'unproven';
+  identity: { dev: number; ino: number; birthtimeMs: number } | null;
+  expectedIdentity: { dev: number; ino: number; birthtimeMs: number } | null;
+  files: { status: 'match' | 'missing' | 'mismatch' | 'unexpected'; details: string[] };
+};
+
+async function inspectDirectory(repo: Repo, path: string | undefined, ticket: BatchOperation['tickets'][number]): Promise<DirectoryInspection> {
+  const expectedIdentity = ticket.dev !== undefined && ticket.ino !== undefined && ticket.birthtimeMs !== undefined
+    ? { dev: ticket.dev, ino: ticket.ino, birthtimeMs: ticket.birthtimeMs } : null;
+  const result: DirectoryInspection = { status: 'missing', identity: null, expectedIdentity, files: { status: 'missing', details: ['Directory is missing'] } };
+  if (!path) return result;
+  try {
+    await safePath(repo.path, path);
+    const info = await lstat(path);
+    result.identity = { dev: info.dev, ino: info.ino, birthtimeMs: info.birthtimeMs };
+    result.status = !expectedIdentity ? 'unproven' : info.isDirectory() && info.dev === expectedIdentity.dev && info.ino === expectedIdentity.ino && info.birthtimeMs === expectedIdentity.birthtimeMs ? 'match' : 'mismatch';
+    if (!info.isDirectory()) { result.files = { status: 'mismatch', details: ['Not a directory'] }; return result; }
+    const entries = await readdir(path);
+    const unexpected = entries.filter(entry => entry !== 'ticket.md');
+    const details = unexpected.map(name => `Unexpected entry: ${name}`);
+    if (!entries.includes('ticket.md')) {
+      details.push('ticket.md is missing');
+      result.files = { status: unexpected.length ? 'unexpected' : 'missing', details };
+      return result;
+    }
+    const markdown = new TextDecoder('utf-8', { fatal: true }).decode(await readSafe(repo.path, join(path, 'ticket.md'), MAX_MARKDOWN));
+    if (markdown !== ticket.markdown) details.push('ticket.md differs from the confirmed Markdown');
+    result.files = { status: unexpected.length ? 'unexpected' : markdown === ticket.markdown ? 'match' : 'mismatch', details };
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT' && !result.identity) return result;
+    result.status = 'mismatch';
+    result.files = { status: 'mismatch', details: ['Directory or ticket.md cannot be inspected safely'] };
+  }
+  return result;
+}
+
+async function inspectOperation(store: Store, repo: Repo, op: BatchOperation) {
+  const reasons: string[] = [];
+  if (op.state !== 'publishing' && op.state !== 'blocked') reasons.push('Only an interrupted or blocked publication can be recovered');
+  try { validateJournal(op); } catch (error) { return { confirmation: op.id, state: op.state, safeToResume: false, reasons: [error instanceof Error ? error.message : 'Publication journal is invalid'], tickets: [] }; }
+  const latest = store.get('repos', repo.id);
+  if (!latest || latest.path !== op.repoPath || latest.mode !== op.mode) reasons.push('Project path or execution mode changed');
+  try { await checkRootIdentity(repo, op.rootIdentity!); }
+  catch { reasons.push('Repository root identity changed or cannot be inspected; restore the reviewed repository'); }
+  try {
+    if (JSON.stringify(externalGraph(store, repo, op.tickets)) !== JSON.stringify(op.externalRevisions)) reasons.push('An existing dependency changed since preview');
+  } catch (error) { reasons.push(error instanceof Error ? error.message : 'Dependency inspection failed'); }
+  for (const [id, revision] of Object.entries(op.externalRevisions)) {
+    try { if ((await readTicket(repo, id)).revision !== revision) reasons.push(`Existing dependency ${id} changed on disk`); }
+    catch { reasons.push(`Existing dependency ${id} cannot be read safely`); }
+  }
+  const base = join(repo.path, '.omp-backlog');
+  const tickets = [];
+  for (const ticket of op.tickets) {
+    const validStage = !ticket.stage || dirname(ticket.stage) === base && /^\.batch-stage-[a-f0-9]{64}$/.test(basename(ticket.stage));
+    const stage = await inspectDirectory(repo, validStage ? ticket.stage : undefined, ticket);
+    if (!validStage) { stage.status = 'mismatch'; stage.files = { status: 'mismatch', details: ['Journaled staging location is invalid'] }; }
+    const published = await inspectDirectory(repo, join(base, 'tickets', ticket.id), ticket);
+    const clean = (item: DirectoryInspection) => item.status === 'match' && item.files.status === 'match';
+    let status: 'not_started' | 'staged' | 'published' | 'ambiguous' = 'ambiguous';
+    if (stage.status === 'missing' && published.status === 'missing' && !stage.expectedIdentity && validStage) status = 'not_started';
+    else if (clean(stage) && published.status === 'missing') status = 'staged';
+    else if (stage.status === 'missing' && clean(published)) status = 'published';
+    if (status === 'ambiguous') reasons.push(`${ticket.id}: directory identity or payload cannot be proven; inspect without overwriting or deleting files`);
+    tickets.push({ id: ticket.id, key: ticket.key, status, expectedRevision: validateCompleteTicket(ticket.markdown, []).revision, stage, published });
+  }
+  return { confirmation: op.id, state: op.state, safeToResume: reasons.length === 0, reasons, tickets };
+}
+
+export function inspectBatch(store: Store, repo: Repo, workspaceId: string, confirmation: string) {
+  return serializeWrite(store, () => inspectOperation(store, repo, operationFor(store, repo, workspaceId, confirmation)));
+}
+
+export function recoverBatch(store: Store, repo: Repo, workspaceId: string, confirmation: string, fault?: (stage: string) => void) {
+  return publishBatch(store, repo, workspaceId, confirmation, fault, true);
+}
+export function publishBatch(store: Store, repo: Repo, workspaceId: string, confirmation: string, fault?: (stage: string) => void, recovery = false): Promise<BatchOperation> {
   return serializeWrite(store, async () => {
     const op = operationFor(store, repo, workspaceId, confirmation);
     let injecting = false;
     const checkpoint = (stage: string) => { if (fault) { injecting = true; fault(stage); injecting = false; } };
     const checkAuthority = () => {
-      if (!op.payloadHash || payloadHash(op) !== op.payloadHash) throw new HttpError(409, 'Publication journal payload identity is invalid');
+      validateJournal(op);
       if (JSON.stringify(externalGraph(store, repo, op.tickets)) !== JSON.stringify(op.externalRevisions)) throw new HttpError(409, 'An existing dependency changed since preview');
-      checkReview(store, repo, workspaceId, { version: op.workspaceVersion, reviewId: op.reviewId, reviewVersion: op.reviewVersion, acknowledgeStalePlan: op.acknowledgeStalePlan });
+      if (op.state === 'prepared') checkReview(store, repo, workspaceId, { version: op.workspaceVersion, reviewId: op.reviewId, reviewVersion: op.reviewVersion, acknowledgeStalePlan: op.acknowledgeStalePlan });
       const latest = store.get('repos', repo.id);
       if (!latest || latest.path !== repo.path || latest.mode !== op.mode) throw new HttpError(409, 'Reviewed workspace or project mode changed');
     };
     if (op.state === 'complete') return op;
-    if (op.state === 'blocked') throw new HttpError(409, 'Publication needs operator inspection; no automatic overwrite is permitted');
+    if (op.state === 'prepared' && (op.invalidated || op.expires <= Date.now())) {
+      if (!op.invalidated) { op.invalidated = true; op.compacted = true; op.tickets = []; store.save('batchOperations', op); }
+      throw new HttpError(409, 'Review expired');
+    }
+    validateJournal(op);
+    await checkRootIdentity(repo, op.rootIdentity!);
+    if (op.state !== 'prepared' && !recovery) throw new HttpError(409, 'Publication needs operator inspection and explicit recovery');
     await reconcileTickets(store, true);
+    if (recovery) {
+      const inspection = await inspectOperation(store, repo, op);
+      if (!inspection.safeToResume) throw new HttpError(409, `Publication cannot safely resume: ${inspection.reasons.join('; ')}`);
+      op.state = 'publishing'; delete op.error; store.save('batchOperations', op);
+    }
     if (op.state === 'prepared') {
+      await checkRootIdentity(repo, op.rootIdentity!);
       checkAuthority();
-      if (op.expires <= Date.now()) throw new HttpError(409, 'Review expired');
       op.state = 'publishing'; op.phase = 'staging'; store.save('batchOperations', op);
       checkpoint('gate');
     }
     const base = join(repo.path, '.omp-backlog'); const tickets = join(base, 'tickets');
     try {
+      await checkRootIdentity(repo, op.rootIdentity!);
       await safePath(repo.path, tickets, true); await mkdir(tickets, { recursive: true, mode: 0o700 }); await safePath(repo.path, tickets);
       const parent = await open(tickets, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
       try {
         for (const ticket of op.tickets) {
+          await checkRootIdentity(repo, op.rootIdentity!);
           if (!ticket.stage) {
             ticket.stage = join(base, `.batch-stage-${token()}`);
             store.save('batchOperations', op);
+            checkpoint('reserved');
           }
           if (ticket.dev === undefined) {
             await mkdir(ticket.stage, { mode: 0o700 });
             const file = await open(join(ticket.stage, 'ticket.md'), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-            try { await file.writeFile(ticket.markdown); await file.sync(); } finally { await file.close(); }
+            try {
+              if (fault) {
+                const bytes = Buffer.from(ticket.markdown);
+                const split = Math.ceil(bytes.length / 2);
+                await file.writeFile(bytes.subarray(0, split));
+                checkpoint('mid-write');
+                await file.writeFile(bytes.subarray(split));
+              } else await file.writeFile(ticket.markdown);
+              await file.sync();
+            } finally { await file.close(); }
             const dir = await open(ticket.stage, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
             try { await dir.sync(); const info = await dir.stat(); if (!info.birthtimeMs) throw new Error('Filesystem cannot provide durable staging identity'); ticket.dev = info.dev; ticket.ino = info.ino; ticket.birthtimeMs = info.birthtimeMs; } finally { await dir.close(); }
             const stagingParent = await open(base, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
@@ -178,27 +302,38 @@ export function publishBatch(store: Store, repo: Repo, workspaceId: string, conf
             const currentParent = await lstat(tickets); const opened = await parent.stat();
             if (currentParent.dev !== opened.dev || currentParent.ino !== opened.ino) throw new Error('Ticket directory changed');
             await reconcileTickets(store, true);
+            await checkRootIdentity(repo, op.rootIdentity!);
             checkAuthority();
             op.phase = 'publishing'; store.save('batchOperations', op);
             atomicPublish(ticket.stage!, parent.fd, ticket.id);
             checkpoint('renamed');
-            await parent.sync();
-            const stagingParent = await open(base, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-            try { await stagingParent.sync(); } finally { await stagingParent.close(); }
-            checkpoint('synced');
           }
+          const inspected = await inspectDirectory(repo, dest, ticket);
+          if (inspected.status !== 'match' || inspected.files.status !== 'match') throw new Error('Published directory identity or payload changed');
+          await parent.sync();
+          const stagingParent = await open(base, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+          try { await stagingParent.sync(); } finally { await stagingParent.close(); }
+          checkpoint('synced');
         }
       } finally { await parent.close(); }
       op.phase = 'reconciling'; store.save('batchOperations', op);
       await reconcileTickets(store, true);
       checkpoint('reconciled');
+      checkpoint('before-activation');
       await reconcileTickets(store, true);
       for (const ticket of op.tickets) {
         const current = store.get('tickets', `${repo.id}/${ticket.id}`);
         if (!current || current.error || current.revision !== validateCompleteTicket(ticket.markdown, []).revision) throw new Error('Published ticket changed or failed validation');
+        const inspected = await inspectDirectory(repo, join(tickets, ticket.id), ticket);
+        if (inspected.status !== 'match' || inspected.files.status !== 'match') throw new Error('Published ticket directory identity or payload changed before activation');
       }
+      await checkRootIdentity(repo, op.rootIdentity!);
       checkAuthority();
-      op.state = 'complete'; store.save('batchOperations', op); return op;
+      op.state = 'complete';
+      const completed = { ...op, compacted: true, tickets: op.tickets.map(({ key, id, dependencies, markdown }) => ({ key, id, dependencies, revision: digest(markdown + '\0[]'), markdown: '' })) };
+      store.save('batchOperations', completed);
+      checkpoint('after-activation');
+      return completed;
     } catch (error) {
       if (injecting) throw error;
       op.state = 'blocked'; op.error = error instanceof Error ? error.message : 'Unknown publication failure'; store.save('batchOperations', op);

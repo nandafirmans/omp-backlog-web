@@ -36,8 +36,10 @@ export interface BatchOperation {
   state: 'prepared' | 'publishing' | 'complete' | 'blocked';
   phase?: 'staging' | 'publishing' | 'reconciling';
   error?: string;
+  invalidated?: boolean; compacted?: boolean;
+  rootIdentity?: { dev: number; ino: number; birthtimeMs: number };
   payloadHash: string; sourcePlanRevisionId: string | null; externalRevisions: Record<string, string>;
-  tickets: { key: string; id: string; markdown: string; dependencies: string[]; stage?: string; dev?: number; ino?: number; birthtimeMs?: number }[];
+  tickets: { key: string; id: string; markdown: string; dependencies: string[]; revision?: string; stage?: string; dev?: number; ino?: number; birthtimeMs?: number }[];
 }
 export interface WorkspaceTurnReceipt {
   key: string;

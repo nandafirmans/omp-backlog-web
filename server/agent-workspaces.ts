@@ -5,11 +5,11 @@ import type { Repo, Store } from './contracts';
 import type { DraftContext, DraftSnapshot, DraftTurnOptions } from './drafting-contracts';
 import { createWorkspaceDraft, handleDraftRequest, readDraftBody, workspaceDraftSnapshot } from './drafting';
 import { groupMembers, identity } from './process-identity';
-import { digest } from './store';
+import { database, digest } from './store';
 import { HttpError, MAX_ATTACHMENTS_TOTAL } from './tickets';
 import { researchRepository } from './agent-research';
 import { EXTRACTION_LIMITS, extractionInstruction, validateTaskExtraction } from './task-extraction';
-import { operationFor, previewBatch, publicOperation, publishBatch, saveBatchReview } from './batch-publication';
+import { inspectBatch, operationFor, previewBatch, publicOperation, publishBatch, recoverBatch, saveBatchReview } from './batch-publication';
 
 export const WORKSPACE_LIMITS = { perRepo: 16, global: 64, revisions: 32, editorBytes: 256 * 1024, planBytes: 32 * 1024, historyBytes: 512 * 1024, messages: 128, turns: 64, contextBytes: 64 * 1024, contextMessages: 12 } as const;
 const live = new Map<string, { store: Store; draftId: string }>();
@@ -60,7 +60,8 @@ function snapshot(store: Store, repo: Repo, id: string): AgentWorkspaceSnapshot 
     settleTurns(value, 'Native session disconnected before completion; no inference was replayed.');
     value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
   }
-  return { workspace: publicWorkspace(value), draft, batchOperations: store.list('batchOperations').filter(operation => operation.repoId === repo.id && operation.repoPath === repo.path && operation.workspaceId === id).map(publicOperation) };
+  const rows = database(store).query<{ value: string }, [string, string, string, number]>("SELECT value FROM records WHERE kind='batchOperations' AND json_extract(value,'$.repoId')=? AND json_extract(value,'$.repoPath')=? AND json_extract(value,'$.workspaceId')=? ORDER BY CASE WHEN json_extract(value,'$.state') IN ('publishing','blocked') OR (json_extract(value,'$.state')='prepared' AND coalesce(json_extract(value,'$.invalidated'),0)=0 AND json_extract(value,'$.expires')>?) THEN 0 ELSE 1 END, rowid DESC LIMIT 128").all(repo.id, repo.path, id, Date.now());
+  return { workspace: publicWorkspace(value), draft, batchOperations: rows.reverse().map(row => publicOperation(JSON.parse(row.value))) };
 }
 function detached(value: AgentWorkspaceRecord): DraftSnapshot {
   return { id: value.id, status: 'stopped', models: [], model: value.model, thinking: value.thinking, thinkingLevels: [], messages: value.messages, error: 'No native session is connected. Saved text is retained; Connect never replays inference.' };
@@ -237,6 +238,12 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
     return json({ ...snapshot(store, repo, id!), review });
   }
   if (segments.length === 7 && action === 'batch-operations' && request.method === 'GET') return json(publicOperation(operationFor(store, repo, id!, segments[6]!)));
+  if (segments.length === 8 && action === 'batch-operations' && segments[7] === 'inspect' && request.method === 'GET') return json(await inspectBatch(store, repo, id!, segments[6]!));
+  if (segments.length === 8 && action === 'batch-operations' && segments[7] === 'recover' && request.method === 'POST') {
+    const input = await payload(request, ['confirm']);
+    if (input.confirm !== true) throw new HttpError(400, 'Explicit recovery confirmation is required');
+    return json(publicOperation(await recoverBatch(store, repo, id!, segments[6]!)));
+  }
   if (segments.length === 6 && action === 'batch-preview' && request.method === 'POST') {
     const input = await payload(request, ['version', 'reviewId', 'reviewVersion', 'acknowledgeStalePlan']);
     return json(publicOperation(await previewBatch(store, repo, id!, input)));

@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { dlopen, ptr, read } from 'bun:ffi';
 import type { Attachment, Mode, Repo, Store, Ticket } from './contracts';
-import { digest, within } from './store';
+import { database, digest, within } from './store';
 
 export const MAX_MARKDOWN = 512 * 1024;
 export const MAX_ATTACHMENT = 10 * 1024 * 1024;
@@ -99,7 +99,7 @@ function validateAttachmentPurposes(markdown: string, attachments: Attachment[])
     if (!references.some(reference => reference.name === name && reference.purpose)) throw new HttpError(400, `Attachment ${name} needs a purpose; add a nonempty descriptive Markdown link/image label or link title`);
   }
 }
-async function readTicket(repo: Repo, id: string): Promise<{ markdown: string; attachments: Attachment[]; revision: string }> {
+export async function readTicket(repo: Repo, id: string): Promise<{ markdown: string; attachments: Attachment[]; revision: string }> {
   const directory = await ticketDirectory(repo, id);
   const markdown = new TextDecoder('utf-8', { fatal: true }).decode(await readSafe(repo.path, join(directory, 'ticket.md'), MAX_MARKDOWN));
   const attachments: Attachment[] = [];
@@ -192,12 +192,11 @@ export function serializeWrite<T>(store: Store, operation: () => Promise<T>): Pr
   return pending;
 }
 export function batchInactive(store: Store, repoPath: string, id: string): boolean {
-  return store.list('batchOperations').some(operation => operation.repoPath === repoPath
-    && (operation.state === 'publishing' || operation.state === 'blocked') && operation.tickets.some(ticket => ticket.id === id));
+  return Boolean(database(store).query("SELECT 1 FROM batch_reservations WHERE repo_path=? AND ticket_id=? AND state IN ('publishing','blocked') LIMIT 1").get(repoPath, id));
 }
 export function batchReserved(store: Store, repo: Repo, id: string): boolean {
-  return store.list('batchOperations').some(operation => operation.repoPath === repo.path && operation.state !== 'complete'
-    && (operation.state !== 'prepared' || operation.expires > Date.now()) && operation.tickets.some(ticket => ticket.id === id));
+  database(store).query("UPDATE records SET value=json_set(value,'$.invalidated',json('true'),'$.compacted',json('true'),'$.tickets',json('[]')) WHERE kind='batchOperations' AND id IN (SELECT operation_id FROM batch_reservations WHERE repo_path=? AND ticket_id=? AND state='prepared' AND expires<=?)").run(repo.path, id, Date.now());
+  return Boolean(database(store).query("SELECT 1 FROM batch_reservations WHERE repo_path=? AND ticket_id=? AND state != 'complete' AND (state != 'prepared' OR expires > ?) LIMIT 1").get(repo.path, id, Date.now()));
 }
 export function writeTicket(store: Store, repo: Repo, markdown: string, revision?: string, expectedId?: string): Promise<Ticket> {
   return serializeWrite(store, () => saveTicket(store, repo, markdown, revision, expectedId));
