@@ -10,6 +10,7 @@ import type { BatchOperation } from './AgentBatchReview';
 import type { RequestApi } from './Workspace';
 import { proposedTicketMarkdown } from './ticketProposal';
 import { currentPlan, mergeWorkspaceRuntime, workspaceEditorsChanged } from './agentWorkspaceState';
+import { planDiff, reviewIsCurrent, type PlanReview } from './planReview';
 import { clearPendingTurn, pendingAgentTurn, pendingTurnBody, readPendingTurn, storePendingTurn, type PendingAgentTurn } from './pendingAgentTurn';
 import './AgentTicketDraft.css';
 
@@ -43,6 +44,8 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   const [title, setTitle] = useState('');
   const [plan, setPlan] = useState('');
   const [revisionId, setRevisionId] = useState<string>();
+  const [planReview, setPlanReview] = useState<PlanReview>();
+  const [reviewError, setReviewError] = useState('');
   const [observedPlanId, setObservedPlanId] = useState<string | null>(null);
   const [view, setView] = useState('Discussion');
   const [showArchived, setShowArchived] = useState(false);
@@ -65,6 +68,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   const alive = useRef(true);
   const locked = useRef(false);
   const session = useRef('');
+  const reviewState = useRef({ workspace, plan });
   const contextInspector = useRef<HTMLDetailsElement>(null);
   const root = `/api/repos/${encodeURIComponent(repoId)}/agent-workspaces`;
   const selectionKey = `omp-agent-workspace:${repoId}`;
@@ -84,6 +88,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   const latestPlan = currentPlan(workspace);
   const inspectingHistory = !!selectedRevision && selectedRevision.id !== workspace?.currentPlanRevisionId;
 
+  useEffect(() => { reviewState.current = { workspace, plan }; }, [workspace, plan]);
   useEffect(() => { onDirtyChange(dirty || batchDirty); }, [dirty, batchDirty, onDirtyChange]);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
   useEffect(() => { onReadyChange(!!workspace && !workspace.archived); }, [workspace, onReadyChange]);
@@ -120,11 +125,19 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
     void api<AgentWorkspaceSummary[]>(root).then(async values => {
       if (cancelled) return;
       setWorkspaces(values);
-      const selected = localStorage.getItem(selectionKey);
-      const first = values.find(value => value.id === selected) ?? values.find(value => !value.archived);
+      const query = new URLSearchParams(window.location.search);
+      const linkedWorkspace = query.get('workspace');
+      const selected = linkedWorkspace ?? localStorage.getItem(selectionKey);
+      const first = values.find(value => value.id === selected) ?? (!linkedWorkspace ? values.find(value => !value.archived) : undefined);
+      if (linkedWorkspace && !first) setError('The linked workspace is unavailable.');
       if (first) {
         const value = await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(first.id)}`);
-        if (!cancelled) load(value);
+        if (!cancelled) {
+          load(value);
+          const linkedPlan = linkedWorkspace ? query.get('plan') : null;
+          if (linkedPlan && value.workspace.planRevisions.some(revision => revision.id === linkedPlan)) { setRevisionId(linkedPlan); setView('Plan'); }
+          else if (linkedPlan) setError('The linked plan revision is unavailable.');
+        }
       }
     }).catch(cause => { if (!cancelled) setError(failure(cause)); }).finally(() => { if (!cancelled) setOperation(''); });
     return () => {
@@ -330,13 +343,40 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
     });
   }
 
-  async function applyPlanProposal(text: string) {
-    if (!await modal.confirm({ title: 'Use this message as a proposed plan?', content: 'The full assistant message will replace the plan editor, including any conversational prose. Review and edit it before explicitly saving a revision. This does not approve a plan or create tickets.', okText: 'Use as proposed plan', cancelText: 'Keep current plan', ...(plan !== (latestPlan?.markdown ?? '') ? { okButtonProps: { danger: true } } : {}) })) return;
-    setPlan(text); setRevisionId(workspace?.currentPlanRevisionId ?? undefined); setView('Plan');
+  function applyPlanProposal(text: string) {
+    if (!workspace) return;
+    setReviewError('');
+    setPlanReview({ workspaceId: workspace.id, version: workspace.version, revisionId: workspace.currentPlanRevisionId, baseline: plan, candidate: text });
+  }
+
+  function acceptPlanReview() {
+    if (!planReview) return;
+    void run('Checking plan review…', async () => {
+      try {
+        const fresh = await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(planReview.workspaceId)}`);
+        if (!reviewIsCurrent(planReview, reviewState.current.workspace, reviewState.current.plan, fresh.workspace)) {
+          const conflict = 'The local plan or saved workspace changed since this review began. Nothing was applied; copy your candidate, then reject and reconcile with Load saved editors before starting a new review.';
+          setReviewError(conflict); setError(conflict);
+          return;
+        }
+        setPlan(planReview.candidate); setRevisionId(planReview.revisionId ?? undefined); setView('Plan'); setPlanReview(undefined);
+      } catch (cause) {
+        setReviewError(`Could not check the saved workspace: ${failure(cause)}. Nothing was applied.`);
+      }
+    });
   }
 
   return <section className="agent-workspace" aria-label="Persistent agent workspace">
     {modalContext}
+    <Modal title="Review proposed plan" open={!!planReview} onCancel={() => setPlanReview(undefined)} onOk={acceptPlanReview} okText="Accept into editor" cancelText="Reject" confirmLoading={operation === 'Checking plan review…'} cancelButtonProps={{ disabled: !!operation }} closable={!operation} maskClosable={!operation} keyboard={!operation} width={900} destroyOnHidden>
+      {planReview && <div className="agent-plan-review">
+        <p>Compare with your current local plan and edit the candidate. The message may contain prose. Accept only changes the local editor; it does not save, approve, or send anything.</p>
+        {reviewError && <p className="error-banner" role="alert">{reviewError}</p>}
+        <label>Candidate Markdown<Input.TextArea aria-label="Candidate plan Markdown" value={planReview.candidate} disabled={!!operation} onChange={event => setPlanReview({ ...planReview, candidate: event.target.value })} autoSize={{ minRows: 6, maxRows: 14 }} /></label>
+        <h3>Changes from current local plan</h3>
+        <div className="agent-plan-diff" role="region" aria-label="Plan line diff" tabIndex={0}>{planReview.baseline === planReview.candidate ? <p>No changes.</p> : planDiff(planReview.baseline, planReview.candidate).map((line, index) => <div className={`agent-plan-diff-${line.kind}`} key={index}><span aria-hidden="true">{line.kind === 'add' ? '+' : line.kind === 'remove' ? '−' : ' '}</span><span className="sr-only">{line.kind === 'add' ? 'Added: ' : line.kind === 'remove' ? 'Removed: ' : 'Unchanged: '}</span>{line.text || '\u00a0'}</div>)}</div>
+      </div>}
+    </Modal>
     <div className="agent-workspace-toolbar">
       <label className="agent-workspace-picker">Workspace<Select aria-label="Open saved workspace" placeholder="Choose a workspace" value={workspace?.id} disabled={busy || disabled} options={workspaces.filter(item => showArchived || !item.archived || item.id === workspace?.id).map(item => ({ value: item.id, label: `${item.title}${item.archived ? ' · Archived' : ''}` }))} onChange={openWorkspace} /></label>
       <Button disabled={busy || disabled} onClick={() => openWorkspace()}>New workspace</Button>
@@ -373,7 +413,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
         </div></header>
         <details className="agent-safety-help"><summary>Saved discussion · process &amp; context limits</summary><p>Connect never sends inference or replaces messages. Disconnect and leaving this page stop the owned child; saved discussion remains. No turn is replayed automatically. The process is capability-restricted, not an OS sandbox.</p><p>Only bounded recent text and plan context are supplied to new turns; inspect Model context for truncation. Old images are not replayed. Staged files live only in this tab: reload requires reattaching their bytes. Model settings are saved for drafting only, not ticket execution.</p></details>
         <div className="agent-conversation" role="log" aria-label="Saved drafting conversation" aria-live="polite" aria-relevant="additions text">
-          {messages.length ? messages.map((item, index) => <article key={index} className={`agent-message agent-message-${item.role}`}><header><strong>{item.role === 'user' ? 'You' : 'OMP agent'}</strong>{item.status && <Tag>{item.status}</Tag>}{item.model && <small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small>}</header><pre tabIndex={0}>{item.text || (snapshot?.status === 'busy' ? 'Waiting for agent output…' : '(No text returned)')}</pre>{item.role === 'assistant' && item.text.trim() && <div className="toolbar"><Button size="small" disabled={unavailable} onClick={() => void run('Reviewing ticket proposal…', async () => { await onUseDraft(proposedTicketMarkdown(item.text)); setView('Tasks'); })}>Review as single ticket…</Button><Button size="small" disabled={unavailable} onClick={() => void applyPlanProposal(item.text)}>Use as proposed plan…</Button></div>}</article>) : <div className="agent-conversation-empty"><h3>What would you like to change?</h3><p>Discuss an idea, ask for a proposed plan, or request one ticket directly. A plan is optional.</p><small>Connect when ready. You can write and save your message first.</small></div>}
+          {messages.length ? messages.map((item, index) => <article key={index} className={`agent-message agent-message-${item.role}`}><header><strong>{item.role === 'user' ? 'You' : 'OMP agent'}</strong>{item.status && <Tag>{item.status}</Tag>}{item.model && <small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small>}</header><pre tabIndex={0}>{item.text || (snapshot?.status === 'busy' ? 'Waiting for agent output…' : '(No text returned)')}</pre>{item.role === 'assistant' && item.text.trim() && <div className="toolbar"><Button size="small" disabled={unavailable} onClick={() => void run('Reviewing ticket proposal…', async () => { await onUseDraft(proposedTicketMarkdown(item.text)); setView('Tasks'); })}>Review as single ticket…</Button><Button size="small" disabled={unavailable} onClick={() => void applyPlanProposal(item.text)}>Review plan changes</Button></div>}</article>) : <div className="agent-conversation-empty"><h3>What would you like to change?</h3><p>Discuss an idea, ask for a proposed plan, or request one ticket directly. A plan is optional.</p><small>Connect when ready. You can write and save your message first.</small></div>}
         </div>
         <div className="agent-composer"><MarkdownEditor label="Message to drafting agent" value={prompt} onChange={setPrompt} repoId={repoId} api={api} disabled={unavailable} onUpload={onUpload} /><div className="agent-composer-controls">
           <label>Response intent<Select aria-label="Response intent" value={intent} disabled={unavailable || !!pending} options={[{ value: 'discussion', label: 'Discussion' }, { value: 'planning', label: 'Planning' }, { value: 'research', label: 'Research' }, { value: 'ticket_drafting', label: 'Ticket drafting' }]} onChange={value => { setIntent(value); setPrepared(undefined); }} /></label>
@@ -401,6 +441,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
           <p className="muted">External research unavailable: no approved provider is configured. Repository research and task generation remain available.</p>
           <ul className="agent-research-references">{(workspace.researchReferences ?? []).map(reference => <li key={reference.id}><details><summary>{reference.title} · {reference.status === 'verified' ? 'Host-retrieved snapshot' : reference.status}</summary><p>{reference.summary}</p><p><code>{reference.id}</code> · <code>{reference.location}</code></p><p>Retrieved {new Date(reference.retrievedAt).toLocaleString()}. Content identity: <code>{reference.contentHash ?? 'Unavailable'}</code>. This records supplied bytes, not verified model conclusions or current-file freshness.</p></details></li>)}</ul>
         </div>
+        {view === 'Plan' && <p className="agent-plan-status" role="status">Plan: {plan !== (latestPlan?.markdown ?? '') ? 'Unsaved' : latestPlan ? latestPlan.approvedAt ? 'Saved · Approved' : 'Saved' : 'No saved plan'}{workspace.planRevisions.some(revision => revision.approvedAt && revision.markdown !== plan) && !workspace.planRevisions.some(revision => revision.approvedAt && revision.markdown === plan) ? ' · Different from approved plan' : ''}</p>}
         <div hidden={view !== 'Plan'} className="agent-plan-panel"><h2>Plan revisions</h2><p className="muted">Proposed Markdown, reviewed by you. Each save creates an immutable revision only when the plan changes.</p><label>Read revision<Select aria-label="Plan revision history" value={revisionId} placeholder="No saved revisions" options={workspace.planRevisions.map((revision, index) => ({ value: revision.id, label: `Revision ${index + 1} · ${new Date(revision.createdAt).toLocaleString()}${revision.approvedAt ? ' · Approved' : ''}${revision.id === workspace.currentPlanRevisionId ? ' · Current' : ''}` }))} onChange={setRevisionId} /></label>{inspectingHistory && <p className="warning-text">Reading an older immutable revision. Your current plan edits remain preserved; select the current revision to return to editing.</p>}<MarkdownEditor label={inspectingHistory ? 'Historical plan Markdown (read-only)' : 'Proposed plan Markdown'} value={inspectingHistory ? selectedRevision.markdown : plan} onChange={setPlan} repoId={repoId} api={api} disabled={unavailable || inspectingHistory} onUpload={onUpload} /><div className="toolbar"><Button disabled={unavailable || inspectingHistory || plan === (latestPlan?.markdown ?? '')} onClick={() => void run('Saving plan revision…', async () => { await saveEditors(); })}>Save plan revision</Button><Button disabled={unavailable || inspectingHistory || !latestPlan || !!latestPlan.approvedAt || plan !== latestPlan.markdown} onClick={() => void run('Approving exact plan revision…', async () => { if (!latestPlan || !await modal.confirm({ title: 'Approve this exact plan revision?', content: `Approve revision ${latestPlan.revisionHash.slice(0, 12)} as reviewed planning text? This does not authorize implementation or publish a ticket. Editing the plan creates a new, unapproved revision.`, okText: 'Approve this revision', cancelText: 'Keep reviewing' })) return; const value = await api<AgentWorkspaceSnapshot>(path, json({ version: workspace.version, approvePlanRevisionId: latestPlan.id }, 'PATCH')); setWorkspace(value.workspace); remember(value.workspace); })}>Approve exact revision…</Button></div>{latestPlan && <p className="muted">Current revision {latestPlan.revisionHash.slice(0, 12)} · {latestPlan.approvedAt ? 'Approved' : 'Not approved'}{plan !== latestPlan.markdown ? ' · Unsaved changes are not approved' : ''}</p>}</div>
         <div hidden={view !== 'Tasks'} className="agent-single-ticket"><h2>Task proposals</h2>
           <p className="muted">Generate from the saved discussion and optional current plan. Review proposals here; generation creates no backlog tickets or implementation runs.</p>

@@ -64,6 +64,13 @@ input.on('line', line => {
         send({ type: 'prompt_result', id: frame.id, status: 'completed', sessionSettled: true });
         send({ type: 'session_settled' }); break;
       }
+      if (userMessage.includes('FIXTURE:PLAN:INITIAL') || userMessage.includes('FIXTURE:PLAN:REFINE')) {
+        const detail = userMessage.includes('FIXTURE:PLAN:REFINE') ? '\n- Record authentication and pagination details for each API.' : '';
+        delta(`# Implementation Plan\n\n## Requirements\n- Survey the available APIs.\n\n## API survey listing\n- List each API and its purpose.${detail}`);
+        streaming = false;
+        send({ type: 'prompt_result', id: frame.id, status: 'completed', sessionSettled: true });
+        send({ type: 'session_settled' }); break;
+      }
       delta(`Partial turn ${turns}. `);
       if (userMessage.includes('FIXTURE:OVERSIZE')) { console.log('x'.repeat(1024 * 1024)); break; }
       if (userMessage.includes('FIXTURE:TOOL')) { send({ type: 'tool_execution_start', toolName: 'write' }); break; }
