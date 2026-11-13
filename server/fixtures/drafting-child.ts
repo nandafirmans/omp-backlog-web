@@ -44,16 +44,41 @@ input.on('line', line => {
     case 'prompt': {
       turns++; streaming = true; response();
       const prompt = String(frame.message);
+      const userMessage = JSON.parse(/User message \(JSON string\):\n([^\n]*)/.exec(prompt)![1]!) as string;
+      log({ event: 'prompt', message: prompt });
       const messageId = `msg-${turns}`;
       const delta = (text: string) => send({ type: 'message_update', messageId, assistantMessageEvent: { type: 'text_delta', delta: text } });
+      if (userMessage.includes('FIXTURE:EXTRACTION:') || process.argv.includes('extraction-valid') && prompt.includes('Host extraction contract:\n')) {
+        const contract = prompt.split('Host extraction contract:\n')[1] || '';
+        const sourceWorkspaceId = JSON.parse(/"sourceWorkspaceId":("(?:[^"\\]|\\.)*")/.exec(contract)![1]!);
+        const sourcePlanRevisionId = JSON.parse(/"sourcePlanRevisionId":(null|"(?:[^"\\]|\\.)*")/.exec(contract)![1]!);
+        const strategy = JSON.parse(/"strategy":("(?:[^"\\]|\\.)*")/.exec(contract)![1]!);
+        const count = strategy === 'multiple' || strategy === 'auto' && userMessage.includes('FIXTURE:EXTRACTION:MULTIPLE') ? 2 : 1;
+        const proposals = Array.from({ length: count }, (_, index) => ({ key: `task-${index ? 'second' : 'first'}`, title: `Proposal ${index + 1}`, description: 'Why: Address the request.\nScope: The described behavior.\nOut-of-scope: Publication and implementation.', acceptanceCriteria: ['Observable result is documented'], verification: ['Run the focused fixture'], dependsOn: index ? ['task-first'] : [], sourceReferences: [] }));
+        let output = JSON.stringify({ strategy, sourceWorkspaceId, sourcePlanRevisionId, rationale: 'Chosen decomposition fits the requested scope.', proposals, openQuestions: [] });
+        if (userMessage.includes('FIXTURE:EXTRACTION:INVALID') || prompt.includes('FIXTURE:INVALID_EXTRACTION')) output = '{"proposals":[]}';
+        if (userMessage.includes('FIXTURE:EXTRACTION:TRUNCATED')) output = output.slice(0, -10);
+        delta(output.slice(0, 20));
+        if (userMessage.includes('FIXTURE:EXTRACTION:HOLD')) break;
+        delta(output.slice(20)); streaming = false;
+        send({ type: 'prompt_result', id: frame.id, status: 'completed', sessionSettled: true });
+        send({ type: 'session_settled' }); break;
+      }
+      if (userMessage.includes('FIXTURE:PLAN:INITIAL') || userMessage.includes('FIXTURE:PLAN:REFINE')) {
+        const detail = userMessage.includes('FIXTURE:PLAN:REFINE') ? '\n- Record authentication and pagination details for each API.' : '';
+        delta(`# Implementation Plan\n\n## Requirements\n- Survey the available APIs.\n\n## API survey listing\n- List each API and its purpose.${detail}`);
+        streaming = false;
+        send({ type: 'prompt_result', id: frame.id, status: 'completed', sessionSettled: true });
+        send({ type: 'session_settled' }); break;
+      }
       delta(`Partial turn ${turns}. `);
-      if (prompt.includes('FIXTURE:OVERSIZE')) { console.log('x'.repeat(1024 * 1024)); break; }
-      if (prompt.includes('FIXTURE:TOOL')) { send({ type: 'tool_execution_start', toolName: 'write' }); break; }
-      if (prompt.includes('FIXTURE:URI')) { send({ type: 'host_uri_request', id: 'unexpected', uri: 'file:///etc/passwd' }); break; }
-      if (prompt.includes('FIXTURE:UI')) { send({ type: 'extension_ui_request', id: 'unexpected', method: 'confirm' }); break; }
-      if (prompt.includes('FIXTURE:PROVIDER')) { send({ type: 'prompt_result', id: frame.id, status: 'error', error: { message: 'sk-DO-NOT-EXPOSE-SECRET' } }); break; }
-      if (prompt.includes('FIXTURE:TOKENS')) { tokenTotal = 32001; break; }
-      if (prompt.includes('FIXTURE:HOLD')) break;
+      if (userMessage.includes('FIXTURE:OVERSIZE')) { console.log('x'.repeat(1024 * 1024)); break; }
+      if (userMessage.includes('FIXTURE:TOOL')) { send({ type: 'tool_execution_start', toolName: 'write' }); break; }
+      if (userMessage.includes('FIXTURE:URI')) { send({ type: 'host_uri_request', id: 'unexpected', uri: 'file:///etc/passwd' }); break; }
+      if (userMessage.includes('FIXTURE:UI')) { send({ type: 'extension_ui_request', id: 'unexpected', method: 'confirm' }); break; }
+      if (userMessage.includes('FIXTURE:PROVIDER')) { send({ type: 'prompt_result', id: frame.id, status: 'error', error: { message: 'sk-DO-NOT-EXPOSE-SECRET' } }); break; }
+      if (userMessage.includes('FIXTURE:TOKENS')) { tokenTotal = 32001; break; }
+      if (userMessage.includes('FIXTURE:HOLD')) break;
       delta(`wireSafe=${!prompt.startsWith('/') && !prompt.includes('@') && !prompt.includes('^')}; context=${prompt.includes('repository fixture body')}; skill=${prompt.includes('skill fixture body')}; images=${frame.images?.length ?? 0}`);
       streaming = false;
       send({ type: 'prompt_result', id: frame.id, status: 'completed', sessionSettled: true });

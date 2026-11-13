@@ -1,3 +1,6 @@
+import type { AgentWorkspaceRecord } from './agent-workspace-contracts';
+import type { BatchOperation } from './agent-workspace-contracts';
+
 export type Mode = 'paused' | 'approved' | 'automatic';
 export type EngineeringMode = 'standard' | 'pstack';
 export type Status = 'draft' | 'ready' | 'running' | 'stopping' | 'paused' | 'blocked' | 'failed' | 'interrupted' | 'needs_review' | 'done';
@@ -47,7 +50,7 @@ export interface Store {
   notify(): void;
   dataDir: string;
 }
-export interface Entities { repos: Repo; tickets: Ticket; runs: Run }
+export interface Entities { repos: Repo; tickets: Ticket; runs: Run; agentWorkspaces: AgentWorkspaceRecord; batchOperations: BatchOperation }
 export interface Runtime {
   wake(): void;
   reconcile(): Promise<void>;

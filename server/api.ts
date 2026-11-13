@@ -5,13 +5,15 @@ import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Repo, Runtime, Settings, Store } from './contracts';
 import { THINKING_LEVELS } from './contracts';
 import { database, digest, subscribe, token, within } from './store';
-import { HttpError, MAX_ATTACHMENT, MAX_MARKDOWN, readSafe, reconcileTickets, ticketDirectory, uploadAttachment, validAttachmentName, writeTicket } from './tickets';
+import { batchInactive, HttpError, MAX_ATTACHMENT, MAX_MARKDOWN, readSafe, reconcileTickets, ticketDirectory, uploadAttachment, validAttachmentName, writeTicket } from './tickets';
 import { completions } from './completions';
 import { requestOrigin, parseRemoteOrigin } from './access';
 import { proofDownload } from './evidence';
 import { inspectWorkspaceHandoff } from './runtime';
 import { discoverExecutionModels, handleDraftRequest } from './drafting';
 import { handleAssistedCreation } from './assisted-creation';
+import { assertWorkspaceOwners, handleAgentWorkspaceRequest } from './agent-workspaces';
+import { ticketPublications } from './batch-publication';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
@@ -61,6 +63,10 @@ export async function permittedPath(store: Store, requested: string): Promise<st
 export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string): (request: Request) => Promise<Response> {
   const db = database(store);
   const allowedRemoteOrigin = parseRemoteOrigin(remoteOrigin);
+  const inactive = (repoId: string, id: string) => {
+    const repo = store.get('repos', repoId);
+    return Boolean(repo && batchInactive(store, repo.path, id));
+  };
   return async request => {
     try {
       const url = new URL(request.url);
@@ -105,7 +111,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (!session?.authenticated) throw new HttpError(401, 'Authentication required');
       if (mutation && !equal(request.headers.get('x-csrf-token') || '', session.csrf)) throw new HttpError(403, 'Invalid CSRF token; reload the session');
       if (url.pathname === '/api/logout' && request.method === 'POST') { db.query('DELETE FROM sessions WHERE id=?').run(session.id); return json({ ok: true }, 200, { 'Set-Cookie': `omp_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secureCookie}` }); }
-      if (url.pathname === '/api/state' && request.method === 'GET') return json({ repos: store.list('repos'), tickets: store.list('tickets'), runs: store.list('runs'), settings: store.settings() });
+      if (url.pathname === '/api/state' && request.method === 'GET') return json({ repos: store.list('repos'), tickets: store.list('tickets').filter(ticket => !inactive(ticket.repoId, ticket.id)), runs: store.list('runs'), settings: store.settings() });
       if (url.pathname === '/api/events' && request.method === 'GET') {
         const currentSession = session;
         let cleanup = () => {};
@@ -190,8 +196,13 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (segments.some(part => part.includes('/') || part.includes('\\') || part === '..' || part.includes('\0'))) throw new HttpError(400, 'Unsafe route path');
       if (segments[1] === 'repos' && segments[2]) {
         const repo = store.get('repos', segments[2]); if (!repo) throw new HttpError(404, 'Repository not found');
+        if (segments[3] === 'agent-workspaces') {
+          await permittedPath(store, repo.path);
+          return await handleAgentWorkspaceRequest(store, repo, request, segments);
+        }
         if (segments[3] === 'drafts') {
           await permittedPath(store, repo.path);
+          if (segments.length === 4 && request.method === 'POST') await assertWorkspaceOwners(store);
           return await handleDraftRequest(store, repo, request, segments);
         }
         if (segments.length === 4 && (segments[3] === 'assisted-prepare' || segments[3] === 'assisted-create') && request.method === 'POST') {
@@ -242,6 +253,12 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
         if (segments[3] === 'tickets' && segments.length === 4 && request.method === 'POST') { const input = await body(request); const ticket = await writeTicket(store, repo, string(input.markdown, 'markdown', MAX_MARKDOWN)); runtime.wake(); return json(ticket, 201); }
         if (segments[3] === 'tickets' && segments[4]) {
           const id = segments[4];
+          if (inactive(repo.id, id)) throw new HttpError(404, 'Ticket not found');
+          if (segments.length === 6 && segments[5] === 'publications' && request.method === 'GET') {
+            const ticket = store.get('tickets', `${repo.id}/${id}`);
+            if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
+            return json(ticketPublications(store, repo, id));
+          }
           if (segments.length === 5 && request.method === 'PUT') { const input = await body(request); const ticket = await writeTicket(store, repo, string(input.markdown, 'markdown', MAX_MARKDOWN), string(input.revision, 'revision', 64), id); runtime.wake(); return json(ticket); }
           if (segments[5] === 'attachments' && segments.length === 6 && request.method === 'POST') {
             if (!request.headers.get('content-type')?.startsWith('multipart/form-data')) throw new HttpError(415, 'Use multipart form data');
@@ -264,7 +281,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (segments[1] === 'tickets' && segments.length === 5 && segments[4] === 'execution' && request.method === 'PATCH') {
         const input = await body(request); await reconcileTickets(store, true);
         const ticket = store.get('tickets', `${segments[2]}/${segments[3]}`);
-        if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
+        if (!ticket || ticket.removed || inactive(ticket.repoId, ticket.id)) throw new HttpError(404, 'Ticket not found');
         if (input.revision !== ticket.revision || input.version !== (ticket.executionVersion ?? null)) throw new HttpError(409, 'Ticket or execution settings changed; reload and review');
         if (['running', 'stopping', 'paused'].includes(ticket.status) || store.list('runs').some(run => run.repoId === ticket.repoId && run.ticketId === ticket.id && ['running', 'stopping', 'paused'].includes(run.status))) throw new HttpError(409, 'Finish owned work before changing settings for the next attempt');
         const execution = parseExecutionOverrides(input.execution);
@@ -274,7 +291,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (segments[1] === 'tickets' && segments.length === 5 && segments[4] === 'action' && request.method === 'POST') {
         const input = await body(request); await reconcileTickets(store, true);
         const ticket = store.get('tickets', `${segments[2]}/${segments[3]}`);
-        if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
+        if (!ticket || ticket.removed || inactive(ticket.repoId, ticket.id)) throw new HttpError(404, 'Ticket not found');
         if (input.revision !== ticket.revision) throw new HttpError(409, 'Requirements changed; review the current revision first');
         const action = string(input.action, 'action', 20);
         if (['approve', 'retry', 'recover', 'changes'].includes(action) && (input.executionVersion ?? null) !== (ticket.executionVersion ?? null)) throw new HttpError(409, 'Ticket execution settings changed; review the model and budget before queuing work');
@@ -315,7 +332,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           if (segments[3] === 'recovery') {
             await reconcileTickets(store, true);
             const ticket = store.get('tickets', `${run.repoId}/${run.ticketId}`);
-            if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
+            if (!ticket || ticket.removed || inactive(ticket.repoId, ticket.id)) throw new HttpError(404, 'Ticket not found');
             return json(saveRecoveryNote(store, ticket, run.id, input));
           }
           if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume' && input.action !== 'cancel') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }

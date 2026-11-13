@@ -167,6 +167,7 @@ function RunControls({ run, api, execute, busy }: { run: Run; api: RequestApi; e
 }
 
 interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; settings?: Settings; api: RequestApi; execute: Execute; busy: boolean; runs: Run[]; onCreated: (id: string) => void; onRun: (id: string) => void; assisted?: boolean }
+type TicketPublication = { publicationId: string; workspaceId: string; reviewId: string; reviewVersion: number; proposalSetId: string | null; sourcePlanRevisionId: string | null; taskKey: string; dependencies: string[]; originalRevision: string | null };
 const template = '---\nid: T001\ntitle: \ndepends_on: []\n---\n\n[What to change and where.]\n\n[Constraints or reference, if needed.]\n\nDone when:\n- [Observable result.]\n- [How to verify it.]\n';
 function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy, runs, onCreated, onRun, assisted = false }: EditorProps) {
   const [draft, setDraft] = useState(ticket?.markdown ?? template);
@@ -181,7 +182,7 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   const [uploadError, setUploadError] = useState('');
   const [stagedCount, setStagedCount] = useState(0);
   const [draftFiles, setDraftFiles] = useState<{ name: string; file: File }[]>([]);
-  const [agentVisible, setAgentVisible] = useState(assisted);
+  const [agentReady, setAgentReady] = useState(!assisted);
   const [assistedUsed, setAssistedUsed] = useState(assisted);
   const [agentDirty, setAgentDirty] = useState(false);
   const [recoveryDirty, setRecoveryDirty] = useState(false);
@@ -191,7 +192,10 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   const [confirmationMode, setConfirmationMode] = useState<Mode>();
   const assistedAttempt = useRef<{ markdown: string; files: { name: string; file: File }[]; confirmation: string } | null>(null);
   const publicationLock = useRef(false);
+  const saveWorkspaceBeforePublication = useRef<(() => Promise<void>) | null>(null);
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({});
+  const [publications, setPublications] = useState<TicketPublication[]>([]);
+  const [publicationError, setPublicationError] = useState('');
   const staged = useRef<StagedAttachment[]>([]);
   const serverTicket = useRef(ticket);
   const [knownRevisions, setKnownRevisions] = useState(() => new Set(ticket ? [ticket.revision] : []));
@@ -204,13 +208,19 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   const dirty = draft !== base.markdown;
   const actionsBusy = busy || uploading || stagedCount > 0 || executionDirty;
   const savedNavigation = useRef(false);
-  const editorBusy = busy || agentBusy || publishing;
+  const editorBusy = busy || agentBusy || publishing || (assisted && !agentReady);
   const unsaved = dirty || recoveryDirty || executionDirty || agentDirty || agentBusy || publishing || stagedCount > 0 || (!ticket && hasServerTicket);
   const blocker = useBlocker(({ currentLocation, nextLocation }) => unsaved && !savedNavigation.current && currentLocation.pathname !== nextLocation.pathname);
   const working = !!ticket && activeStatuses.includes(ticket.status);
   const path = ticket ? `/api/repos/${encode(ticket.repoId)}/tickets/${encode(ticket.id)}` : '';
   const attachmentBase = path ? `${path}/attachments/` : '';
   const currentRun = runs.find(run => run.id === ticket?.runId);
+  useEffect(() => {
+    if (!path) return;
+    let cancelled = false;
+    void api<TicketPublication[]>(`${path}/publications`).then(value => { if (!cancelled) setPublications(value); }).catch(cause => { if (!cancelled) setPublicationError(message(cause)); });
+    return () => { cancelled = true; };
+  }, [api, path]);
 
   useEffect(() => {
     alive.current = true;
@@ -324,6 +334,10 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
       publicationLock.current = true;
       setPublishing(true); setConflict('');
       try {
+        if (assisted) {
+          if (!saveWorkspaceBeforePublication.current) throw new Error('Open a saved agent workspace before publishing.');
+          await saveWorkspaceBeforePublication.current();
+        }
         const files = staged.current.map(({ name, file }) => ({ name, file }));
         let attempt = assistedAttempt.current;
         if (!attempt || attempt.markdown !== submitted || attempt.files.length !== files.length || !attempt.files.every((file, index) => file.name === files[index].name && file.file === files[index].file)) {
@@ -429,15 +443,29 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   }
 
 
+  const ticketForm = editing && <form onSubmit={event => void save(event)}>
+      {!ticket && !assisted && <details className="import-options"><summary>Import existing Markdown</summary><label className="import-draft">Markdown file<input type="file" disabled={editorBusy} accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={event => { const file = event.target.files?.[0]; if (!file) return; void file.text().then(text => { setDraft(text); setConflict(''); }).catch(cause => setConflict(message(cause))); event.target.value = ''; }} /><small>Explicit import only. Existing BACKLOG.md is never rewritten. Use a unique frontmatter id/title, describe what to change, and add Done when: bullets with observable results and how to verify them.</small></label></details>}
+      <div className="editor-tabs"><Segmented aria-label="Ticket view" options={['Markdown', 'Preview']} value={preview ? 'Preview' : 'Markdown'} onChange={value => setPreview(value === 'Preview')} /><span className="muted">{dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></div>
+      {preview ? <div className="ticket-preview"><Suspense fallback={<p role="status" aria-live="polite">Loading editable Preview… Your Markdown is preserved.</p>}><RichMarkdownEditor value={draft} onChange={setDraft} disabled={editorBusy} onUpload={uploadFiles} attachmentBase={attachmentBase} attachmentUrls={attachmentUrls} /></Suspense></div> : <MarkdownEditor label="Ticket Markdown" value={draft} onChange={setDraft} repoId={repo.id} api={api} disabled={editorBusy} onUpload={uploadFiles} />}
+      <div className="attachment-paste-status" aria-live="polite">
+        <p className="muted" role="status">{uploading ? `Uploading pasted attachments… ${stagedCount} remaining. Keep editing; your Markdown is not saved automatically.` : stagedCount ? `${stagedCount} pasted attachment${stagedCount === 1 ? '' : 's'} ${hasServerTicket ? 'waiting to upload' : 'staged in this tab until Create ticket'}.` : 'Paste images or supported files directly into Markdown or Preview to attach them.'}</p>
+        {uploadError && <div className="error-banner" role="alert"><p>{uploadError}</p>{hasServerTicket && <Button disabled={busy || uploading || stale} onClick={() => void flushUploads().catch(() => undefined)}>Retry uploads</Button>}</div>}
+      </div>
+      <p className="muted">Every uploaded file needs a Markdown link or image with a descriptive purpose label or title before execution. Explain what screenshots demonstrate, including viewport and acceptable differences. Purpose quality remains part of human review.</p>
+      {!ticket && assistedUsed && <aside className="assisted-publication-note"><p>Agent-assisted creation validates and publishes the reviewed Markdown and all staged files together. {confirmationMode ? `Last reviewed project mode: ${modes[confirmationMode]}. ` : ''}Current mode is rechecked before publication. Automatic mode may start implementation immediately after explicit creation. Cancelling confirmation creates nothing.</p></aside>}
+      <div className="toolbar editor-actions"><Button type="primary" htmlType="submit" className="primary" disabled={editorBusy || uploading || !!ticket?.removed || !draft}>{publishing ? 'Reviewing / creating ticket…' : ticket ? 'Save revision' : hasServerTicket ? 'Finish creating ticket' : 'Create ticket'}</Button><small>Explicit save only. Edits never silently replace an active run's instructions.</small></div>
+    </form>;
   return <div className={assisted ? 'panel editor-panel agent-creation-page' : 'panel editor-panel'}>
     {modalContext}
-    <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Discard changes" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Your unsaved ticket changes, execution settings, recovery instructions, agent conversation and staged files will be discarded. An owned drafting session will be stopped.</p></Modal>
-    {assisted ? <header className="agent-page-heading"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Projects</Link> }, { title: <Link to={`/projects/${encode(repo.id)}`}>{repo.name}</Link> }, { title: <span aria-current="page">Create with agent</span> }]} /><h1>Draft ticket with OMP</h1><p className="muted">Discuss the change, then review the ticket before creating it. Drafts and files live in this tab; reloading loses them.</p><Segmented aria-label="Drafting view" disabled={editorBusy || uploading || hasServerTicket} options={['Discuss', 'Review ticket']} value={agentVisible ? 'Discuss' : 'Review ticket'} onChange={value => setAgentVisible(value === 'Discuss')} /></header> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
+    <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Leave page" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Unsaved editor changes and tab-local attachment bytes will be lost. Saved workspace discussion, plans and ticket text remain available. An owned drafting process will be stopped. Reloading requires reattaching staged files.</p></Modal>
+    {assisted ? <header className="agent-page-heading"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Projects</Link> }, { title: <Link to={`/projects/${encode(repo.id)}`}>{repo.name}</Link> }, { title: <span aria-current="page">Create with agent</span> }]} /><h1>Create with Agent</h1><p className="muted">Discuss, research, refine an optional plan, and generate task proposals for review. Generation creates no tickets. Existing reviewed single-ticket publication remains separate. Save workspace edits explicitly; publication attachments need reattaching after reload.</p></header> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}
     {stale && <div className="notice"><div><h3>Requirements changed{working ? ' during execution' : ' outside this editor'}.</h3><p>Your editor has not been overwritten. The current run keeps its immutable revision; changed requirements require new approval.</p></div></div>}
     {(stale || conflict) && <div className="conflict-box" role="alert"><p>{conflict || 'A newer ticket or attachment revision is available. Preserve your draft and reconcile before saving.'}</p><div className="toolbar"><Button onClick={() => { void navigator.clipboard.writeText(draft).catch(() => setConflict('Clipboard unavailable. Select and copy the Markdown from the editor before loading the current version.')); }}>Copy my draft</Button><Button download={`${ticket?.id ?? 'ticket'}-draft.md`} href={`data:text/markdown;charset=utf-8,${encode(draft)}`}>Download draft</Button><Button disabled={busy || uploading} onClick={() => void loadCurrentVersion()}>Load current version</Button></div></div>}
     {ticket && <div className="ticket-facts"><p><span>Dependencies</span>{ticket.dependencies.length ? ticket.dependencies.join(', ') : 'None'}</p><p><span>Approval</span>{ticket.approvedRevision === ticket.revision ? 'Current revision approved' : 'Current revision not approved'}</p><p><span>Acceptance criteria</span>{ticket.criteria.length}</p></div>}
+    {publicationError && <p className="warning-text" role="alert">Publication source could not be loaded: {publicationError}</p>}
+    {ticket && publications.map(source => <section className="detail-section" aria-label="Publication source" key={source.publicationId}><h3>Publication source</h3><p><Link to={`/projects/${encode(repo.id)}/tickets/new/agent?workspace=${encode(source.workspaceId)}${source.sourcePlanRevisionId ? `&plan=${encode(source.sourcePlanRevisionId)}` : ''}`}>Open source workspace</Link> · <code>{source.workspaceId}</code></p><p>Plan revision: <code>{source.sourcePlanRevisionId ?? 'No plan'}</code> · Proposal set: <code>{source.proposalSetId ?? 'Unavailable'}</code> · Review: <code>{source.reviewId}</code> (version {source.reviewVersion})</p><p>Publication: <code>{source.publicationId}</code> · Task: <code>{source.taskKey}</code> · Published dependencies: {source.dependencies.join(', ') || 'None'}</p><p>Original published revision: <code>{source.originalRevision ?? 'Unavailable'}</code><br />Current ticket revision: <code>{ticket.revision}</code>{source.originalRevision && source.originalRevision !== ticket.revision ? ' · Modified since publication' : ''}</p></section>)}
     {ticket && <>
       <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar">
         <Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || currentRun?.status === 'blocked' || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>
@@ -451,24 +479,20 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
     {ticket && settings && <TicketExecution ticket={ticket} settings={settings} api={api} execute={execute} disabled={busy || uploading || stagedCount > 0 || dirty || stale || working || ticket.removed || !!ticket.error} onDirtyChange={setExecutionDirty} />}
     {ticket && <div className="requirements-heading"><h3>Requirements</h3><Button disabled={actionsBusy || (editing && unsaved)} onClick={() => setEditing(value => !value)}>{editing ? 'Reading view' : 'Edit Markdown'}</Button></div>}
     {!editing && <article className="ticket-reading" aria-label="Ticket requirements"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => url.startsWith('attachments/') ? `${attachmentBase}${url.slice('attachments/'.length)}` : defaultUrlTransform(url)} components={{ a: ({ href, children }) => <a href={href} rel="noreferrer">{children}</a> }}>{draft.replace(/^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '')}</Markdown></article>}
-    {assisted && <>
-      <div className="agent-discuss-view" hidden={!agentVisible}><AgentTicketDraft repoId={repo.id} api={api} files={draftFiles} onUpload={uploadFiles} onDirtyChange={setAgentDirty} onBusyChange={setAgentBusy} disabled={busy || publishing || uploading} onUseDraft={async markdown => {
-        if (latestDraft.current !== base.markdown && !await modal.confirm({ title: 'Replace unsaved editor text with the agent draft?', content: 'Your Markdown editor contains unsaved changes. Copy or download them first if you want to keep both versions. The conversation and staged attachment files will remain available.', okText: 'Replace editor text', cancelText: 'Keep my editor text', okButtonProps: { danger: true } })) return;
-        setDraft(markdown); setConflict(''); setAssistedUsed(true); setAgentVisible(false);
-      }} /></div>
-    </>}
-    {editing && (!assisted || !agentVisible) && <form onSubmit={event => void save(event)}>
-      {!ticket && !assisted && <details className="import-options"><summary>Import existing Markdown</summary><label className="import-draft">Markdown file<input type="file" disabled={editorBusy} accept=".md,.markdown,.txt,text/plain,text/markdown" onChange={event => { const file = event.target.files?.[0]; if (!file) return; void file.text().then(text => { setDraft(text); setConflict(''); }).catch(cause => setConflict(message(cause))); event.target.value = ''; }} /><small>Explicit import only. Existing BACKLOG.md is never rewritten. Use a unique frontmatter id/title, describe what to change, and add Done when: bullets with observable results and how to verify them.</small></label></details>}
-      <div className="editor-tabs"><Segmented aria-label="Ticket view" options={['Markdown', 'Preview']} value={preview ? 'Preview' : 'Markdown'} onChange={value => setPreview(value === 'Preview')} /><span className="muted">{dirty ? 'Unsaved changes' : 'No unsaved changes'}</span></div>
-      {preview ? <div className="ticket-preview"><Suspense fallback={<p role="status" aria-live="polite">Loading editable Preview… Your Markdown is preserved.</p>}><RichMarkdownEditor value={draft} onChange={setDraft} disabled={editorBusy} onUpload={uploadFiles} attachmentBase={attachmentBase} attachmentUrls={attachmentUrls} /></Suspense></div> : <MarkdownEditor label="Ticket Markdown" value={draft} onChange={setDraft} repoId={repo.id} api={api} disabled={editorBusy} onUpload={uploadFiles} />}
-      <div className="attachment-paste-status" aria-live="polite">
-        <p className="muted" role="status">{uploading ? `Uploading pasted attachments… ${stagedCount} remaining. Keep editing; your Markdown is not saved automatically.` : stagedCount ? `${stagedCount} pasted attachment${stagedCount === 1 ? '' : 's'} ${hasServerTicket ? 'waiting to upload' : 'staged in this tab until Create ticket'}.` : 'Paste images or supported files directly into Markdown or Preview to attach them.'}</p>
-        {uploadError && <div className="error-banner" role="alert"><p>{uploadError}</p>{hasServerTicket && <Button disabled={busy || uploading || stale} onClick={() => void flushUploads().catch(() => undefined)}>Retry uploads</Button>}</div>}
-      </div>
-      <p className="muted">Every uploaded file needs a Markdown link or image with a descriptive purpose label or title before execution. Explain what screenshots demonstrate, including viewport and acceptable differences. Purpose quality remains part of human review.</p>
-      {!ticket && assistedUsed && <aside className="assisted-publication-note"><p>Agent-assisted creation validates and publishes the reviewed Markdown and all staged files together. {confirmationMode ? `Last reviewed project mode: ${modes[confirmationMode]}. ` : ''}Current mode is rechecked before publication. Automatic mode may start implementation immediately after explicit creation. Cancelling confirmation creates nothing.</p></aside>}
-      <div className="toolbar editor-actions"><Button type="primary" htmlType="submit" className="primary" disabled={editorBusy || uploading || !!ticket?.removed || !draft}>{publishing ? 'Reviewing / creating ticket…' : ticket ? 'Save revision' : hasServerTicket ? 'Finish creating ticket' : 'Create ticket'}</Button><small>Explicit save only. Edits never silently replace an active run's instructions.</small></div>
-    </form>}
+    {assisted && <AgentTicketDraft repoId={repo.id} api={api} files={draftFiles} onUpload={uploadFiles} ticketMarkdown={draft} initialTicketMarkdown={template} saveBeforePublicationRef={saveWorkspaceBeforePublication} onDirtyChange={setAgentDirty} onBusyChange={setAgentBusy} onReadyChange={setAgentReady} disabled={busy || publishing || uploading || hasServerTicket} onLoadTicket={(markdown, discardFiles) => {
+      if (discardFiles) {
+        for (const file of staged.current) if (file.objectUrl) URL.revokeObjectURL(file.objectUrl);
+        staged.current = []; setDraftFiles([]); setStagedCount(0); setAttachmentUrls({}); setUploadError('');
+      }
+      setDraft(markdown); setBase({ markdown, revision: '' }); setConflict(''); setPreview(false);
+    }} onTicketSaved={markdown => { setBase({ markdown, revision: '' }); }} onBeforeWorkspaceChange={async () => {
+      if (staged.current.length && !await modal.confirm({ title: 'Discard this workspace’s tab-local attachments?', content: 'Attachment bytes are not stored with the workspace. Switching drops these staged files; you must reattach them before sending or publishing their references later. Saved Markdown and discussion remain.', okText: 'Discard files and continue', cancelText: 'Keep this workspace', okButtonProps: { danger: true } })) return false;
+      return true;
+    }} onUseDraft={async markdown => {
+      if (latestDraft.current !== base.markdown && !await modal.confirm({ title: 'Replace unsaved ticket review?', content: 'The assistant proposal replaces the single-ticket Markdown editor. Copy useful edits first. Conversation, plans and staged attachments remain.', okText: 'Replace ticket text', cancelText: 'Keep ticket text', okButtonProps: { danger: true } })) return;
+      setDraft(markdown); setConflict(''); setAssistedUsed(true);
+    }}>{ticketForm}</AgentTicketDraft>}
+    {!assisted && ticketForm}
     {ticket && <>
       <section className="detail-section" aria-labelledby="attachment-heading"><h3 id="attachment-heading">Attachments</h3><p className="muted">Paste files into either editor to attach them. References are not executable instructions. Describe each file's purpose in the Markdown. Use synthetic examples, never credentials.</p>{ticket.attachments.length ? <ul className="attachment-list">{ticket.attachments.map(file => <li key={file.name}><Button type="link" href={`${path}/attachments/${encode(file.name)}`} target="_blank" rel="noreferrer">{file.name}</Button><small>{(file.size / 1024).toFixed(1)} KB</small><Button onClick={() => setAttachment(attachment === file.name ? '' : file.name)}>{attachment === file.name ? 'Close preview' : 'Preview'}</Button></li>)}</ul> : <p className="muted">No attachments.</p>}{attachment && ticket.attachments.some(file => file.name === attachment) && <AttachmentPreview key={`${attachment}-${ticket.revision}`} name={attachment} url={`${path}/attachments/${encode(attachment)}`} api={api} />}</section>
       <section className="detail-section" aria-labelledby="history-heading"><h3 id="history-heading">Run history</h3>{runs.length ? <ul className="run-list">{runs.map(run => <li key={run.id}><Button className="run-history-entry" onClick={() => onRun(run.id)}><span><Status value={run.status} /> <time dateTime={new Date(run.started).toISOString()}>{new Date(run.started).toLocaleString()}</time></span><small>Revision {run.revision.slice(0, 10)}{run.revision !== ticket.revision ? ' · Older requirements' : ' · Current requirements'} · {run.configuration?.engineeringMode === 'standard' ? 'Standard OMP' : 'OMP + pstack'}</small>{run.dialog && <Tag className="attention">Answer needed</Tag>}</Button></li>)}</ul> : <p className="muted">No runs. A fresh session starts only when this revision is eligible and permitted.</p>}</section>

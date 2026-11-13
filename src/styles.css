@@ -260,6 +260,7 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .import-draft { border-bottom: 1px solid var(--line); margin-bottom: 18px; padding-bottom: 18px; }
 .detail-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
 .detail-section > h3 { margin-bottom: 12px; }
+.detail-section[aria-label="Publication source"] { min-width: 0; overflow-wrap: anywhere; }
 .notice, .conflict-box, .error-banner, .blocker-box { border: 1px solid var(--line); border-radius: 0; padding: 14px 16px; margin: 16px 0; font-size: 14px; line-height: 1.75; background: var(--surface-inset); overflow-wrap: anywhere; }
 .notice h2, .notice h3 { font-size: 15px; margin-bottom: 6px; }
 .notice p { margin: 0; color: var(--muted); }

@@ -255,3 +255,18 @@ test('skill text resolution rejects symlinks and oversized bodies without execut
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test('legacy quick-ticket defaults to ticket drafting without requiring a workspace or saved plan', async () => {
+  await fixture(async ({ call, root }) => {
+    const created = await (await call('', 'POST', {})).json() as DraftSnapshot;
+    expect((await call(`/${created.id}/turn`, 'POST', form('Draft one quick ticket'))).status).toBe(200);
+    await settled(call, created.id);
+    const events = (await readFile(join(root, 'child.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    const prompt = events.find(event => event.event === 'prompt')!.message as string;
+    expect(prompt).toContain('Ticket drafting conversation.');
+    expect(prompt).toContain('frontmatter id, title, depends_on');
+    expect(prompt).toContain('only the human may publish');
+    expect(prompt).not.toContain('Host extraction contract');
+    expect(events.filter(event => event.command === 'prompt')).toHaveLength(1);
+  });
+}, 10000);
