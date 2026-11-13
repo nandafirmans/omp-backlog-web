@@ -167,6 +167,7 @@ function RunControls({ run, api, execute, busy }: { run: Run; api: RequestApi; e
 }
 
 interface EditorProps { repo: Repo; ticket?: Ticket; tickets?: Ticket[]; settings?: Settings; api: RequestApi; execute: Execute; busy: boolean; runs: Run[]; onCreated: (id: string) => void; onRun: (id: string) => void; assisted?: boolean }
+type TicketPublication = { publicationId: string; workspaceId: string; reviewId: string; reviewVersion: number; proposalSetId: string | null; sourcePlanRevisionId: string | null; taskKey: string; dependencies: string[]; originalRevision: string | null };
 const template = '---\nid: T001\ntitle: \ndepends_on: []\n---\n\n[What to change and where.]\n\n[Constraints or reference, if needed.]\n\nDone when:\n- [Observable result.]\n- [How to verify it.]\n';
 function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy, runs, onCreated, onRun, assisted = false }: EditorProps) {
   const [draft, setDraft] = useState(ticket?.markdown ?? template);
@@ -193,6 +194,8 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   const publicationLock = useRef(false);
   const saveWorkspaceBeforePublication = useRef<(() => Promise<void>) | null>(null);
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({});
+  const [publications, setPublications] = useState<TicketPublication[]>([]);
+  const [publicationError, setPublicationError] = useState('');
   const staged = useRef<StagedAttachment[]>([]);
   const serverTicket = useRef(ticket);
   const [knownRevisions, setKnownRevisions] = useState(() => new Set(ticket ? [ticket.revision] : []));
@@ -212,6 +215,12 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   const path = ticket ? `/api/repos/${encode(ticket.repoId)}/tickets/${encode(ticket.id)}` : '';
   const attachmentBase = path ? `${path}/attachments/` : '';
   const currentRun = runs.find(run => run.id === ticket?.runId);
+  useEffect(() => {
+    if (!path) return;
+    let cancelled = false;
+    void api<TicketPublication[]>(`${path}/publications`).then(value => { if (!cancelled) setPublications(value); }).catch(cause => { if (!cancelled) setPublicationError(message(cause)); });
+    return () => { cancelled = true; };
+  }, [api, path]);
 
   useEffect(() => {
     alive.current = true;
@@ -455,6 +464,8 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
     {stale && <div className="notice"><div><h3>Requirements changed{working ? ' during execution' : ' outside this editor'}.</h3><p>Your editor has not been overwritten. The current run keeps its immutable revision; changed requirements require new approval.</p></div></div>}
     {(stale || conflict) && <div className="conflict-box" role="alert"><p>{conflict || 'A newer ticket or attachment revision is available. Preserve your draft and reconcile before saving.'}</p><div className="toolbar"><Button onClick={() => { void navigator.clipboard.writeText(draft).catch(() => setConflict('Clipboard unavailable. Select and copy the Markdown from the editor before loading the current version.')); }}>Copy my draft</Button><Button download={`${ticket?.id ?? 'ticket'}-draft.md`} href={`data:text/markdown;charset=utf-8,${encode(draft)}`}>Download draft</Button><Button disabled={busy || uploading} onClick={() => void loadCurrentVersion()}>Load current version</Button></div></div>}
     {ticket && <div className="ticket-facts"><p><span>Dependencies</span>{ticket.dependencies.length ? ticket.dependencies.join(', ') : 'None'}</p><p><span>Approval</span>{ticket.approvedRevision === ticket.revision ? 'Current revision approved' : 'Current revision not approved'}</p><p><span>Acceptance criteria</span>{ticket.criteria.length}</p></div>}
+    {publicationError && <p className="warning-text" role="alert">Publication source could not be loaded: {publicationError}</p>}
+    {ticket && publications.map(source => <section className="detail-section" aria-label="Publication source" key={source.publicationId}><h3>Publication source</h3><p><Link to={`/projects/${encode(repo.id)}/tickets/new/agent?workspace=${encode(source.workspaceId)}${source.sourcePlanRevisionId ? `&plan=${encode(source.sourcePlanRevisionId)}` : ''}`}>Open source workspace</Link> · <code>{source.workspaceId}</code></p><p>Plan revision: <code>{source.sourcePlanRevisionId ?? 'No plan'}</code> · Proposal set: <code>{source.proposalSetId ?? 'Unavailable'}</code> · Review: <code>{source.reviewId}</code> (version {source.reviewVersion})</p><p>Publication: <code>{source.publicationId}</code> · Task: <code>{source.taskKey}</code> · Published dependencies: {source.dependencies.join(', ') || 'None'}</p><p>Original published revision: <code>{source.originalRevision ?? 'Unavailable'}</code><br />Current ticket revision: <code>{ticket.revision}</code>{source.originalRevision && source.originalRevision !== ticket.revision ? ' · Modified since publication' : ''}</p></section>)}
     {ticket && <>
       <section className="detail-section" aria-label="Ticket actions"><h3>Permission & review</h3><div className="toolbar">
         <Button disabled={actionsBusy || ticket.removed || !!ticket.error || dirty || stale || working || currentRun?.status === 'blocked' || ticket.status === 'done' || ticket.approvedRevision === ticket.revision} onClick={() => void action('approve')}>Approve this revision</Button>

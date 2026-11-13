@@ -133,7 +133,7 @@ export function previewBatch(store: Store, repo: Repo, id: string, input: Record
       validateCompleteTicket(markdown, []);
       return { key, id: ids.get(key)!, markdown, dependencies };
     });
-    const operation: BatchOperation = { id: token(), repoId: repo.id, repoPath: repo.path, rootIdentity, workspaceId: id, reviewId: review.id, reviewVersion: review.version, workspaceVersion: input.version as number, sourcePlanRevisionId: set.sourcePlanRevisionId, payloadHash: '', externalRevisions: externalGraph(store, repo, tickets), mode: latest.mode, expires: Date.now() + 600000, acknowledgeStalePlan: input.acknowledgeStalePlan as boolean, state: 'prepared', tickets };
+    const operation: BatchOperation = { id: token(), repoId: repo.id, repoPath: repo.path, rootIdentity, workspaceId: id, reviewId: review.id, reviewVersion: review.version, proposalSetId: set.id, workspaceVersion: input.version as number, sourcePlanRevisionId: set.sourcePlanRevisionId, payloadHash: '', externalRevisions: externalGraph(store, repo, tickets), mode: latest.mode, expires: Date.now() + 600000, acknowledgeStalePlan: input.acknowledgeStalePlan as boolean, state: 'prepared', tickets };
     await checkRootIdentity(repo, rootIdentity);
     operation.payloadHash = payloadHash(operation);
     store.save('batchOperations', operation); return operation;
@@ -144,8 +144,20 @@ export function operationFor(store: Store, repo: Repo, workspaceId: string, conf
   if (!operation || operation.repoId !== repo.id || operation.repoPath !== repo.path || operation.workspaceId !== workspaceId) throw new HttpError(404, 'Batch operation not found');
   return operation;
 }
-export function publicOperation(operation: BatchOperation) {
-  return { confirmation: operation.id, publicationId: operation.id, reviewId: operation.reviewId, state: operation.state, phase: operation.phase, mode: operation.mode, expires: operation.expires, error: operation.error, compacted: operation.compacted ?? false, tickets: operation.tickets.map(({ key, id, markdown, dependencies, revision }) => ({ key, id, markdown, dependencies, ...(revision ? { revision } : {}) })) };
+export function publicOperation(operation: BatchOperation, store: Store) {
+  const source = store.get('agentWorkspaces', operation.workspaceId);
+  const review = source?.repoId === operation.repoId && source.repoPath === operation.repoPath ? source.batchReview : null;
+  const proposalSetId = operation.proposalSetId ?? (review?.id === operation.reviewId ? review.proposalSetId : null);
+  return { confirmation: operation.id, publicationId: operation.id, workspaceId: operation.workspaceId, reviewId: operation.reviewId, reviewVersion: operation.reviewVersion, proposalSetId, sourcePlanRevisionId: operation.sourcePlanRevisionId, state: operation.state, phase: operation.phase, mode: operation.mode, expires: operation.expires, error: operation.error, compacted: operation.compacted ?? false, tickets: operation.tickets.map(({ key, id, markdown, dependencies, revision }) => ({ key, id, markdown, dependencies, ...(revision ? { revision } : {}) })) };
+}
+
+export function ticketPublications(store: Store, repo: Repo, ticketId: string) {
+  const rows = database(store).query<{ value: string }, [string, string, string]>("SELECT value FROM records WHERE kind='batchOperations' AND json_extract(value,'$.state')='complete' AND json_extract(value,'$.repoId')=? AND json_extract(value,'$.repoPath')=? AND EXISTS (SELECT 1 FROM json_each(records.value,'$.tickets') item WHERE json_extract(item.value,'$.id')=?) ORDER BY rowid DESC").all(repo.id, repo.path, ticketId);
+  return rows.map(row => {
+    const operation = publicOperation(JSON.parse(row.value) as BatchOperation, store);
+    const ticket = operation.tickets.find(item => item.id === ticketId)!;
+    return { publicationId: operation.publicationId, workspaceId: operation.workspaceId, reviewId: operation.reviewId, reviewVersion: operation.reviewVersion, proposalSetId: operation.proposalSetId, sourcePlanRevisionId: operation.sourcePlanRevisionId, taskKey: ticket.key, dependencies: ticket.dependencies, originalRevision: ticket.revision ?? null };
+  });
 }
 type DirectoryInspection = {
   status: 'missing' | 'match' | 'mismatch' | 'unproven';

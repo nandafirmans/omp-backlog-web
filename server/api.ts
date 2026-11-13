@@ -13,6 +13,7 @@ import { inspectWorkspaceHandoff } from './runtime';
 import { discoverExecutionModels, handleDraftRequest } from './drafting';
 import { handleAssistedCreation } from './assisted-creation';
 import { assertWorkspaceOwners, handleAgentWorkspaceRequest } from './agent-workspaces';
+import { ticketPublications } from './batch-publication';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
@@ -253,6 +254,11 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
         if (segments[3] === 'tickets' && segments[4]) {
           const id = segments[4];
           if (inactive(repo.id, id)) throw new HttpError(404, 'Ticket not found');
+          if (segments.length === 6 && segments[5] === 'publications' && request.method === 'GET') {
+            const ticket = store.get('tickets', `${repo.id}/${id}`);
+            if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
+            return json(ticketPublications(store, repo, id));
+          }
           if (segments.length === 5 && request.method === 'PUT') { const input = await body(request); const ticket = await writeTicket(store, repo, string(input.markdown, 'markdown', MAX_MARKDOWN), string(input.revision, 'revision', 64), id); runtime.wake(); return json(ticket); }
           if (segments[5] === 'attachments' && segments.length === 6 && request.method === 'POST') {
             if (!request.headers.get('content-type')?.startsWith('multipart/form-data')) throw new HttpError(415, 'Use multipart form data');

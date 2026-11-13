@@ -32,6 +32,7 @@ export interface ProposalSet {
 export interface BatchReview { id: string; version: number; proposalSetId: string; proposals: TaskProposal[]; selectedKeys: string[]; updatedAt: number }
 export interface BatchOperation {
   id: string; repoId: string; repoPath: string; workspaceId: string; reviewId: string; reviewVersion: number;
+  proposalSetId?: string;
   workspaceVersion: number; mode: Mode; expires: number; acknowledgeStalePlan: boolean;
   state: 'prepared' | 'publishing' | 'complete' | 'blocked';
   phase?: 'staging' | 'publishing' | 'reconciling';
@@ -90,7 +91,7 @@ export interface AgentWorkspace {
   extraction: { key: string; status: 'pending' | 'valid' | 'failed'; error?: string; proposalSetId?: string } | null;
 }
 export type AgentWorkspaceSummary = Pick<AgentWorkspace, 'id' | 'repoId' | 'title' | 'createdAt' | 'updatedAt' | 'archived' | 'version'>;
-export interface AgentWorkspaceSnapshot { workspace: AgentWorkspace; draft: DraftSnapshot | null; batchOperations?: { confirmation: string; publicationId: string; reviewId: string; state: BatchOperation['state']; mode: Mode; expires: number; error?: string; tickets: Pick<BatchOperation['tickets'][number], 'key' | 'id' | 'markdown' | 'dependencies'>[] }[] }
+export interface AgentWorkspaceSnapshot { workspace: AgentWorkspace; draft: DraftSnapshot | null; batchOperations?: { confirmation: string; publicationId: string; workspaceId: string; reviewId: string; reviewVersion: number; proposalSetId: string | null; sourcePlanRevisionId: string | null; state: BatchOperation['state']; mode: Mode; expires: number; error?: string; tickets: Pick<BatchOperation['tickets'][number], 'key' | 'id' | 'markdown' | 'dependencies' | 'revision'>[] }[] }
 export interface AgentWorkspaceRecord extends AgentWorkspace {
   repoPath: string;
   acceptedTurns: WorkspaceTurnReceipt[];

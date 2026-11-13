@@ -21,8 +21,8 @@ test('batch reserves IDs, survives restart and publishes once with dependencies'
       { key: 'task-first', title: 'First', description: 'Why: Need first. Scope: Build first. Out-of-scope: Other work.', acceptanceCriteria: ['First output is visible'], verification: ['Check first output'], dependsOn: [], sourceReferences: [] },
       { key: 'task-second', title: 'Second', description: 'Why: Need second. Scope: Build second. Out-of-scope: Other work.', acceptanceCriteria: ['Second output is visible'], verification: ['Check second output'], dependsOn: ['task-first'], sourceReferences: [] },
     ];
-    const payload = { strategy: 'multiple' as const, sourceWorkspaceId: 'workspace', sourcePlanRevisionId: null, rationale: 'Two dependent tasks', proposals, openQuestions: [] };
-    const workspace: AgentWorkspaceRecord = { id: 'workspace', repoId: repo.id, repoPath: repo.path, title: 'Workspace', createdAt: 1, updatedAt: 1, archived: false, version: 1, prompt: '', ticketMarkdown: '', currentPlanRevisionId: null, planRevisions: [], messages: [], model: null, thinking: '', proposalSets: [{ id: 'set', strategy: 'multiple', sourceWorkspaceId: 'workspace', sourcePlanRevisionId: null, createdAt: 1, validationStatus: 'valid', payload, researchReferences: [] }], researchReferences: [], researchResults: [], extraction: null, acceptedTurns: [], rejectedTurns: [] };
+    const payload = { strategy: 'multiple' as const, sourceWorkspaceId: 'workspace', sourcePlanRevisionId: 'plan', rationale: 'Two dependent tasks', proposals, openQuestions: [] };
+    const workspace: AgentWorkspaceRecord = { id: 'workspace', repoId: repo.id, repoPath: repo.path, title: 'Workspace', createdAt: 1, updatedAt: 1, archived: false, version: 1, prompt: '', ticketMarkdown: '', currentPlanRevisionId: 'plan', planRevisions: [{ id: 'plan', revisionHash: 'plan-hash', markdown: 'Source plan', createdAt: 1 }], messages: [], model: null, thinking: '', proposalSets: [{ id: 'set', strategy: 'multiple', sourceWorkspaceId: 'workspace', sourcePlanRevisionId: 'plan', createdAt: 1, validationStatus: 'valid', payload, researchReferences: [] }], researchReferences: [], researchResults: [], extraction: null, acceptedTurns: [], rejectedTurns: [] };
     store.save('agentWorkspaces', workspace);
     const review = saveBatchReview(store, repo, workspace.id, { version: 1, reviewVersion: null, proposalSetId: 'set', proposals, selectedKeys: ['task-first', 'task-second'] });
     const renamed = structuredClone(proposals); renamed[0]!.key = 'task-renamed';
@@ -31,7 +31,7 @@ test('batch reserves IDs, survives restart and publishes once with dependencies'
     const changed = store.get('agentWorkspaces', workspace.id)!;
     changed.currentPlanRevisionId = 'new-plan'; store.save('agentWorkspaces', changed);
     await expect(previewBatch(store, repo, workspace.id, { version: 2, reviewId: review.id, reviewVersion: review.version, acknowledgeStalePlan: false })).rejects.toMatchObject({ status: 409 });
-    changed.currentPlanRevisionId = null; store.save('agentWorkspaces', changed);
+    changed.currentPlanRevisionId = 'plan'; store.save('agentWorkspaces', changed);
     for (const stage of ['gate', 'reserved', 'mid-write', 'staged', 'journaled', 'renamed', 'synced', 'reconciled', 'before-activation', 'after-activation']) {
       const op = await previewBatch(store, repo, workspace.id, { version: 2, reviewId: review.id, reviewVersion: review.version, acknowledgeStalePlan: false });
       await expect(writeTicket(store, repo, op.tickets[0]!.markdown)).rejects.toMatchObject({ status: 409 });
@@ -58,6 +58,37 @@ test('batch reserves IDs, survives restart and publishes once with dependencies'
         expect(migrated.tickets.map(ticket => ticket.revision)).toEqual(op.tickets.map(ticket => digest(ticket.markdown + '\0[]')));
         expect(migrated.tickets.map(({ key, id, dependencies }) => ({ key, id, dependencies }))).toEqual(op.tickets.map(({ key, id, dependencies }) => ({ key, id, dependencies })));
         expect(migrated.tickets.every(ticket => ticket.markdown === '')).toBe(true);
+        const restartedApi = createApi(store, runtime);
+        const get = (path: string) => restartedApi(new Request(`http://127.0.0.1:4310${path}`, { headers: { cookie: `omp_session=${raw}` } }));
+        const operationPath = `/api/repos/repo/agent-workspaces/${workspace.id}/batch-operations/${op.id}`;
+        const operation = await (await get(operationPath)).json() as { workspaceId: string; proposalSetId: string; sourcePlanRevisionId: string | null; reviewId: string; tickets: { revision: string }[] };
+        expect(operation).toMatchObject({ workspaceId: workspace.id, proposalSetId: 'set', sourcePlanRevisionId: 'plan', reviewId: review.id });
+        expect(operation.tickets[0]!.revision).toBe(digest(op.tickets[0]!.markdown + '\0[]'));
+        const id = op.tickets[0]!.id;
+        const original = store.get('tickets', `repo/${id}`)!;
+        const edited = await writeTicket(store, repo, op.tickets[0]!.markdown.replace('title: First', 'title: Edited'), original.revision, id);
+        const publications = await (await get(`/api/repos/repo/tickets/${id}/publications`)).json() as { publicationId: string; originalRevision: string; proposalSetId: string }[];
+        expect(publications).toContainEqual(expect.objectContaining({ publicationId: op.id, originalRevision: original.revision, proposalSetId: 'set', sourcePlanRevisionId: 'plan' }));
+        expect(edited.revision).not.toBe(original.revision);
+        expect((await publishBatch(store, repo, workspace.id, op.id)).id).toBe(op.id);
+        const other: Repo = { ...repo, id: 'other', path: join(root, 'other') };
+        await mkdir(other.path); store.save('repos', other);
+        await writeTicket(store, other, op.tickets[0]!.markdown);
+        expect(await (await get(`/api/repos/other/tickets/${id}/publications`)).json()).toEqual([]);
+        const legacy = op.tickets[0]!.markdown.replaceAll(id, 'T900');
+        await writeTicket(store, repo, legacy);
+        expect(await (await get('/api/repos/repo/tickets/T900/publications')).json()).toEqual([]);
+        const historical = store.get('batchOperations', op.id)!;
+        delete historical.proposalSetId; store.save('batchOperations', historical);
+        expect((await (await get(operationPath)).json() as { proposalSetId: string | null }).proposalSetId).toBe('set');
+        const changedReview = store.get('agentWorkspaces', workspace.id)!;
+        changedReview.batchReview = { ...changedReview.batchReview!, id: 'different-review' };
+        store.save('agentWorkspaces', changedReview);
+        expect((await (await get(operationPath)).json() as { proposalSetId: string | null }).proposalSetId).toBeNull();
+        changedReview.batchReview = review; store.save('agentWorkspaces', changedReview);
+        historical.proposalSetId = 'set'; store.save('batchOperations', historical);
+        await rm(join(repo.path, '.omp-backlog/tickets/T900'), { recursive: true });
+        await reconcileTickets(store, true);
         continue;
       }
       expect(store.get('batchOperations', op.id)?.state).toBe('publishing');

@@ -61,7 +61,7 @@ function snapshot(store: Store, repo: Repo, id: string): AgentWorkspaceSnapshot 
     value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
   }
   const rows = database(store).query<{ value: string }, [string, string, string, number]>("SELECT value FROM records WHERE kind='batchOperations' AND json_extract(value,'$.repoId')=? AND json_extract(value,'$.repoPath')=? AND json_extract(value,'$.workspaceId')=? ORDER BY CASE WHEN json_extract(value,'$.state') IN ('publishing','blocked') OR (json_extract(value,'$.state')='prepared' AND coalesce(json_extract(value,'$.invalidated'),0)=0 AND json_extract(value,'$.expires')>?) THEN 0 ELSE 1 END, rowid DESC LIMIT 128").all(repo.id, repo.path, id, Date.now());
-  return { workspace: publicWorkspace(value), draft, batchOperations: rows.reverse().map(row => publicOperation(JSON.parse(row.value))) };
+  return { workspace: publicWorkspace(value), draft, batchOperations: rows.reverse().map(row => publicOperation(JSON.parse(row.value), store)) };
 }
 function detached(value: AgentWorkspaceRecord): DraftSnapshot {
   return { id: value.id, status: 'stopped', models: [], model: value.model, thinking: value.thinking, thinkingLevels: [], messages: value.messages, error: 'No native session is connected. Saved text is retained; Connect never replays inference.' };
@@ -237,21 +237,21 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
     const review = saveBatchReview(store, repo, id!, input);
     return json({ ...snapshot(store, repo, id!), review });
   }
-  if (segments.length === 7 && action === 'batch-operations' && request.method === 'GET') return json(publicOperation(operationFor(store, repo, id!, segments[6]!)));
+  if (segments.length === 7 && action === 'batch-operations' && request.method === 'GET') return json(publicOperation(operationFor(store, repo, id!, segments[6]!), store));
   if (segments.length === 8 && action === 'batch-operations' && segments[7] === 'inspect' && request.method === 'GET') return json(await inspectBatch(store, repo, id!, segments[6]!));
   if (segments.length === 8 && action === 'batch-operations' && segments[7] === 'recover' && request.method === 'POST') {
     const input = await payload(request, ['confirm']);
     if (input.confirm !== true) throw new HttpError(400, 'Explicit recovery confirmation is required');
-    return json(publicOperation(await recoverBatch(store, repo, id!, segments[6]!)));
+    return json(publicOperation(await recoverBatch(store, repo, id!, segments[6]!), store));
   }
   if (segments.length === 6 && action === 'batch-preview' && request.method === 'POST') {
     const input = await payload(request, ['version', 'reviewId', 'reviewVersion', 'acknowledgeStalePlan']);
-    return json(publicOperation(await previewBatch(store, repo, id!, input)));
+    return json(publicOperation(await previewBatch(store, repo, id!, input), store));
   }
   if (segments.length === 6 && action === 'batch-publish' && request.method === 'POST') {
     const input = await payload(request, ['confirmation']);
     if (typeof input.confirmation !== 'string') throw new HttpError(400, 'Confirmation is required');
-    return json(publicOperation(await publishBatch(store, repo, id!, input.confirmation)));
+    return json(publicOperation(await publishBatch(store, repo, id!, input.confirmation), store));
   }
   if (segments.length === 5 && request.method === 'GET') return json(snapshot(store, repo, id!));
   if (segments.length === 7 && action === 'turns' && request.method === 'GET') {
