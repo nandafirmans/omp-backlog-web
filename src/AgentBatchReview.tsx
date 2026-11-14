@@ -55,6 +55,7 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
   const inspection = operation ? inspections[operation.confirmation] : undefined;
   const mustCheckStatus = statusRequired.length > 0;
   const safeToRecover = inspectionAllowsRecovery(operation, inspection) && !mustCheckStatus;
+  const alreadyPublished = !dirty && operation?.state === 'complete' && operation.proposalSetId === setId && review?.id === operation.reviewId && review.version === operation.reviewVersion;
   useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty, onDirty]);
   useEffect(() => { onBusy(busy); return () => onBusy(false); }, [busy, onBusy]);
   async function run(work: () => Promise<void>) {
@@ -190,9 +191,10 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
       {stale && <div className="warning-text"><p>These tickets came from an older plan revision.</p><Checkbox checked={acknowledged} disabled={disabled || busy} onChange={event => setAcknowledgedSource(event.target.checked ? staleIdentity : '')}>I've reviewed the differences</Checkbox></div>}
       {workspaceDirty && <p className="warning-text">Save your unsaved chat or plan edits before creating tickets.</p>}
       <div className="agent-quick-ticket-actions">
-        <Button type="primary" disabled={disabled || busy || mustCheckStatus || workspaceDirty || !chosen.length || !!issues.length || (stale && !acknowledged)} onClick={() => void quickReview()}>
-          Review {chosen.length} {chosen.length === 1 ? 'ticket' : 'tickets'} &amp; create…
-        </Button>
+        {alreadyPublished ? <p className="muted" role="status">This reviewed ticket set has already been created. Generate a new version to create more tickets.</p>
+          : <Button type="primary" disabled={disabled || busy || mustCheckStatus || workspaceDirty || !chosen.length || !!issues.length || (stale && !acknowledged)} onClick={() => void quickReview()}>
+            Review {chosen.length} {chosen.length === 1 ? 'ticket' : 'tickets'} &amp; create…
+          </Button>}
         {workspace.proposalSets.length > 1 && <details className="agent-older-sets"><summary>Previous versions</summary>
           {workspace.proposalSets.map((set, index) => <Button key={set.id} size="small" disabled={disabled || busy} onClick={() => void chooseSet(set.id)}>Version {index + 1}</Button>)}
         </details>}
