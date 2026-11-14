@@ -179,6 +179,14 @@ async function connect(store: Store, repo: Repo, id: string): Promise<AgentWorks
           const current = record(store, repo, id);
           const acceptedTurn: WorkspaceTurnReceipt = { ...receipt, contextHash: turn.contextHash, contextVersion: current.version, acceptedAt: Date.now(), intent: turn.intent, ...(turn.strategy ? { strategy: turn.strategy } : {}), sourceWorkspaceId: id, sourcePlanRevisionId: current.currentPlanRevisionId, model: structuredClone(draft.model), thinking: draft.thinking, researchReferenceIds: current.researchReferences.map(reference => reference.id), userMessageIndex: draft.messages.length - 2, assistantMessageIndex: draft.messages.length - 1, status: 'accepted' };
           current.acceptedTurns.push(acceptedTurn);
+          // An accepted chat turn is already durable in messages. Clear the saved
+          // composer so reconnect/reload starts with a blank draft, just like OMP CLI.
+          // Never clear a newer human edit or the synthetic task-extraction prompt.
+          const submitted = draft.messages[acceptedTurn.userMessageIndex]?.text;
+          if (turn.intent !== 'task_extraction' && submitted?.trim() && current.prompt === submitted) {
+            current.prompt = '';
+            current.version++;
+          }
           if (turn.intent === 'task_extraction') current.extraction = { key: receipt.key, status: 'pending' };
           store.save('agentWorkspaces', current);
           saveNative(store, repo, id, draft);
