@@ -478,7 +478,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
             </div>
           </div>
           {workspace.extraction?.status === 'failed' && <p className="error-banner" role="alert">{workspace.extraction.error || 'Ticket generation failed. Your previous proposals are preserved.'}</p>}
-          <AgentBatchReview key={workspace.id} workspace={workspace} initialOperations={batchOperations} path={path} api={api} disabled={disabled || !!operation || snapshot?.status === 'busy' || workspace.archived} workspaceDirty={dirty} onWorkspace={setWorkspace} onDirty={setBatchDirty} onBusy={setBatchBusy} saveRef={batchSaveRef} />
+          <AgentBatchReview key={`${workspace.id}-${workspace.proposalSets.length ? "available" : "empty"}`} workspace={workspace} initialOperations={batchOperations} path={path} api={api} disabled={disabled || !!operation || snapshot?.status === 'busy' || workspace.archived} workspaceDirty={dirty} onWorkspace={setWorkspace} onDirty={setBatchDirty} onBusy={setBatchBusy} saveRef={batchSaveRef} />
           <details className="agent-legacy-ticket agent-advanced-option"><summary>Legacy single-ticket editor</summary><p className="muted">The separate legacy ticket editor remains available for quick-ticket drafting.</p>{children}</details>
         </div>
       </section>
