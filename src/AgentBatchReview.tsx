@@ -34,7 +34,6 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
   const [baseline, setBaseline] = useState(() => JSON.stringify([initialSetId, initialProposals, initialSelected]));
   const [quickPreviewOpen, setQuickPreviewOpen] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const lastGeneratedSet = useRef(latest?.id ?? '');
   const [operations, setOperations] = useState<BatchOperation[]>(initialOperations);
   const [operationId, setOperationId] = useState(initialOperations.at(-1)?.confirmation ?? '');
   const [inspections, setInspections] = useState<Record<string, OperationInspection>>({});
@@ -56,17 +55,6 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
   const inspection = operation ? inspections[operation.confirmation] : undefined;
   const mustCheckStatus = statusRequired.length > 0;
   const safeToRecover = inspectionAllowsRecovery(operation, inspection) && !mustCheckStatus;
-  useEffect(() => {
-    const newest = workspace.proposalSets.at(-1);
-    if (!newest || newest.id === lastGeneratedSet.current) return;
-    lastGeneratedSet.current = newest.id;
-    if (dirty) return; // Never replace edits to an older proposal set.
-    const items = structuredClone(newest.payload.proposals);
-    const keys = items.map(item => item.key);
-    setSetId(newest.id); setProposals(items); setSelected(keys);
-    setBaseline(JSON.stringify([newest.id, items, keys]));
-    setAcknowledgedSource(''); setModeConfirmed(false);
-  }, [workspace.proposalSets, dirty]);
   useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty, onDirty]);
   useEffect(() => { onBusy(busy); return () => onBusy(false); }, [busy, onBusy]);
   async function run(work: () => Promise<void>) {
@@ -176,6 +164,7 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
     });
   }
   return <section className="agent-batch-review" aria-label="Batch task review">{modalContext}
+    {workspace.proposalSets.at(-1)?.id !== setId && workspace.proposalSets.length > 0 && <div className="agent-new-proposal"><Button type="primary" disabled={disabled || busy} onClick={() => void chooseSet(workspace.proposalSets.at(-1)!.id)}>Review newly generated tickets</Button></div>}
     {!!setId && <div className="agent-quick-tickets">
       <h3>{chosen.length} of {proposals.length} tickets selected</h3>
       <p className="muted">Review the titles. Open a ticket only if you want to change its details.</p>
