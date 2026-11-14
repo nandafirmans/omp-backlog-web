@@ -22,11 +22,18 @@ const lines = (value: string) => value ? value.split('\n') : [];
 
 export default function AgentBatchReview({ workspace, initialOperations, path, api, disabled, workspaceDirty, onWorkspace, onDirty, onBusy, saveRef }: Props) {
   const initial = workspace as BatchWorkspace;
+  const latest = initial.proposalSets.at(-1);
+  const savedForLatest = initial.batchReview?.proposalSetId === latest?.id;
+  const initialProposals = savedForLatest ? initial.batchReview!.proposals : latest?.payload.proposals ?? [];
+  const initialSelected = savedForLatest ? initial.batchReview!.selectedKeys : initialProposals.map(item => item.key);
+  const initialSetId = latest?.id ?? initial.batchReview?.proposalSetId ?? '';
   const [review, setReview] = useState(initial.batchReview ?? null);
-  const [setId, setSetId] = useState(initial.batchReview?.proposalSetId ?? '');
-  const [proposals, setProposals] = useState<TaskProposal[]>(initial.batchReview?.proposals ?? []);
-  const [selected, setSelected] = useState<string[]>(initial.batchReview?.selectedKeys ?? []);
-  const [baseline, setBaseline] = useState(() => JSON.stringify([initial.batchReview?.proposalSetId ?? '', initial.batchReview?.proposals ?? [], initial.batchReview?.selectedKeys ?? []]));
+  const [setId, setSetId] = useState(initialSetId);
+  const [proposals, setProposals] = useState<TaskProposal[]>(() => structuredClone(initialProposals));
+  const [selected, setSelected] = useState<string[]>(initialSelected);
+  const [baseline, setBaseline] = useState(() => JSON.stringify([initialSetId, initialProposals, initialSelected]));
+  const [quickPreviewOpen, setQuickPreviewOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [operations, setOperations] = useState<BatchOperation[]>(initialOperations);
   const [operationId, setOperationId] = useState(initialOperations.at(-1)?.confirmation ?? '');
   const [inspections, setInspections] = useState<Record<string, OperationInspection>>({});
@@ -48,6 +55,7 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
   const inspection = operation ? inspections[operation.confirmation] : undefined;
   const mustCheckStatus = statusRequired.length > 0;
   const safeToRecover = inspectionAllowsRecovery(operation, inspection) && !mustCheckStatus;
+  const alreadyPublished = !dirty && operation?.state === 'complete' && operation.proposalSetId === setId && review?.id === operation.reviewId && review.version === operation.reviewVersion;
   useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty, onDirty]);
   useEffect(() => { onBusy(busy); return () => onBusy(false); }, [busy, onBusy]);
   async function run(work: () => Promise<void>) {
@@ -63,6 +71,47 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
     return result.workspace;
   }
   useEffect(() => { saveRef.current = save; return () => { saveRef.current = null; }; });
+  async function quickReview() {
+    if (!setId || !chosen.length || issues.length || (stale && !acknowledged) || mustCheckStatus || workspaceDirty) return;
+    await run(async () => {
+      // One deliberate review action saves the selection and asks the server for an
+      // immutable exact preview. Publication remains a distinct confirmation.
+      let version = workspace.version;
+      let current = review;
+      if (!current || current.proposalSetId !== setId || dirty) {
+        const saved = await save();
+        if (!saved) return;
+        version = saved.version;
+        current = saved.batchReview ?? null;
+      }
+      if (!current) throw new Error('The reviewed tickets could not be saved.');
+      if (!dirty && operation?.state === 'prepared' && !operation.compacted &&
+        operation.reviewId === current.id && operation.reviewVersion === current.version && Date.now() < operation.expires) {
+        // Reopen the same exact reserved preview after Cancel; do not mint a second.
+        setQuickPreviewOpen(true);
+        return;
+      }
+      const preview = await api<BatchOperation>(`${path}/batch-preview`, json({
+        version, reviewId: current.id, reviewVersion: current.version, acknowledgeStalePlan: acknowledged,
+      }));
+      updateOperation(preview);
+      setQuickPreviewOpen(true);
+    });
+  }
+  async function quickPublish() {
+    if (!operation || operation.state !== 'prepared' || operation.compacted || mustCheckStatus || workspaceDirty || dirty) return;
+    await run(async () => {
+      try {
+        const published = await api<BatchOperation>(`${path}/batch-publish`, json({ confirmation: operation.confirmation }));
+        updateOperation(published);
+        setQuickPreviewOpen(false);
+      } catch (cause) {
+        setStatusRequired(current => current.includes(operation.confirmation) ? current : [...current, operation.confirmation]);
+        setQuickPreviewOpen(false);
+        throw cause;
+      }
+    });
+  }
   function edit(index: number, field: keyof TaskProposal, value: string | string[]) {
     setProposals(current => current.map((item, i) => i === index ? { ...item, [field]: value } : item));
     setModeConfirmed(false);
@@ -116,6 +165,65 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
     });
   }
   return <section className="agent-batch-review" aria-label="Batch task review">{modalContext}
+    {workspace.proposalSets.at(-1)?.id !== setId && workspace.proposalSets.length > 0 && <div className="agent-new-proposal"><Button type="primary" disabled={disabled || busy} onClick={() => void chooseSet(workspace.proposalSets.at(-1)!.id)}>Review newly generated tickets</Button></div>}
+    {!!setId && <div className="agent-quick-tickets">
+      <h3>{chosen.length} of {proposals.length} tickets selected</h3>
+      <p className="muted">Review the titles. Open a ticket only if you want to change its details.</p>
+      <div className="agent-quick-ticket-list">
+        {proposals.map((item, index) => <div className="agent-quick-ticket" key={item.key}>
+          <Checkbox checked={selected.includes(item.key)} disabled={disabled || busy} onChange={value => {
+            setSelected(current => value.target.checked ? [...current, item.key] : current.filter(key => key !== item.key));
+            setModeConfirmed(false);
+          }}>{item.title || 'Untitled ticket'}</Checkbox>
+          <span className="agent-quick-dependencies">{item.dependsOn.length ? `After ${item.dependsOn.join(', ')}` : 'Independent'}</span>
+          <details className="agent-quick-ticket-edit">
+            <summary>Edit details</summary>
+            <label>Title<Input aria-label={`Task title ${index + 1}`} value={item.title} disabled={disabled || busy} onChange={event => edit(index, 'title', event.target.value)} /></label>
+            {(['description', 'acceptanceCriteria', 'verification', 'dependsOn', 'sourceReferences'] as const).map(field => <label key={field}>{({
+              description: 'Description', acceptanceCriteria: 'Acceptance criteria · one per line', verification: 'Verification · one per line',
+              dependsOn: 'Dependencies · task keys or existing ticket IDs, one per line', sourceReferences: 'Source references · one per line',
+            })[field]}<Input.TextArea aria-label={`${field} ${index + 1}`} value={typeof item[field] === 'string' ? item[field] : item[field].join('\n')} disabled={disabled || busy} autoSize={{ minRows: 2, maxRows: 8 }} onChange={event => edit(index, field, field === 'description' ? event.target.value : lines(event.target.value))} /></label>)}
+            <div className="toolbar"><Button size="small" disabled={disabled || busy || index === 0} onClick={() => setProposals(current => moveProposal(current, index, -1))}>Move up</Button><Button size="small" disabled={disabled || busy || index === proposals.length - 1} onClick={() => setProposals(current => moveProposal(current, index, 1))}>Move down</Button></div>
+          </details>
+        </div>)}
+      </div>
+      {issues.length > 0 && <div className="error-banner" role="alert"><strong>Fix ticket dependencies</strong><ul>{issues.map(issue => <li key={issue}>{issue}</li>)}</ul></div>}
+      {stale && <div className="warning-text"><p>These tickets came from an older plan revision.</p><Checkbox checked={acknowledged} disabled={disabled || busy} onChange={event => setAcknowledgedSource(event.target.checked ? staleIdentity : '')}>I've reviewed the differences</Checkbox></div>}
+      {workspaceDirty && <p className="warning-text">Save your unsaved chat or plan edits before creating tickets.</p>}
+      <div className="agent-quick-ticket-actions">
+        {alreadyPublished ? <p className="muted" role="status">This reviewed ticket set has already been created. Generate a new version to create more tickets.</p>
+          : <Button type="primary" disabled={disabled || busy || mustCheckStatus || workspaceDirty || !chosen.length || !!issues.length || (stale && !acknowledged)} onClick={() => void quickReview()}>
+            Review {chosen.length} {chosen.length === 1 ? 'ticket' : 'tickets'} &amp; create…
+          </Button>}
+        {workspace.proposalSets.length > 1 && <details className="agent-older-sets"><summary>Previous versions</summary>
+          {workspace.proposalSets.map((set, index) => <Button key={set.id} size="small" disabled={disabled || busy} onClick={() => void chooseSet(set.id)}>Version {index + 1}</Button>)}
+        </details>}
+      </div>
+    </div>}
+    {operation?.state === 'complete' && <div className="agent-publication-done" role="status">
+      <strong>{operation.tickets.length} Draft tickets created.</strong>
+      <div className="agent-created-ticket-links">{operation.tickets.map(ticket =>
+        <Link key={ticket.id} to={`/projects/${encodeURIComponent(workspace.repoId)}/tickets/${encodeURIComponent(ticket.id)}`}>{ticket.id}</Link>,
+      )}</div>
+    </div>}
+    {(operation?.state === 'blocked' || operation?.state === 'publishing' || mustCheckStatus) && <p className="error-banner" role="alert">
+      Publication needs attention. Open recovery tools below before creating another batch.
+    </p>}
+    <Modal title={`Create ${operation?.tickets.length ?? 0} Draft tickets?`} open={quickPreviewOpen && !!operation}
+      onCancel={() => { if (!busy) setQuickPreviewOpen(false); }}
+      onOk={() => void quickPublish()} okText="Create Draft tickets" okButtonProps={{ disabled: busy || mustCheckStatus || workspaceDirty || dirty || operation?.state !== 'prepared' || !!operation?.compacted }}
+      confirmLoading={busy} closable={!busy} maskClosable={!busy} keyboard={!busy} width={800} destroyOnHidden>
+      {operation && <div className="agent-quick-preview">
+        <p>The exact ticket files below will be created in <strong>{operation.mode}</strong> execution mode. {operation.mode === 'automatic' ? 'Eligible tickets may begin implementation immediately.' : 'They remain unapproved until separately authorized.'}</p>
+        <p className="muted">Review each ticket's complete Markdown by opening its details. This preview expires {new Date(operation.expires).toLocaleTimeString()}.</p>
+        {operation.tickets.map(ticket => <details key={ticket.key}>
+          <summary>{ticket.id} · {ticket.markdown.match(/^title:\s*(.+)$/m)?.[1] ?? ticket.key} · Dependencies: {ticket.dependencies.join(', ') || 'None'}</summary>
+          <pre tabIndex={0}>{ticket.markdown}</pre>
+        </details>)}
+      </div>}
+    </Modal>
+    <details className="agent-advanced-review" open={advancedOpen || operation?.state === 'blocked' || operation?.state === 'publishing' || mustCheckStatus} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
+      <summary>Advanced ticket editing, history &amp; recovery</summary>
     <h3>Review and publish tasks</h3><p className="muted">Choose a proposal set, edit and select tasks, then save the review. Publishing creates unapproved Draft tickets; it does not approve them. Batch publication does not include attachments.</p>
     <div className="toolbar">{workspace.proposalSets.map((set, index) => <Button key={set.id} disabled={disabled || busy} onClick={() => void chooseSet(set.id)}>{set.id === setId ? 'Editing' : 'Review'} set {index + 1}</Button>)}</div>
     {setId && <><p role="status">{dirty ? 'Unsaved task review changes' : 'Task review saved'} · {chosen.length} selected</p>
@@ -158,6 +266,7 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
       </div>}
       {!operation.compacted && <p className="muted">A lost response is uncertain. Check status; interrupted publications require inspection and explicit recovery of the same confirmation. Nothing is replayed automatically.</p>}
     </section>}
+    </details>
     {error && <div className="error-banner" role="alert">{error} Your review remains available. Check publication status before taking further action after an uncertain response.</div>}
   </section>;
 }
