@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Button, Checkbox, Input, Modal, Segmented, Select, Tag } from 'antd';
+import { Button, Checkbox, Input, Modal, Segmented, Select, Switch, Tag } from 'antd';
+import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { AgentWorkspace, AgentWorkspaceSnapshot, AgentWorkspaceSummary } from '../server/agent-workspace-contracts';
 import type { DraftContext, DraftPreparation, DraftSnapshot } from '../server/drafting-contracts';
 import type { UploadAttachments } from './attachments';
@@ -100,6 +102,17 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
     setWorkspaces(current => [value, ...current.filter(item => item.id !== value.id)]);
   }
 
+  function adoptAcceptedDraft(turn: PendingAgentTurn, saved: AgentWorkspace, accepted: boolean) {
+    const submitted = turn.entries.find(entry => entry.name === 'prompt')?.value;
+    const kind = turn.entries.find(entry => entry.name === 'intent')?.value;
+    if (!accepted || kind === 'task_extraction' || typeof submitted !== 'string' || !submitted.trim() || saved.prompt !== '') return;
+    // Accept only the server-cleared draft. Never clear newer typing or a rejected/unknown request.
+    setPrompt(current => current === submitted ? '' : current);
+    setWorkspace(current => current?.id === saved.id
+      ? mergeWorkspaceRuntime(current.prompt === submitted ? { ...current, prompt: '' } : current, saved)
+      : current);
+  }
+
   function load(value: AgentWorkspaceSnapshot, discardFiles = true) {
     localStorage.setItem(selectionKey, value.workspace.id);
     openedWorkspace.current = value.workspace.id;
@@ -161,6 +174,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
         setWorkspace(current => current ? mergeWorkspaceRuntime(current, value.workspace) : current);
         setObservedPlanId(value.workspace.currentPlanRevisionId);
         if (pending) {
+          adoptAcceptedDraft(pending, value.workspace, receipt?.accepted === true);
           if (receipt?.accepted || receipt?.resolved) {
             await clearPendingTurn(pending);
             if (cancelled) return;
@@ -283,6 +297,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
     setSnapshot(value.draft);
     setWorkspace(current => current ? mergeWorkspaceRuntime(current, value.workspace) : current);
     setObservedPlanId(value.workspace.currentPlanRevisionId); remember(value.workspace);
+    adoptAcceptedDraft(turn, value.workspace, receipt.accepted);
     if (receipt.accepted || receipt.resolved) {
       await clearPendingTurn(turn); setPending(undefined); setPendingUnknown(false);
       return true;
@@ -378,17 +393,15 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
       </div>}
     </Modal>
     <div className="agent-workspace-toolbar">
-      <label className="agent-workspace-picker">Workspace<Select aria-label="Open saved workspace" placeholder="Choose a workspace" value={workspace?.id} disabled={busy || disabled} options={workspaces.filter(item => showArchived || !item.archived || item.id === workspace?.id).map(item => ({ value: item.id, label: `${item.title}${item.archived ? ' · Archived' : ''}` }))} onChange={openWorkspace} /></label>
-      <Button disabled={busy || disabled} onClick={() => openWorkspace()}>New workspace</Button>
-      <Checkbox checked={showArchived} onChange={event => setShowArchived(event.target.checked)}>Show archived</Checkbox>
-      <Button disabled={busy || disabled} onClick={() => void run('Refreshing workspace list…', async () => { setWorkspaces(await api<AgentWorkspaceSummary[]>(root)); })}>Refresh list</Button>
-      {workspace && <Button disabled={busy || disabled} onClick={archive}>{workspace.archived ? 'Restore workspace' : 'Archive…'}</Button>}
+      <label className="agent-workspace-picker">Conversation<Select aria-label="Open saved workspace" placeholder="Choose a conversation" value={workspace?.id} disabled={busy || disabled} options={workspaces.filter(item => showArchived || !item.archived || item.id === workspace?.id).map(item => ({ value: item.id, label: `${item.title}${item.archived ? " · Archived" : ""}` }))} onChange={openWorkspace} /></label>
+      <Button disabled={busy || disabled} onClick={() => openWorkspace()}>New chat</Button>
+      <details className="agent-workspace-options"><summary>Chat settings</summary>
+        {workspace && <><label>Title<Input aria-label="Workspace title" value={title} disabled={unavailable} onChange={event => setTitle(event.target.value)} /></label><Button disabled={unavailable || !dirty} onClick={() => void run("Saving workspace editors…", async () => { await saveEditors(); })}>Save changes</Button></>}
+        <Checkbox checked={showArchived} onChange={event => setShowArchived(event.target.checked)}>Show archived</Checkbox>
+        <Button disabled={busy || disabled} onClick={() => void run("Refreshing workspace list…", async () => { setWorkspaces(await api<AgentWorkspaceSummary[]>(root)); })}>Refresh chats</Button>
+        {workspace && <Button disabled={busy || disabled} onClick={archive}>{workspace.archived ? "Restore chat" : "Archive chat…"}</Button>}
+      </details>
     </div>
-    {workspace && <div className="agent-workspace-title">
-      <label>Workspace title<Input aria-label="Workspace title" value={title} disabled={unavailable} onChange={event => setTitle(event.target.value)} /></label>
-      <Button disabled={unavailable || !dirty} onClick={() => void run('Saving workspace editors…', async () => { await saveEditors(); })}>Save workspace edits</Button>
-      <span className="muted" role="status">{dirty ? 'Unsaved editor changes' : 'Editors saved'}{workspace.archived ? ' · Archived (read-only)' : ''}</span>
-    </div>}
     {workspace && (!pendingReady || pending) && <aside className="agent-pending-turn" aria-label="Pending Send recovery">
       <h3>Pending Send recovery</h3>
       <p>{pending ? `Request ${pending.key} is preserved with its exact message, context selection and upload bytes. A lost response is not a failed model turn.` : 'Checking browser storage before another Send is allowed.'}</p>
@@ -405,21 +418,37 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
       {!pendingReady && <Button disabled={disabled || !!operation} onClick={() => void run('Checking pending storage…', async () => { const turn = await readPendingTurn(workspace.id); setPending(turn); setPendingReady(true); })}>Check pending storage</Button>}
     </aside>}
     {(error || snapshot?.error) && <div className="error-banner" role="alert">{error && <p>{error}</p>}{snapshot?.error && snapshot.error !== error && <p>{snapshot.error}</p>}<p>Available edits, files and conversation are preserved. No failed turn is replayed automatically.</p>{workspace && <Button disabled={busy || disabled} onClick={() => void run('Loading saved workspace…', async () => { if (dirty && !await modal.confirm({ title: 'Replace local editor changes?', content: 'Load the saved workspace without merging your local edits. Copy them first if needed. Tab-local attachments remain.', okText: 'Load saved editors', cancelText: 'Keep edits', okButtonProps: { danger: true } })) { setError(error); return; } load(await api<AgentWorkspaceSnapshot>(path), false); })}>Load saved editors…</Button>}</div>}
-    {!workspace ? <div className="agent-conversation-empty"><h2>Keep the discussion with the work</h2><p>Create a workspace to save a conversation, optional plan revisions and one reviewed ticket. Creating a workspace does not connect OMP or send a message.</p></div> : <div className="agent-workspace-columns">
+    {!workspace ? <div className="agent-conversation-empty"><h2>Keep the discussion with the work</h2><p>Create a workspace to save a conversation, optional plan revisions and one reviewed ticket. Creating a workspace does not connect OMP or send a message.</p></div> : <div className={`agent-workspace-columns agent-workspace-columns-${view.toLowerCase()}`}>
       <section className="agent-ticket-draft" aria-label="Persistent discussion">
-        <header className="agent-draft-heading"><div className="agent-connection-status"><h2>Conversation</h2><Tag aria-live="polite">{operation || (snapshot ? snapshot.status : 'Not connected')}</Tag></div><div className="toolbar agent-session-actions">
-          {connected ? <Button disabled={disabled || !!operation} onClick={() => void run('Disconnecting from OMP…', async () => { await stopSession(); const value = await api<AgentWorkspaceSnapshot>(path); setSnapshot(value.draft); setWorkspace(current => current ? { ...current, messages: value.workspace.messages } : current); setPrepared(undefined); })}>Disconnect</Button> : <Button disabled={unavailable} onClick={connect}>Connect to OMP</Button>}
-          <Button disabled={disabled || !!operation || snapshot?.status !== 'busy'} onClick={() => void run('Cancelling discussion turn…', async () => { setSnapshot(await api<DraftSnapshot>(`${path}/session/cancel`, json({}))); })}>Cancel turn</Button>
-        </div></header>
+        <header className="agent-draft-heading"><div className="agent-connection-status"><h2>Chat</h2><Tag aria-live="polite">{operation || (snapshot ? snapshot.status : "Not connected")}</Tag></div>
+          <div className="agent-session-actions">
+            <Segmented aria-label="Workspace review view" value={view} options={[{ value: "Discussion", label: "Chat" }, { value: "Plan", label: "Plan" }, { value: "Tasks", label: "Tickets" }]} onChange={setView} />
+            {!connected && <Button disabled={unavailable} onClick={connect}>Connect</Button>}
+            {snapshot?.status === "busy" && <Button disabled={disabled || !!operation} onClick={() => void run("Cancelling discussion turn…", async () => { setSnapshot(await api<DraftSnapshot>(`${path}/session/cancel`, json({}))); })}>Stop</Button>}
+          </div>
+        </header>
         <details className="agent-safety-help"><summary>Saved discussion · process &amp; context limits</summary><p>Connect never sends inference or replaces messages. Disconnect and leaving this page stop the owned child; saved discussion remains. No turn is replayed automatically. The process is capability-restricted, not an OS sandbox.</p><p>Only bounded recent text and plan context are supplied to new turns; inspect Model context for truncation. Old images are not replayed. Staged files live only in this tab: reload requires reattaching their bytes. Model settings are saved for drafting only, not ticket execution.</p></details>
         <div className="agent-conversation" role="log" aria-label="Saved drafting conversation" aria-live="polite" aria-relevant="additions text">
-          {messages.length ? messages.map((item, index) => <article key={index} className={`agent-message agent-message-${item.role}`}><header><strong>{item.role === 'user' ? 'You' : 'OMP agent'}</strong>{item.status && <Tag>{item.status}</Tag>}{item.model && <small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small>}</header><pre tabIndex={0}>{item.text || (snapshot?.status === 'busy' ? 'Waiting for agent output…' : '(No text returned)')}</pre>{item.role === 'assistant' && item.text.trim() && <div className="toolbar"><Button size="small" disabled={unavailable} onClick={() => void run('Reviewing ticket proposal…', async () => { await onUseDraft(proposedTicketMarkdown(item.text)); setView('Tasks'); })}>Review as single ticket…</Button><Button size="small" disabled={unavailable} onClick={() => void applyPlanProposal(item.text)}>Review plan changes</Button></div>}</article>) : <div className="agent-conversation-empty"><h3>What would you like to change?</h3><p>Discuss an idea, ask for a proposed plan, or request one ticket directly. A plan is optional.</p><small>Connect when ready. You can write and save your message first.</small></div>}
+          {messages.length ? messages.map((item, index) => <article key={index} className={`agent-message agent-message-${item.role}`}><header><strong>{item.role === 'user' ? 'You' : 'OMP agent'}</strong>{item.status && <Tag>{item.status}</Tag>}{item.model && <small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small>}</header><div className="agent-message-content" tabIndex={0}><Markdown remarkPlugins={[remarkGfm]} skipHtml>{item.text || (snapshot?.status === "busy" ? "Waiting for agent output…" : "(No text returned)")}</Markdown></div>{item.role === 'assistant' && item.text.trim() && <details className="agent-message-actions"><summary>Use response…</summary><div className="toolbar"><Button size="small" disabled={unavailable} onClick={() => void run("Reviewing ticket proposal…", async () => { await onUseDraft(proposedTicketMarkdown(item.text)); setView("Tasks"); })}>As a ticket</Button><Button size="small" disabled={unavailable} onClick={() => void applyPlanProposal(item.text)}>As a plan</Button></div></details>}</article>) : <div className="agent-conversation-empty"><h3>What would you like to change?</h3><p>Discuss an idea, ask for a proposed plan, or request one ticket directly. A plan is optional.</p><small>Connect when ready. You can write and save your message first.</small></div>}
         </div>
-        <div className="agent-composer"><MarkdownEditor label="Message to drafting agent" value={prompt} onChange={setPrompt} repoId={repoId} api={api} disabled={unavailable} onUpload={onUpload} /><div className="agent-composer-controls">
-          <label>Response intent<Select aria-label="Response intent" value={intent} disabled={unavailable || !!pending} options={[{ value: 'discussion', label: 'Discussion' }, { value: 'planning', label: 'Planning' }, { value: 'research', label: 'Research' }, { value: 'ticket_drafting', label: 'Ticket drafting' }]} onChange={value => { setIntent(value); setPrepared(undefined); }} /></label>
-          {snapshot ? <div className="agent-model-controls"><label>Model<Select aria-label="Drafting model" showSearch optionFilterProp="label" disabled={unavailable || !connected || !snapshot.models.length} placeholder="Choose a drafting model" value={snapshot.model ? JSON.stringify([snapshot.model.provider, snapshot.model.id]) : undefined} options={snapshot.models.map(model => ({ value: JSON.stringify([model.provider, model.id]), label: `${model.name} · ${model.provider}${model.images ? ' · images' : ''}` }))} onChange={value => { const [provider, modelId] = JSON.parse(value) as [string, string]; selectModel({ provider, modelId }); }} /></label><label>Thinking<Select aria-label="Drafting thinking level" disabled={unavailable || !connected || !snapshot.thinkingLevels.length} value={snapshot.thinking || undefined} options={snapshot.thinkingLevels.map(level => ({ value: level, label: level }))} onChange={thinking => selectModel({ thinking })} /></label></div> : workspace.model && <p className="muted">Saved: {workspace.model.provider} / {workspace.model.id} · {workspace.thinking}</p>}
-          <Button type="primary" disabled={unavailable || !!pending || !pendingReady || !connected || !snapshot?.model || !prompt.trim() || preparation?.ready === false} onClick={() => send()}>Send message</Button>
-        </div><p className="muted">Send saves current editors first. Your saved message stays in the composer; edit it for the next turn. Nothing sends automatically.</p>
+                <div className="agent-composer">
+          <MarkdownEditor label="Message" value={prompt} onChange={setPrompt} repoId={repoId} api={api} disabled={unavailable} onUpload={onUpload} />
+          <div className="agent-composer-controls">
+            <label className="agent-plan-toggle"><Switch aria-label="Plan mode" checked={intent === "planning"} disabled={unavailable || !!pending} onChange={enabled => { setIntent(enabled ? "planning" : "discussion"); setPrepared(undefined); }} />Plan mode</label>
+            <details className="agent-composer-advanced"><summary>{snapshot?.model ? `${snapshot.model.id} · ${snapshot.thinking || "default"}` : "Model settings"}</summary>
+              {snapshot ? <div className="agent-model-controls"><label>Model<Select aria-label="Drafting model" showSearch optionFilterProp="label" disabled={unavailable || !connected || !snapshot.models.length} placeholder="Choose a drafting model" value={snapshot.model ? JSON.stringify([snapshot.model.provider, snapshot.model.id]) : undefined} options={snapshot.models.map(model => ({ value: JSON.stringify([model.provider, model.id]), label: `${model.name} · ${model.provider}${model.images ? ' · images' : ''}` }))} onChange={value => { const [provider, modelId] = JSON.parse(value) as [string, string]; selectModel({ provider, modelId }); }} /></label><label>Thinking<Select aria-label="Drafting thinking level" disabled={unavailable || !connected || !snapshot.thinkingLevels.length} value={snapshot.thinking || undefined} options={snapshot.thinkingLevels.map(level => ({ value: level, label: level }))} onChange={thinking => selectModel({ thinking })} /></label></div> : workspace.model && <p className="muted">Saved: {workspace.model.provider} / {workspace.model.id} · {workspace.thinking}</p>}
+              <label>Response behavior<Select aria-label="Response intent" value={intent} disabled={unavailable || !!pending} options={[{ value: "discussion", label: "Chat" }, { value: "planning", label: "Planning" }, { value: "research", label: "Research" }, { value: "ticket_drafting", label: "Ticket drafting" }]} onChange={value => { setIntent(value); setPrepared(undefined); }} /></label>
+              {connected && <Button size="small" disabled={disabled || !!operation} onClick={() => void run("Disconnecting from OMP…", async () => { await stopSession(); const value = await api<AgentWorkspaceSnapshot>(path); setSnapshot(value.draft); setWorkspace(current => current ? { ...current, messages: value.workspace.messages } : current); setPrepared(undefined); })}>Disconnect</Button>}
+            </details>
+            <Button type="primary" disabled={unavailable || !!pending || !pendingReady || !connected || !snapshot?.model || !prompt.trim() || preparation?.ready === false} onClick={() => send()}>Send</Button>
+          </div>
+          <p className="agent-composer-hint">Use @file or /skill:name for context. Plan mode only drafts and reviews; it never edits the repository.</p>
+          <details className="agent-research-tools"><summary>Repository research</summary>
+            <p>Retrieve exact repository files read-only when you need source evidence.</p>
+            <label>Paths<Input.TextArea aria-label="Research paths" value={researchPaths} onChange={event => setResearchPaths(event.target.value)} autoSize={{ minRows: 2, maxRows: 6 }} disabled={unavailable || !!pending} /></label>
+            <Button disabled={unavailable || !!pending || !researchPaths.trim()} onClick={research}>Retrieve files</Button>
+            {!!workspace.researchReferences.length && <ul className="agent-research-references">{workspace.researchReferences.map(reference => <li key={reference.id}><details><summary>{reference.title} · {reference.status}</summary><p>{reference.summary}</p><code>{reference.location}</code></details></li>)}</ul>}
+          </details>
         {busy && <p className="agent-turn-status" role="status">{operation || 'Discussion turn in progress. Partial output remains available.'}</p>}
         <details ref={contextInspector} className="agent-context" aria-label="Prepared model context">
           <summary>Model context · {preparation ? preparation.ready ? 'Ready' : 'Blocked' : 'Checks on send'}</summary>
@@ -433,14 +462,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
         </details>
         </div>
       </section>
-      <section className="agent-workspace-review" aria-label="Workspace review"><div className="agent-review-toolbar"><Segmented aria-label="Workspace review view" value={view} options={['Discussion', 'Plan', 'Tasks']} onChange={setView} /></div>
-        <div hidden={view !== 'Discussion'} className="agent-discussion-summary"><h2>Discussion &amp; research</h2><p>Discuss objectives, trade-offs and assumptions without forcing ticket Markdown. Switch response intent in the composer; the same conversation stays available across views.</p><p>A plan is optional. Saving or approving one does not create tickets or authorize implementation. Model suggestions are not confirmed repository findings unless backed by host-retrieved references below.</p>
-          <h3>Read-only repository evidence</h3><p className="muted">Enter exact repository-relative paths, one per line. The host independently checks scope, private-file exclusions and resource limits. The agent may suggest additional paths; retrieval always needs this explicit action. Retrieved text is untrusted data, never permission.</p>
-          <label>Research paths<Input.TextArea aria-label="Research paths" value={researchPaths} onChange={event => setResearchPaths(event.target.value)} autoSize={{ minRows: 3, maxRows: 8 }} disabled={unavailable || !!pending} /></label>
-          <Button disabled={unavailable || !!pending || !researchPaths.trim()} onClick={research}>Retrieve repository evidence</Button>
-          <p className="muted">External research unavailable: no approved provider is configured. Repository research and task generation remain available.</p>
-          <ul className="agent-research-references">{(workspace.researchReferences ?? []).map(reference => <li key={reference.id}><details><summary>{reference.title} · {reference.status === 'verified' ? 'Host-retrieved snapshot' : reference.status}</summary><p>{reference.summary}</p><p><code>{reference.id}</code> · <code>{reference.location}</code></p><p>Retrieved {new Date(reference.retrievedAt).toLocaleString()}. Content identity: <code>{reference.contentHash ?? 'Unavailable'}</code>. This records supplied bytes, not verified model conclusions or current-file freshness.</p></details></li>)}</ul>
-        </div>
+      <section className="agent-workspace-review" aria-label="Workspace review">
         {view === 'Plan' && <p className="agent-plan-status" role="status">Plan: {plan !== (latestPlan?.markdown ?? '') ? 'Unsaved' : latestPlan ? latestPlan.approvedAt ? 'Saved · Approved' : 'Saved' : 'No saved plan'}{workspace.planRevisions.some(revision => revision.approvedAt && revision.markdown !== plan) && !workspace.planRevisions.some(revision => revision.approvedAt && revision.markdown === plan) ? ' · Different from approved plan' : ''}</p>}
         <div hidden={view !== 'Plan'} className="agent-plan-panel"><h2>Plan revisions</h2><p className="muted">Proposed Markdown, reviewed by you. Each save creates an immutable revision only when the plan changes.</p><label>Read revision<Select aria-label="Plan revision history" value={revisionId} placeholder="No saved revisions" options={workspace.planRevisions.map((revision, index) => ({ value: revision.id, label: `Revision ${index + 1} · ${new Date(revision.createdAt).toLocaleString()}${revision.approvedAt ? ' · Approved' : ''}${revision.id === workspace.currentPlanRevisionId ? ' · Current' : ''}` }))} onChange={setRevisionId} /></label>{inspectingHistory && <p className="warning-text">Reading an older immutable revision. Your current plan edits remain preserved; select the current revision to return to editing.</p>}<MarkdownEditor label={inspectingHistory ? 'Historical plan Markdown (read-only)' : 'Proposed plan Markdown'} value={inspectingHistory ? selectedRevision.markdown : plan} onChange={setPlan} repoId={repoId} api={api} disabled={unavailable || inspectingHistory} onUpload={onUpload} /><div className="toolbar"><Button disabled={unavailable || inspectingHistory || plan === (latestPlan?.markdown ?? '')} onClick={() => void run('Saving plan revision…', async () => { await saveEditors(); })}>Save plan revision</Button><Button disabled={unavailable || inspectingHistory || !latestPlan || !!latestPlan.approvedAt || plan !== latestPlan.markdown} onClick={() => void run('Approving exact plan revision…', async () => { if (!latestPlan || !await modal.confirm({ title: 'Approve this exact plan revision?', content: `Approve revision ${latestPlan.revisionHash.slice(0, 12)} as reviewed planning text? This does not authorize implementation or publish a ticket. Editing the plan creates a new, unapproved revision.`, okText: 'Approve this revision', cancelText: 'Keep reviewing' })) return; const value = await api<AgentWorkspaceSnapshot>(path, json({ version: workspace.version, approvePlanRevisionId: latestPlan.id }, 'PATCH')); setWorkspace(value.workspace); remember(value.workspace); })}>Approve exact revision…</Button></div>{latestPlan && <p className="muted">Current revision {latestPlan.revisionHash.slice(0, 12)} · {latestPlan.approvedAt ? 'Approved' : 'Not approved'}{plan !== latestPlan.markdown ? ' · Unsaved changes are not approved' : ''}</p>}</div>
         <div hidden={view !== 'Tasks'} className="agent-single-ticket"><h2>Task proposals</h2>
@@ -458,7 +480,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
             {set.payload.proposals.map(proposal => <details key={proposal.key} className="agent-task-proposal"><summary>{proposal.key} · {proposal.title}</summary><pre>{proposal.description}</pre><h4>Acceptance criteria</h4><ul>{proposal.acceptanceCriteria.map((criterion, index) => <li key={index}>{criterion}</li>)}</ul><h4>Verification</h4><ul>{proposal.verification.map((step, index) => <li key={index}>{step}</li>)}</ul><p>Depends on: {proposal.dependsOn.join(', ') || 'None'}</p><p>Host source references: {proposal.sourceReferences.join(', ') || 'None — treat repository-specific claims as unverified'}</p></details>)}
           </section>)}
           <AgentBatchReview key={workspace.id} workspace={workspace} initialOperations={batchOperations} path={path} api={api} disabled={disabled || !!operation || snapshot?.status === 'busy' || workspace.archived} workspaceDirty={dirty} onWorkspace={setWorkspace} onDirty={setBatchDirty} onBusy={setBatchBusy} saveRef={batchSaveRef} />
-          <details className="agent-legacy-ticket" open><summary>Existing reviewed single-ticket publication</summary><p className="muted">The separate legacy ticket editor remains available for quick-ticket drafting.</p>{children}</details>
+          <details className="agent-legacy-ticket"><summary>Single-ticket editor</summary><p className="muted">The separate legacy ticket editor remains available for quick-ticket drafting.</p>{children}</details>
         </div>
       </section>
     </div>}
