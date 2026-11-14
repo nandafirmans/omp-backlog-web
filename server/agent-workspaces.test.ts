@@ -138,6 +138,32 @@ test('native reconnect restores exact model/thinking, retains discussion and sen
   });
 }, 20000);
 
+
+test('accepted chat clears the persisted composer, while a rejected request keeps its draft', async () => {
+  await fixture(async ({ call, reopen }) => {
+    const initial = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+    const id = initial.workspace.id;
+    const message = 'Plan a small expense tracker';
+    const edited = await (await call(`/${id}`, 'PATCH', { version: initial.workspace.version, prompt: message })).json() as AgentWorkspaceSnapshot;
+    await call(`/${id}/connect`, 'POST', {});
+    await call(`/${id}/session/model`, 'POST', { provider: 'fixture', modelId: 'vision' });
+    expect((await call(`/${id}/session/turn`, 'POST', form(message))).status).toBe(400);
+    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.prompt).toBe(message);
+    const key = crypto.randomUUID();
+    expect((await call(`/${id}/session/turn`, 'POST', form(message), key)).status).toBe(200);
+    const accepted = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+    expect(accepted.workspace.prompt).toBe('');
+    expect(accepted.workspace.version).toBeGreaterThan(edited.workspace.version);
+    expect(accepted.workspace.messages[0]?.text).toBe(message);
+    expect((await call(`/${id}/session/turn`, 'POST', form(message), key)).status).toBe(200);
+    await waitFor(call, id, draft => draft.status !== 'busy');
+    await reopen();
+    const restored = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+    expect(restored.workspace.prompt).toBe('');
+    expect(restored.workspace.messages[0]?.text).toBe(message);
+  });
+}, 20000);
+
 test('streamed partials and provider failures are durable, honest and cannot be archived while busy', async () => {
   await fixture(async ({ call, reopen }) => {
     const opened = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot; const id = opened.workspace.id;
