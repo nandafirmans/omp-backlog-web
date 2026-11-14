@@ -33,6 +33,7 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
   const [selected, setSelected] = useState<string[]>(initialSelected);
   const [baseline, setBaseline] = useState(() => JSON.stringify([initialSetId, initialProposals, initialSelected]));
   const [quickPreviewOpen, setQuickPreviewOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const lastGeneratedSet = useRef(latest?.id ?? '');
   const [operations, setOperations] = useState<BatchOperation[]>(initialOperations);
   const [operationId, setOperationId] = useState(initialOperations.at(-1)?.confirmation ?? '');
@@ -95,6 +96,12 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
         current = saved.batchReview ?? null;
       }
       if (!current) throw new Error('The reviewed tickets could not be saved.');
+      if (!dirty && operation?.state === 'prepared' && !operation.compacted &&
+        operation.reviewId === current.id && operation.reviewVersion === current.version && Date.now() < operation.expires) {
+        // Reopen the same exact reserved preview after Cancel; do not mint a second.
+        setQuickPreviewOpen(true);
+        return;
+      }
       const preview = await api<BatchOperation>(`${path}/batch-preview`, json({
         version, reviewId: current.id, reviewVersion: current.version, acknowledgeStalePlan: acknowledged,
       }));
@@ -224,7 +231,7 @@ export default function AgentBatchReview({ workspace, initialOperations, path, a
         </details>)}
       </div>}
     </Modal>
-    <details className="agent-advanced-review" key={operation?.state === 'blocked' ? 'blocked' : 'normal'} defaultOpen={operation?.state === 'blocked' || operation?.state === 'publishing' || mustCheckStatus}>
+    <details className="agent-advanced-review" open={advancedOpen || operation?.state === 'blocked' || operation?.state === 'publishing' || mustCheckStatus} onToggle={event => setAdvancedOpen(event.currentTarget.open)}>
       <summary>Advanced ticket editing, history &amp; recovery</summary>
     <h3>Review and publish tasks</h3><p className="muted">Choose a proposal set, edit and select tasks, then save the review. Publishing creates unapproved Draft tickets; it does not approve them. Batch publication does not include attachments.</p>
     <div className="toolbar">{workspace.proposalSets.map((set, index) => <Button key={set.id} disabled={disabled || busy} onClick={() => void chooseSet(set.id)}>{set.id === setId ? 'Editing' : 'Review'} set {index + 1}</Button>)}</div>
