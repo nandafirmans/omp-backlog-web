@@ -56,7 +56,7 @@ Opening a ticket keeps the board in place and shows a right-side panel with read
 - `/projects/new`: authenticated local-folder picker.
 - `/projects/:repoId`: project permissions and backlog.
 - `/projects/:repoId/tickets/new`: focused new-ticket panel.
-- `/projects/:repoId/tickets/new/agent`: unified Create with Agent page with persistent discussion, read-only research, revisioned plan, generated task proposals and legacy single-ticket review.
+- `/projects/:repoId/tickets/new/agent`: CLI-inspired chat-first Create with Agent. The conversation is primary; Chat / Plan / Tickets switches reveal review surfaces on demand. Use `@file` or `/skill:name` with Ctrl-Space completion; the Plan mode switch selects read-only planning responses (not native unrestricted OMP plan execution). Model/thinking, repository research, and session management are under expandable settings. An accepted Send clears the durable composer while retaining the exact message and pending-turn recovery. Plan and ticket publication still require explicit review/confirmation.
 - `/projects/:repoId/tickets/:ticketId`: readable ticket panel, editor, and run history.
 - `/runs/:runId`: run details.
 - `/settings`: workspace settings.

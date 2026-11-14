@@ -21,6 +21,8 @@ interface Props {
   disabled?: boolean;
   label?: string;
   onUpload?: UploadAttachments;
+  /** Optional CLI-style chat submission. Plain Enter submits; Shift+Enter inserts a newline. */
+  onSubmit?: () => void;
 }
 interface CompletionResponse {
   items: { label: string; value: string; description?: string }[];
@@ -71,10 +73,10 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.processingInstruction, tags.meta, tags.contentSeparator], color: 'var(--syntax-marker)' },
 ]);
 
-export default function MarkdownEditor({ value, onChange, repoId, api, disabled = false, label = 'Ticket Markdown', onUpload }: Props) {
+export default function MarkdownEditor({ value, onChange, repoId, api, disabled = false, label = 'Ticket Markdown', onUpload, onSubmit }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
-  const latest = useRef({ value, onChange, api, disabled, onUpload });
+  const latest = useRef({ value, onChange, api, disabled, onUpload, onSubmit });
   const compartments = useRef({ vim: new Compartment(), editable: new Compartment(), label: new Compartment() });
   const cancelCompletion = useRef<(() => void) | null>(null);
   const [vimEnabled, setVimEnabled] = useState(storedVimPreference);
@@ -89,7 +91,7 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
   const hintId = `${id}-hint`;
   const statusId = `${id}-status`;
 
-  useEffect(() => { latest.current = { value, onChange, api, disabled, onUpload }; }, [value, onChange, api, disabled, onUpload]);
+  useEffect(() => { latest.current = { value, onChange, api, disabled, onUpload, onSubmit }; }, [value, onChange, api, disabled, onUpload, onSubmit]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -161,6 +163,10 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
                 return getCM(currentView)?.state.vim ? false : closed;
               }
               if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Space') return startCompletion(currentView);
+              if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey
+                && completionStatus(currentView.state) !== 'active' && latest.current.onSubmit) {
+                event.preventDefault(); latest.current.onSubmit(); return true;
+              }
               if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || completionStatus(currentView.state) !== 'active') return false;
               if (event.key === 'ArrowDown') return moveCompletionSelection(true)(currentView);
               if (event.key === 'ArrowUp') return moveCompletionSelection(false)(currentView);
@@ -263,7 +269,7 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
     </div>
     <div ref={host} className="markdown-editor-host" />
     <div className="markdown-editor-footer">
-      <span id={hintId}>Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete{onUpload ? ' · Paste images or files to attach' : ''}{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
+      <span id={hintId}>{onSubmit ? 'Enter send · Shift+Enter newline · ' : ''}Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete{onUpload ? ' · Paste images or files to attach' : ''}{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
       <span id={statusId} role={attachmentError ? 'alert' : 'status'} aria-live="polite" className={completionError || attachmentError ? 'markdown-editor-error' : ''}>{disabled ? '' : attachmentNotice || completionNotice}</span>
     </div>
   </div>;
