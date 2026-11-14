@@ -48,7 +48,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, ticketM
   const [revisionId, setRevisionId] = useState<string>();
   const [planReview, setPlanReview] = useState<PlanReview>();
   const [reviewError, setReviewError] = useState('');
-  const [observedPlanId, setObservedPlanId] = useState<string | null>(null);
+  const [, setObservedPlanId] = useState<string | null>(null);
   const [view, setView] = useState('Discussion');
   const [showArchived, setShowArchived] = useState(false);
   const [excluded, setExcluded] = useState<string[]>([]);
