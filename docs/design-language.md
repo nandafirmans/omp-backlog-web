@@ -16,7 +16,7 @@ The correction preserves the brand, navigation, routes, theme selection, editing
 | Page title | 24px, weight 700, compact line height. Same scale on Home, project, settings, plan and drafting pages. | `--page-title-size`, global `h1` |
 | Section title | 16-18px, strong weight. No separate display type for empty states. | Global `h2` / `h3` |
 | Reading text | IBM Plex Sans; 14-15px for substantive text. | `--font-sans` |
-| Controls and metadata | IBM Plex Mono. Control text is 13px, regular weight (400). Preserve Ant Design's native heights (32px standard) and padding; small/large variants retain native geometry. Route-action links and navigation match. Status badges retain stronger weight. | App ConfigProvider `fontSize: 13`, Button `fontWeight: 400`; shared control CSS and link geometry |
+| Controls and metadata | IBM Plex Mono. Control text is 13px, regular weight (400). Desktop preserves Ant Design's native heights (32px standard). Below 768px, one responsive ConfigProvider `controlHeight: 44` token lets Ant Design size buttons, inputs, selects and segmented controls together. No per-control CSS height/padding overrides. Switch tracks retain their geometry with an expanded hit area. | App ConfigProvider tokens and Button `fontWeight: 400` |
 | Helper text | Generally 13px. Smaller type only for secondary metadata, not primary actions or form labels. | `.muted`, `.path`, component metadata |
 | Shape | Square panels, inputs, buttons and tags. Circles only for meaningful swatches/status marks and existing switches. | ConfigProvider `borderRadius: 0` |
 | Surfaces | Workspace background, elevated framed work area, inset reading/editing area. One-pixel borders define ownership. | `--surface`, `--surface-elevated`, `--surface-inset`, `--line` |
@@ -27,15 +27,15 @@ Self-hosted IBM Plex fonts and existing theme palettes remain authoritative. Do 
 
 ## Composition and components
 
-- **Page header:** one route title, short description and contextual actions. Project and drafting pages use Ant Design `Breadcrumb` above the title: Projects / project / current task. Ancestors are React Router links; the current location is text with `aria-current="page"`. Do not combine a back arrow and slash-separated labels into one link, or place a breadcrumb inline with the heading. Use shared gutters; wrap at narrow widths.
-- **Global header:** brand links to Projects; do not duplicate it with Home/Projects navigation. Keep compact icon-only Settings and Log out controls with accessible names and tooltips; connection status retains its semantic name and state-specific icon. Theme selection belongs in Settings > Appearance, not the navbar. Keep existing routes, including direct `/plan` access; implementation documentation is not primary navigation. Preserve native control sizing and keyboard focus. Header wraps only when needed on narrow screens.
+- **Page location:** the shared navbar owns breadcrumbs for every authenticated route, including projects, manual creation, saved tickets, chat, runs, settings, the implementation plan and unavailable routes. Desktop uses Ant Design Breadcrumb with React Router ancestor links; the current location is text with `aria-current="page"`. Mobile uses the same hierarchy through a named Page ancestors dropdown and an ellipsized, fully accessible current label. Never repeat a breadcrumb inside main content.
+- **Global header:** brand links to Projects; breadcrumbs provide location rather than a second navigation menu. Keep compact icon-only Settings and Log out controls with accessible names and tooltips; connection status retains its semantic name and state-specific icon. Theme selection belongs in Settings > Appearance. Keep existing routes, including direct `/plan` access. Desktop header is 56px; mobile stays on one 61px row with the text brand hidden but its accessible name retained. Ancestor links remain keyboard/touch accessible. Chat omits its redundant visible route heading, retaining a screen-reader h1; other task-specific titles remain.
 - **Work surface:** border plus elevated surface. Toolbars use the same quiet tinted treatment as `.board-toolbar`; they are not floating marketing navigation.
-- **Route actions:** `.home-action`, `.new-ticket-link` and `.agent-ticket-link` share geometry in `src/styles.css`. Keep React Router links for navigation. Primary links match primary buttons; secondary links match bordered buttons.
-- **Local view switches:** existing Ant Design `Segmented`, with explicit accessible labels. Board/List, workspace Discussion/Plan/Tasks, and editor Markdown/Preview remain separate scopes.
+- **Route actions:** use Ant Design Button with `href` and React Router's `useLinkClickHandler`. Ant Design owns the anchor's geometry and icon spacing; router handling preserves client navigation, modifier clicks and unsaved-work guards. Do not reproduce button styling on plain links.
+- **Local view switches:** existing Ant Design `Segmented`, with explicit accessible labels. Board/List and editor Markdown/Preview remain separate scopes. Chat has no plan/task selector or legacy review wizard; conditional read-only historical records and accepted-publication recovery remain below the conversation.
 - **Forms:** labels above inputs, helper text adjacent, errors visible near the affected control. Use installed Ant Design inputs/selects/buttons, not styled native lookalikes.
-- **Control ownership:** Ant Design owns control heights and padding. The selected typography intentionally uses `fontSize: 13` and regular-weight buttons, inputs, selects, view switches and navigation. Do not add per-screen size/weight overrides. Route-action links match without replacing router behavior. Segmented labels inherit their control font rather than global form-label styling; icon labels use flex to avoid baseline inflation. Multiline run/folder rows retain content-driven height because they are lists, not standard action buttons.
-- **Editors:** reuse MarkdownEditor and its existing CodeMirror skin, Vim support, completion and paste behavior. The chat composer is shorter than a document editor, not a second editor design system.
-- **Empty states:** a compact heading, an explanation and a relevant next action. Conversation and board empty states use quiet dashed boundaries; no hero typography or decorative eyebrow sequence.
+- **Control ownership:** Ant Design owns control heights and padding through its tokens. The selected typography intentionally uses `fontSize: 13` and regular-weight buttons, inputs, selects, view switches and navigation. Do not add per-screen size/weight overrides or CSS minimum heights to Ant Design controls. Segmented labels inherit their control font rather than global form-label styling; icon labels use flex to avoid baseline inflation. Multiline run/folder rows retain content-driven height because they are lists, not standard action buttons.
+- **Editors:** reuse MarkdownEditor and its existing CodeMirror skin, Vim support, completion and paste behavior. Add files uses the same asynchronous cursor-mapped insertion as paste. The chat composer keeps one square frame, without the document editor's line-number gutter: attachment action and Vim in the toolbar; model/thinking, context/research and Send share a wrapping action row. Its text scroller caps at 80px so long drafts do not consume the conversation; expanded controls remain scrollable. Keep one keyboard hint, readable original staged filenames and inline errors.
+- **Empty states:** a compact heading, an explanation and a relevant next action. Board empty states use quiet dashed boundaries; chat uses unframed introductory text in the conversation column. No hero typography or decorative eyebrow sequence.
 - **Feedback:** reuse `.notice`, `.error-banner`, `.warning-text`, status tags and existing dialogs. Never hide blocking errors or execution consequences for a cleaner screenshot.
 - **Project header:** execution permission uses 16px Phosphor icons: pause for Paused, shield-check for Approved tickets only, lightning for Automatic. Field and menu share the icon/label; preserve the accessible name and full labels without ellipsis. The menu can be wider than its trigger; mobile gives the selector a full row. No redundant Project settings button. Home breadcrumb switches projects; project title hover text and Home card expose the repository path. Keep non-Git tracking warnings visible below the header.
 
@@ -46,11 +46,11 @@ Final operator-commit UI re-drive, including regular-weight file-selection contr
 | Surface | Preserve |
 | --- | --- |
 | Home | Project-first navigation, reusable route action, familiar folder cards and contextual scheduler controls. |
-| Project board/list | Full-width viewport workspace; scrolling contained in the board; established cards, toolbar and footer. |
+| Project board/list | Full-width viewport workspace; scrolling contained in the board. Quiet solid cards and unframed columns prioritize tickets. Move help uses an Ant Design Button/Popover rather than a handcrafted summary control. Desktop List aligns ID, title, status, next action and Actions; details remain visible below the title, and narrow layouts stack each row. |
 | Manual ticket/detail | Existing drawer, expandable width, Markdown/Preview, attachments, revision and review safeguards. |
-| Agent creation | Existing full-width route, persistent workspace toolbar and title controls. Desktop keeps saved conversation/composer beside Discussion/Plan/Tasks; narrower screens stack them. Discussion includes explicit bounded research and source provenance. Tasks supports saved batch review and exact publication preview, with legacy single-ticket publication visibly separate. Main page owns scrolling, with bounded conversation/document readers. |
-| Settings | Shared route title and one bordered form, divided into OMP & model, Run limits, and Folder access. Desktop uses a narrow section-introduction column and full-width fields; model/thinking and time/tokens use matching equal columns, top-aligned independently of helper-text wrapping. Below 768px, stack sections, controls and full-width action buttons. Keep native component sizing, visible safety explanations and discovery errors; put detailed discovery/default/pause guidance in keyboard-accessible disclosures. |
-| Plan | Shared route title and framed reading document. Document headings retain their own reading hierarchy. |
+| Agent creation | Full-width workspace with a 220px conversation sidebar, centered 820px message column and 860px bottom composer. Below 768px, Conversations opens the same history controls in an Ant Design drawer. Current history is marked by border/background and weight, not color alone; selection retains existing save/attachment guards and closes the drawer only after success. User messages align right; assistant responses remain unframed prose. Rename/archive/refresh, introductory guidance and process limitations live in Chat settings. Model/thinking, attachments, Vim, context/research, recovery, historical records and response-level ticket creation remain available. Saved-ticket execution holds stay visible. |
+| Settings | One Settings heading and section links. Appearance comes first and applies immediately in this browser; Execution settings retains its separate explicit-save form, discovery feedback, unsaved-work protection and safety explanations. Execution sections stack below 768px. |
+| Plan | One page heading, generated section links, and a framed reading document constrained to 82ch. Local Markdown references explicitly open source in a new tab, preserving the workspace. |
 | Run evidence | Existing framed panel, metadata, readable transcript, explicit evidence provenance and contextual controls. |
 | Operator commit | Handoff-panel action opens an Ant Design modal with framed file selections, bounded diff readers and labeled message. Keep warnings, explicit final confirmation, back/cancel and unsaved-draft close protection. Body scrolls on short/mobile viewports; no new typography or palette. |
 | Login | Deliberate public-entry composition; its larger introductory headline is not a workspace page-title pattern. |
@@ -77,9 +77,17 @@ At narrow widths, headers and controls wrap into a single-column flow. Keep hori
 
 
 Board/list workspaces retain a 680px minimum height at every width. The surrounding main container scrolls vertically when headers, warnings and the board no longer fit, rather than compressing the ticket viewport. Project headers do not shrink. Tall windows still fill available space without unnecessary page scrolling; horizontal overflow stays inside the board. Empty-stage placeholders fill the column body instead of sitting below a blank flex list; drag grips retain visible square 36px targets.
-Page and bounded-conversation scrollbars use the board's `scrollbar-width: thin` and `scrollbar-color: var(--line) transparent`. Drafting content grows naturally inside the main page scroller. Keep bounded conversation/editor scrolling and board column/surface scrolling where content needs its own viewport; do not add a second full-page scrollbar inside the drafting panel.
+Page, bounded-conversation and portal-modal body/code scrollbars use the board's `scrollbar-width: thin` and `scrollbar-color: var(--line) transparent`. Apply this explicitly to new portal scroll containers, which do not inherit selectors scoped beneath the workspace. Verify with overflowing content in Light and dark themes, not only short content. Drafting fills available main space with a flex conversation reader and a bottom composer. The reader scrolls independently; short windows, expanded controls and recovery notices can grow the surrounding main scroller rather than clipping actions. Do not add another full-page scroller inside the drafting panel. Conversation follows only near the bottom and otherwise offers Jump to latest.
 
 Preserve labeled controls, keyboard navigation, focus outlines, unsaved-change confirmation, semantic status text and theme selection. Do not convey state through color alone. Check both a dark theme and Light after changing shared styles; verify enabled action/label contrast against its actual surface. Disabled controls must remain distinguishable but are not evidence that an enabled state was tested.
+
+### Chat-first response creation
+
+Removed the required connection, intent, plan, proposal-review and publication-confirmation UI from the main journey. Kept Ant Design controls, IBM Plex typography, square surfaces, theme tokens, the manual drawer and historical publication recovery. Attachments use the Markdown editor's Add files button or paste, never a separate chat file-input form; images in chat become authenticated retained-reference links instead of automatic image fetches. Model/skill controls reflect runtime discovery.
+
+Actual isolated backend/browser verification exercised conversation → response action → single/multiple saved links, reload/backend restart, retained attachment downloads, explicit ticket editing/approval and separate manual creation. Tokyo Night and Light were visually inspected at 1440×1000 and 390×844, including the composer and inline hold feedback, without horizontal document overflow. A separate live-provider chat/skill/project-read → held-ticket journey passed. Sanitized screenshots and receipt: `/tmp/omp-chat-proof-Juy0BL/proof`; preserve before temporary-directory cleanup. These checks are not exhaustive accessibility certification or native-device IME testing.
+
+Composer consolidation: actual React components with synthetic APIs were exercised at 1440px and 390px in Tokyo Night and Light. File selection inserted cursor-bound Markdown while newer text was preserved; a synthetic file-paste event inserted another reference; unsupported files showed an inline error without losing text. Send and Enter cleared text on fixture host acceptance; Shift+Enter retained a newline. Thinking selection and nested context/research disclosures remained operable; no horizontal document overflow was observed. Twelve focused tests, strict TypeScript and ESLint passed. This is UI-fixture verification, not a new live-provider or native clipboard/device certification.
 
 ## Verification for this correction
 
@@ -218,3 +226,137 @@ Tokyo Night and Light were visually inspected at 1440px and 390px. The conversat
 Actual Chromium drove the disposable backend and restricted protocol child through pending-Send reload/recovery, host research, generated proposal review, regeneration/failure retention, plan staleness and preserved human ticket edits. Tokyo Night and Light at 1440px and 390px were visually inspected; document widths matched viewports, controls wrapped without shrinking and the conversation stayed in the same workspace. Expanded proposal sections expose scope, criteria, verification and dependencies without a graph library. A concurrent authenticated-editor update was preserved behind a visible save conflict.
 
 Proof: `/tmp/omp-u2-browser-8TTAyw/proof/result.json`, with three retained screenshots after owned-process cleanup. This is deterministic browser/protocol evidence, not paid-provider quality, exhaustive accessibility or U3 publication verification. See current workflow for check commands, the initial default-port launch incident and remaining limits.
+
+## Route-review corrections (November 2026)
+
+Direction remains the compact developer workspace: ENERGY 1 / RHYTHM 1 / MOTION 1. Solid primary accents preserve label contrast; square surfaces and IBM Plex retain the existing identity. Board framing is quieter to favor ticket content, and List uses aligned rows for scanning rather than repeated card footers. Mobile controls gain touch area without a larger text scale. Appearance is separate from execution saving because it persists immediately in the browser. Plan prose is constrained for reading, with generated links to real sections.
+
+Chat initialization now distinguishes failure from loading and retries the selected conversation. A failed Send context check retains per-reference diagnostics after a workspace-version save. Concurrent Preview file paste explicitly reports rejected files and preserves accompanying text; existing stale-edit recovery retains the first upload's references. Folder browse failures disable registration until a successful navigation/retry. Evidence counts include notes; unresolved-check navigation expands and focuses the first non-passing receipt after the tab becomes visible.
+
+Browser proof covered real authenticated Settings, project Board/List, manual drawer and Plan surfaces, plus isolated synthetic folder failure/retry, selected-chat load retry, blocked context after a version-changing save, unresolved receipt navigation and concurrent Preview paste. No ticket approvals, execution-permission changes, commits or provider turns were performed. These are scoped UI checks, not full feature-map, live-provider or native mobile clipboard certification.
+
+### Equal outer control heights
+
+Standard action buttons, inputs, selects and segmented switches share 32px desktop and 44px mobile outer height. Chat actions and ticket Actions no longer request the small button variant. Mobile segmented padding is removed so its 44px labels do not create a 48px container. Search clear buttons retain a 44px positioned hit area without increasing the input's layout height. Switch tracks, drag grips and multiline content retain their intentional geometry.
+
+Changed TSX passed ESLint. Actual App components with synthetic APIs measured search, Board/List, ticket Actions, Disconnect and Check context at exactly 32px (1440px viewport) and 44px (390px), in Light and Tokyo Night. Search clear, Board/List switching, Actions open/Escape and blocked-context feedback worked; no horizontal document overflow or page exceptions were observed. Screenshots were inspected. This is scoped presentation/fixture proof, not live-provider or exhaustive accessibility verification.
+
+### Native Ant Design action controls
+
+Replaced handcrafted New ticket, Create with agent and Add project link styling with Ant Design anchor buttons and React Router click handlers. Move help now uses the existing Ant Design Popover/Button pattern. Deleted the competing mobile input/button/segmented sizing rules; a single responsive ConfigProvider token supplies the 44px mobile control size while desktop uses the native default. Native disclosures, drag targets and compact switch hit areas retain their accessibility sizing.
+
+Changed TSX passed ESLint. Actual App/synthetic-API browser proof measured all nine project-header/board-toolbar controls at 32px on 1568px desktop and 44px on 390px mobile in Light and Tokyo Night. Move help opened and closed with Escape, New ticket opened its drawer and returned keyboard focus on Escape, and Create with agent navigated to the composer. No page exceptions were observed; screenshots were inspected. No provider turns or real project mutations were performed.
+
+
+### Conversation layout revamp
+
+Direction: ENERGY 1 / RHYTHM 1 / MOTION 1. The familiar chat composition is explicitly requested; OMP retains IBM Plex, square Ant Design controls and semantic theme colors. A constrained message column improves reading; right-aligned user surfaces distinguish authors without decorative stripes. The bottom composer stays aligned to the conversation, while a settings modal keeps history management and process limitations out of the reading flow. No new assets, dependencies, backend behavior or execution authority.
+
+Changed TSX passed ESLint. Actual App/browser checks with synthetic APIs visually inspected Tokyo Night and Light at 1568px, 820px and 390px, without horizontal document/main overflow or recorded page exceptions. Toolbar buttons/selects measured native 32px desktop and token-owned 44px mobile. Exercised settings open/Escape/focus return, title save, refresh, archive cancel, model-settings disclosure, thinking selection, repository retrieval, context checks/reference-only selection, staged attachment insertion, blocked Send retaining text, attachment-switch cancellation, response-ticket result/hold links, New chat empty state and scroll-up/Jump to latest. This is scoped frontend-fixture proof, not live-provider, native-device keyboard/IME, backend publication, exhaustive accessibility, test-suite or build verification.
+
+### Shared navbar and conversation space
+
+Moved all route breadcrumbs into App's navbar and removed local project/chat trails. Chat's visible route heading and introductory paragraph no longer consume reading space; the semantic heading and guidance remain available to assistive technology and Chat settings respectively. History/New chat/settings moved into the requested sidebar and mobile drawer. Smaller composer text viewport and a shared action row reserve more room for messages without removing editing tools.
+
+Changed App, Workspace and AgentTicketDraft code passed ESLint. Synthetic-API browser checks covered navbar location on all eleven route cases (Projects, Add project, project, New ticket, saved ticket, run, Settings, Plan, unknown path, unavailable project and chat), desktop ancestor navigation and the mobile ancestor menu with keyboard activation. No local breadcrumbs or horizontal document overflow remained. Final chat checks at 1568px, 820px and 390px in Tokyo Night and Light measured 56px/61px navbar heights and approximately 514px desktop / 374px phone message readers at 865px viewport height with a long draft. Screenshots were visually inspected; no page exceptions were recorded.
+
+Sidebar checks covered switching both directions, selected-row state, drawer Escape/focus return, New chat, canceled unsaved switching retaining text, confirmed save-and-switch closing the drawer, relocated settings guidance, model disclosure and blocked context diagnostics. Zero provider turns, real ticket mutations or execution-authority changes. Route fixtures verify the shared shell, not every page's unchanged backend behavior. No build, test suite, full typecheck, exhaustive accessibility or native-device verification was run.
+
+### Floating chat chrome
+
+Conversation names remain in history and Chat settings, not a repeated content heading. A concise runtime label floats 12px from the reader's top-left; Stop appears beside it while responding. Latest is a separate native button floating bottom-center only when following is paused. Both are anchored to the conversation viewport, not the page; reader padding keeps the first/last content reachable. Showing Latest does not reduce reader height. Full operation/error/recovery feedback remains available.
+
+Changed TSX passed ESLint. Actual App with synthetic APIs was inspected at 1568px and 390px in Tokyo Night and Light: top/left and bottom offsets measured 12px, no title or horizontal overflow, and unchanged reader height when Latest appeared. Keyboard activation returned to the bottom and hid Latest; Stop settled fixture busy to idle. Ready, Responding, Failed and Disconnected labels were exercised. No page exceptions, provider turns or real ticket changes; browser released. No build, test suite, full typecheck or native-device verification.
+
+### Ticket-generation modal
+
+Create tickets opens an Ant Design modal immediately. The modal shows host-reported generation/saving status, explicit errors, clarification questions, existing guarded recovery actions and saved-ticket links with the execution-hold explanation. No percentage or invented intermediate stages. Chat retains one compact ticket-status button per response to reopen the modal; Escape or Back to chat dismisses it without cancelling work. A collapsed source response identifies the input without duplicating the conversation by default.
+
+Direction remains ENERGY 1 / RHYTHM 1 / MOTION 1. Existing theme tokens, square surfaces, typography and native responsive Ant Design control sizes keep the modal aligned with chat and composer. A bounded, scrollable modal body preserves access to long errors/results on mobile. No new assets, dependencies, backend workflow or execution authority.
+
+Synthetic-API browser proof covered generating, saving, interrupted errors, retry, completed held-ticket links, source disclosure, close/reopen and keyboard activation at 1568px and 390px in Light and Tokyo Night, without horizontal page/modal-body overflow. Additional fixture checks exercised failed status refresh, clarification and inspect-before-resume publication recovery. Screenshots were inspected; no page exceptions were recorded. No live provider calls, real tickets or publication mutations were performed. This is scoped frontend evidence, not backend/provider verification.
+
+Ticket modal sizing: 1040px desktop width and a viewport-relative body limit (`100dvh - 180px`) provide more reading room; native responsive margins and body scrolling remain. Synthetic browser checks with the source expanded measured 1040px on desktop and 374px at a 390px viewport in both themes, with the complete modal inside the viewport and no horizontal overflow. Source expansion and Escape worked; changed TSX passed ESLint.
+
+### Generation model recovery and portal scrolling
+
+Interrupted ticket generation without a publication exposes Change generation model. Model discovery uses the existing restricted metadata-only service; no model or thinking fallback is selected implicitly. The operator chooses both fields before Retry with selected model. Image requirements disable incompatible choices and remain backend-enforced. The persisted operation records its generation selection separately from immutable accepted-turn/source evidence and chat settings. Existing publication ownership, inspection, no-duplicate and creation-hold gates remain unchanged.
+
+The modal body and source code blocks now explicitly use the same thin, theme-colored scrollbar as chat; portal rendering must not bypass shared conventions. A stable body gutter prevents layout jumps. Mobile model/thinking fields wrap onto full-width rows while retaining native 44px controls; desktop controls remain 32px. Disclosures retain 44px mobile hit areas and visible keyboard focus. Direction remains ENERGY 1 / RHYTHM 1 / MOTION 1; no new assets or dependencies.
+
+Eight focused backend/protocol tests passed across workspace, response-operation and drafting suites, including unavailable-model replacement with unchanged source hash/chat/prompt, persisted selection after reopen, image/thinking rejection, held publication and no duplicate completed retry. Changed-code ESLint passed. Actual App/synthetic-API browser checks exercised explicit model/thinking choice, blocked text-only selection with images, text selection without images, discovery failure/reload, exact retry payload, close/reopen, retained unsent text and wheel-scrolling long source content. Tokyo Night/Light at 1568px and 390px showed no horizontal overflow; computed modal scrollbar width/color matched chat. Final fields measured 32px desktop and 44px mobile, with both mobile fields 316px wide.
+
+The existing localhost:4310 server became unreachable during final inspection. Final screenshots/field geometry used an owned frontend-only Vite preview with synthetic APIs on 127.0.0.1:4311; no project backend was restarted. No live-provider generation, real ticket publication, build, full typecheck, native-device or exhaustive accessibility verification was performed.
+
+### Inline clarification and shared model picker
+
+Reading this as: ticket-drafting workspace for developers, existing square IBM Plex/Ant Design language, ENERGY 1 / RHYTHM 1 / MOTION 1.
+
+Clarification places the same composer inside Ticket creation instead of requiring a return to chat before answering. There is one unsent draft and one mounted editor. Send reply pins the original response and questions into the submitted message; durable acceptance returns to chat, preserving newer typing. Creating tickets from the follow-up remains explicit. Closing/reopening preserves the unsent draft. Uncertain Send exposes the existing exact-request recovery rather than automatically retrying.
+
+`ModelPicker` owns searchable, labeled model/thinking selects and responsive geometry. Discovery, supported levels, image restrictions, defaults, inheritance and saving remain caller-owned. Chat, clarification, generation recovery, Settings and ticket next-attempt overrides use it. Shared presentation never makes their settings global state.
+
+Decision reasons: existing semantic accent identifies the primary action; IBM Plex retains workspace identity; square editor framing identifies shared draft ownership; adjacent questions and reply reduce navigation; wrapping grid tracks preserve readable model names; standard tokens preserve 32px desktop/44px mobile controls. No assets, cards, decorative icons or motion were added.
+
+Verification: changed-code ESLint and seven focused pending-request/composer-state tests passed. Actual React surfaces used isolated synthetic APIs, not a backend/provider. Clarification was inspected at 1568px, 820px, 390px and 320px in Tokyo Night and Light; Settings and ticket pickers at 1568px and 390px. No document/modal horizontal overflow, one mounted editor, named fields and 13px controls were observed. Mobile selects/actions measured 44px. Modal helper, editor, picker and enabled primary-action text contrast measured at least 5.13:1 in the inspected pairings. No page runtime errors were recorded.
+
+Recorded interactions: Create tickets opened questions; source disclosure opened with Enter; Check ticket creation refreshed status; model Beta and thinking high sent their exact scoped requests; Send reply included source/questions/answers, closed on acceptance and cleared only the submitted draft; a new completed response exposed Create tickets and saved held-ticket links; Escape/back/reopen preserved unsent text. A context error retained text without sending. Uncertain Send exposed recovery; exact retry, including after reload, retained key/body and cleared on acceptance. Typing during a held response survived acceptance. Generation retry sent the selected model/thinking. Settings discovery enabled model/thinking edits and Load saved settings restored defaults. Ticket selection reset thinking and returning to Workspace default restored inheritance. Mobile modal scrolling reached Send reply and both picker fields.
+
+Private scoped proof: `/tmp/omp-inline-clarification-fixture/proof/result.json`, `desktop-dark.png` and `mobile-light.png`. Browser and owned frontend stopped; throwaway fixture scripts removed. Preserve proof before temporary-directory cleanup.
+
+#### Scoped antislop delivery gate
+
+Applies to changed controls and clarification journey, not whole-product certification. Unchanged backend validation/publication, live-provider behavior, native-device keyboard/clipboard and exhaustive accessibility remain unverified. No build or full-project typecheck ran.
+
+- R-02 PASS: new UI copy uses periods/commas, no em dash.
+- R-03 PASS: inspected 320/390/820/1568px modal layouts without overflow; mobile controls measured 44px.
+- R-17 PASS: no product statistics added.
+- R-18 PASS: no testimonials added.
+- R-23 PASS: no assets or navigation structure created.
+- R-24 PASS: existing real ticket/project destinations retained.
+- R-25 PASS: inspected changed text pairings exceeded 4.5:1, minimum measured 5.13:1.
+- R-26 PASS: model/thinking requests, reply, explicit follow-up creation and recovery actions observed.
+- R-27 PASS: existing loading/error feedback retained; blocked context, pending recovery and empty reply observed.
+- R-28 PASS: no FAQ added.
+- R-32 PASS: native controls, Enter disclosure, Tab/select keys and Escape modal dismissal exercised.
+- R-33 PASS: changes live directly in TSX/CSS, no rewrite script.
+- R-34 PASS: Tokyo Night and Light inspected across affected surfaces.
+- R-35 PASS: actual React UI ran; changed-control interaction evidence recorded above.
+- R-36 PASS: no security, billing, customer or performance claims introduced.
+- R-37 PASS: repository direction and explicit Design Read preceded implementation.
+- R-38 PASS: product copy describes implemented behavior; verification data is explicitly synthetic.
+- R-39 PASS: picker uses unique label/input associations and native Ant Design controls; existing pointer, disabled and focus rules retained; no motion introduced.
+- R-40 PASS: no media, third-party scripts, late visual assets or performance figures introduced.
+- R-01 PASS: existing semantic accent identifies Send reply, no gradient/glow added.
+- R-04 PASS: existing attachment glyph retained for file action; no new icons.
+- R-06 PASS: existing IBM Plex typography preserves developer-workspace identity.
+- R-07 PASS: no background pattern added.
+- R-08 PASS: no decorative arrows added.
+- R-09 PASS: existing ticket operation labels retain actual states, no badges added.
+- R-10 PASS: no glass effects added.
+- R-12 PASS: existing modal elevation retained to distinguish its focused task.
+- R-13 PASS: no glow added.
+- R-14 PASS: no feature cards added.
+- R-19 PASS: no new animation; native theme motion remains disabled.
+- R-22 PASS: no illustrations added.
+- Dials PASS: ENERGY 1 / RHYTHM 1 / MOTION 1 explicit.
+- Dial consistency PASS: compact predictable fields, no decorative motion.
+- Focal point PASS: questions/reply own the active modal task; Send reply is its primary action.
+- Whitespace PASS: existing grid gaps separate questions, explanation and composer.
+- Accent PASS: existing primary accent identifies the submission action.
+- Identity PASS: square framed editor, IBM Plex and existing semantic palettes retained.
+- Design Read PASS: declared above and before implementation.
+- C-1 PASS: major visual decisions have explicit reasons above.
+- C-2 PASS: changed selects and reply/recovery actions exercised.
+- C-3 PASS: modal contains source, operation state, questions and reply, no template sections.
+- C-4 PASS: inspected empty/loading/error/pending states, keyboard controls and responsive themes.
+- C-5 PASS: no fabricated product claims added.
+- R-05 PASS: layout follows the actual clarification task, not a landing-page template.
+- R-11 PASS: existing square Ant Design geometry retained.
+- R-15 PASS: Send reply and existing explicit ticket/recovery labels name their actions.
+- R-16 PASS: new copy uses no marketing buzzwords.
+- R-20 PASS: existing workspace typography, framing and response-bound ticket workflow retained.
+- R-21 PASS: existing appearance selection unchanged; both themes inspected.
+- R-29 PASS: existing semantic theme palette retained, no new colors.
+- R-30 PASS: no other product's visual identity introduced.
+- R-31 PASS: reasons for color, layout, typography, spacing and framing recorded above.
