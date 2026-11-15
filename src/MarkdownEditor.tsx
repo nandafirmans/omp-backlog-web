@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { Button, Switch } from 'antd';
-import { Paperclip } from '@phosphor-icons/react';
+import { Button, Popover, Switch, Tooltip } from 'antd';
+import { Paperclip, SlidersHorizontalIcon } from '@phosphor-icons/react';
 import { Annotation, Compartment, EditorState, Prec, Transaction } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -86,6 +86,7 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
   const cancelCompletion = useRef<(() => void) | null>(null);
   const [vimEnabled, setVimEnabled] = useState(storedVimPreference);
   const [mode, setMode] = useState('NORMAL');
+  const [optionsOpen, setOptionsOpen] = useState(false);
   const [completionNotice, setCompletionNotice] = useState('');
   const [completionError, setCompletionError] = useState(false);
   const [attachmentNotice, setAttachmentNotice] = useState('');
@@ -281,25 +282,34 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
     editor.current?.dispatch({ effects: compartments.current.label.reconfigure(EditorView.contentAttributes.of({ id: contentId, role: 'textbox', 'aria-labelledby': labelId, 'aria-label': label, 'aria-multiline': 'true', 'aria-readonly': String(disabled), 'aria-describedby': `${hintId} ${statusId}`, tabindex: '0' })) });
   }, [label, disabled, repoId, contentId, labelId, hintId, statusId]);
 
+  const hint = onSubmit ? 'Enter send · Shift+Enter newline · @file · /skill:name · Paste files' : `Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete${onUpload ? ' · Paste images or files to attach' : ''}`;
+  const keymapControls = <>
+    <span className="markdown-editor-mode" aria-live="polite">{disabled ? 'READ ONLY' : vimEnabled ? mode : 'PLAIN'}</span>
+    <Switch size="small" checked={vimEnabled} onChange={setVimEnabled} aria-label="Enable Vim keymap" aria-controls={contentId} checkedChildren="VIM" unCheckedChildren="VIM" />
+  </>;
+
   return <div className={`markdown-editor${disabled ? ' markdown-editor-readonly' : ''}`}>
+    {onSubmit && <div ref={host} className="markdown-editor-host" />}
     <div className="markdown-editor-toolbar">
-      <span id={labelId}>{label}</span>
-      <div className="markdown-editor-keymap">
+      <span id={labelId} className={onSubmit ? 'visually-hidden' : undefined}>{label}</span>
+      <div className="markdown-editor-keymap" onKeyDown={event => { if (event.key === 'Escape') { setOptionsOpen(false); event.currentTarget.querySelector<HTMLButtonElement>('[aria-label="Editor options"]')?.focus(); } }}>
         {onUpload && <><input ref={fileInput} type="file" aria-label="Choose attachments" hidden multiple disabled={disabled} onChange={event => {
           const files = Array.from(event.currentTarget.files ?? []);
           event.currentTarget.value = '';
           attachFiles.current?.(files);
           editor.current?.focus();
-        }} /><Button type="text" icon={<Paperclip size={16} />} disabled={disabled} onClick={() => fileInput.current?.click()}>Add files</Button></>}
-        <span className="markdown-editor-mode" aria-live="polite">{disabled ? 'READ ONLY' : vimEnabled ? mode : 'PLAIN'}</span>
-        <Switch size="small" checked={vimEnabled} onChange={setVimEnabled} aria-label="Enable Vim keymap" aria-controls={contentId} checkedChildren="VIM" unCheckedChildren="VIM" />
+        }} /><Tooltip title="Add files"><Button type="text" aria-label="Add files" icon={<Paperclip size={16} aria-hidden="true" />} disabled={disabled} onClick={() => fileInput.current?.click()}>{onSubmit ? null : 'Add files'}</Button></Tooltip></>}
+        {onSubmit ? <Popover trigger="click" placement="top" title="Editor options" open={optionsOpen} onOpenChange={setOptionsOpen} content={<div className="markdown-editor-options"><div className="markdown-editor-keymap">{keymapControls}</div><p>{hint}{vimEnabled ? ' · i insert / Esc normal' : ''}</p></div>}>
+          <Button type="text" aria-label="Editor options" title="Editor options" aria-expanded={optionsOpen} icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />} />
+        </Popover> : keymapControls}
       </div>
+      {onSubmit && children && <div className="markdown-editor-controls">{children}</div>}
     </div>
-    <div ref={host} className="markdown-editor-host" />
-    <div className="markdown-editor-footer">
-      <span id={hintId}>{onSubmit ? 'Enter send · Shift+Enter newline · @file · /skill:name · Paste files' : `Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete${onUpload ? ' · Paste images or files to attach' : ''}`}{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
+    {!onSubmit && <div ref={host} className="markdown-editor-host" />}
+    <div className={`markdown-editor-footer${onSubmit && !(disabled ? '' : attachmentNotice || completionNotice) ? ' visually-hidden' : ''}`}>
+      <span id={hintId} className={onSubmit ? 'visually-hidden' : undefined}>{hint}{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
       <span id={statusId} role={attachmentError ? 'alert' : 'status'} aria-live="polite" className={completionError || attachmentError ? 'markdown-editor-error' : ''}>{disabled ? '' : attachmentNotice || completionNotice}</span>
     </div>
-    {children && <div className="markdown-editor-controls">{children}</div>}
+    {!onSubmit && children && <div className="markdown-editor-controls">{children}</div>}
   </div>;
 }
