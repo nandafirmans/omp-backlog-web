@@ -74,7 +74,7 @@ function planNavigation() {
     if (!headings.length) return;
     const contents: RootContent = {
       type: 'blockquote',
-      data: { hName: 'nav', hProperties: { className: 'plan-contents', 'aria-label': 'On this page' } },
+      data: { hName: 'nav', hProperties: { className: ['plan-contents'], 'aria-label': 'On this page' } },
       children: [
         { type: 'paragraph', children: [{ type: 'strong', children: [{ type: 'text', value: 'On this page' }] }] },
         { type: 'list', ordered: false, spread: false, children: headings.map(({ title, id }) => ({
