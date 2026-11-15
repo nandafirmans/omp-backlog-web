@@ -1,8 +1,8 @@
 export function parseRemoteOrigin(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const url = new URL(value);
-  if (url.protocol !== 'https:' || url.port || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('OMP_BACKLOG_ORIGIN must be an HTTPS origin without a port, credentials, path, query, or fragment');
+  if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('OMP_BACKLOG_ORIGIN must be an HTTPS origin without credentials, path, query, or fragment');
   }
   return url.origin;
 }
