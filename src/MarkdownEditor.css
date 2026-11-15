@@ -30,7 +30,7 @@
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
 }
-.markdown-editor-keymap { display: flex; align-items: center; gap: 10px; }
+.markdown-editor-keymap { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0; }
 .markdown-editor-mode { color: var(--accent); font-size: 13px; letter-spacing: .04em; white-space: nowrap; }
 .markdown-editor .ant-switch { font-family: inherit; }
 .markdown-editor-host .cm-editor { min-height: 320px; font-size: 14px; font-weight: 400; }
@@ -47,6 +47,7 @@
 .markdown-editor-footer [role="status"]:empty { display: none; }
 .markdown-editor-error { color: var(--danger); }
 .markdown-editor-readonly .markdown-editor-mode { color: var(--muted); }
+.markdown-editor-controls { display: grid; gap: 8px; padding: 8px 12px 12px; border-top: 1px solid var(--line); background: var(--surface); min-width: 0; }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .markdown-editor {

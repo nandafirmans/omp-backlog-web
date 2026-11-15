@@ -1,5 +1,6 @@
-import { useEffect, useId, useRef, useState } from 'react';
-import { Switch } from 'antd';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { Button, Switch } from 'antd';
+import { Paperclip } from '@phosphor-icons/react';
 import { Annotation, Compartment, EditorState, Prec, Transaction } from '@codemirror/state';
 import { drawSelection, EditorView, highlightActiveLine, highlightSpecialChars, keymap, lineNumbers } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
@@ -23,6 +24,8 @@ interface Props {
   onUpload?: UploadAttachments;
   /** Optional CLI-style chat submission. Plain Enter submits; Shift+Enter inserts a newline. */
   onSubmit?: () => void;
+  commands?: { name: string; description?: string }[];
+  children?: ReactNode;
 }
 interface CompletionResponse {
   items: { label: string; value: string; description?: string }[];
@@ -73,10 +76,12 @@ const markdownHighlightStyle = HighlightStyle.define([
   { tag: [tags.processingInstruction, tags.meta, tags.contentSeparator], color: 'var(--syntax-marker)' },
 ]);
 
-export default function MarkdownEditor({ value, onChange, repoId, api, disabled = false, label = 'Ticket Markdown', onUpload, onSubmit }: Props) {
+export default function MarkdownEditor({ value, onChange, repoId, api, disabled = false, label = 'Ticket Markdown', onUpload, onSubmit, commands, children }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
-  const latest = useRef({ value, onChange, api, disabled, onUpload, onSubmit });
+  const fileInput = useRef<HTMLInputElement>(null);
+  const attachFiles = useRef<((files: File[], text?: string) => void) | null>(null);
+  const latest = useRef({ value, onChange, api, disabled, onUpload, onSubmit, commands });
   const compartments = useRef({ vim: new Compartment(), editable: new Compartment(), label: new Compartment() });
   const cancelCompletion = useRef<(() => void) | null>(null);
   const [vimEnabled, setVimEnabled] = useState(storedVimPreference);
@@ -91,7 +96,14 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
   const hintId = `${id}-hint`;
   const statusId = `${id}-status`;
 
-  useEffect(() => { latest.current = { value, onChange, api, disabled, onUpload, onSubmit }; }, [value, onChange, api, disabled, onUpload, onSubmit]);
+  useEffect(() => { latest.current = { value, onChange, api, disabled, onUpload, onSubmit, commands }; }, [value, onChange, api, disabled, onUpload, onSubmit, commands]);
+
+  useEffect(() => {
+    const view = editor.current;
+    if (!commands?.length || !view?.hasFocus || view.composing) return;
+    const line = view.state.doc.lineAt(view.state.selection.main.head);
+    if (/(?:^|\s)\/[A-Za-z0-9:._/-]*$/.test(line.text.slice(0, view.state.selection.main.head - line.from))) startCompletion(view);
+  }, [commands]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -107,6 +119,13 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
     const canComplete = (view: EditorView) => !view.state.readOnly && (!getCM(view)?.state.vim || !!getCM(view)?.state.vim?.insertMode);
     const source = async (context: CompletionContext): Promise<CompletionResult | null> => {
       const line = context.state.doc.lineAt(context.pos);
+      const slash = latest.current.commands && /(?:^|\s)\/([A-Za-z0-9:._/-]*)$/.exec(line.text.slice(0, context.pos - line.from));
+      if (slash && context.state.selection.main.empty && context.view && canComplete(context.view)) {
+        cancel();
+        const matches = latest.current.commands!.filter(item => `${item.name} ${item.description ?? ''}`.toLowerCase().includes(slash[1].toLowerCase()));
+        notice(matches.length ? `${matches.length} commands · ↑↓ select · Enter / Tab insert · Esc dismiss` : 'No supported commands match.');
+        return { from: context.pos - slash[1].length - 1, to: context.pos + (line.text.slice(context.pos - line.from).match(/^[A-Za-z0-9:._/-]*/)?.[0].length ?? 0), filter: false, options: matches.map(item => ({ label: `/${item.name}`, detail: item.description, apply: `/${item.name} `, type: 'function' })) };
+      }
       const token = mentionAt(line.text, context.pos - line.from);
       if (!token || !context.state.selection.main.empty || !context.view || !canComplete(context.view)) { notice(''); return null; }
       cancel();
@@ -141,6 +160,32 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
         if (request === controller) request = null;
       }
     };
+    attachFiles.current = (files, text = '') => {
+      const upload = latest.current.onUpload;
+      const currentView = editor.current;
+      if (!upload || !currentView || !files.length || latest.current.disabled) return;
+      const position = { position: currentView.state.selection.main.head };
+      if (text) {
+        currentView.dispatch({ changes: { from: position.position, insert: text }, userEvent: 'input.paste' });
+        position.position += text.length;
+      }
+      pastePositions.add(position);
+      setAttachmentNotice('Preparing attachments…'); setAttachmentError(false);
+      void upload(files).then(references => {
+        if (disposed) return;
+        const insert = `\n${references.map(reference => reference.markdown).join('\n')}\n`;
+        const selection = currentView.state.selection.main;
+        const moveCursor = selection.empty && selection.head === position.position;
+        currentView.dispatch({
+          changes: { from: position.position, insert },
+          selection: moveCursor ? { anchor: position.position + insert.length } : undefined,
+          userEvent: 'input.paste',
+        });
+        setAttachmentNotice(latest.current.onSubmit ? 'Attachments ready to send.' : 'Attachment references inserted. Save the Markdown explicitly.');
+      }).catch(cause => {
+        if (!disposed) { setAttachmentNotice(cause instanceof Error ? cause.message : String(cause)); setAttachmentError(true); }
+      }).finally(() => pastePositions.delete(position));
+    };
     const view = new EditorView({
       parent: host.current,
       state: EditorState.create({
@@ -155,7 +200,7 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
           // DOM-handler precedence is required: Vim handles keys before ordinary CM keymaps.
           Prec.highest(EditorView.domEventHandlers({
             keydown(event, currentView) {
-              if (event.isComposing || !canComplete(currentView)) return false;
+              if (event.isComposing || currentView.composing || !canComplete(currentView)) return false;
               if (event.key === 'Escape') {
                 const closed = closeCompletion(currentView);
                 cancel(); notice('');
@@ -175,34 +220,11 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
               if (event.key === 'Enter' || event.key === 'Tab') return acceptCompletion(currentView);
               return false;
             },
-            paste(event, currentView) {
-              const upload = latest.current.onUpload;
+            paste(event) {
               const files = Array.from(event.clipboardData?.files ?? []);
-              if (!upload || !files.length || latest.current.disabled) return false;
+              if (!latest.current.onUpload || !files.length || latest.current.disabled) return false;
               event.preventDefault();
-              // Insert rather than removing selected user text; map the paste point through later edits.
-              const position = { position: currentView.state.selection.main.head };
-              const text = event.clipboardData?.getData('text/plain') ?? '';
-              if (text) {
-                currentView.dispatch({ changes: { from: position.position, insert: text }, userEvent: 'input.paste' });
-                position.position += text.length;
-              }
-              pastePositions.add(position);
-              setAttachmentNotice('Preparing pasted attachments…'); setAttachmentError(false);
-              void upload(files).then(references => {
-                if (disposed) return;
-                const insert = `\n${references.map(reference => reference.markdown).join('\n')}\n`;
-                const selection = currentView.state.selection.main;
-                const moveCursor = selection.empty && selection.head === position.position;
-                currentView.dispatch({
-                  changes: { from: position.position, insert },
-                  selection: moveCursor ? { anchor: position.position + insert.length } : undefined,
-                  userEvent: 'input.paste',
-                });
-                setAttachmentNotice('Attachment references inserted. Save the Markdown explicitly.');
-              }).catch(cause => {
-                if (!disposed) { setAttachmentNotice(cause instanceof Error ? cause.message : String(cause)); setAttachmentError(true); }
-              }).finally(() => pastePositions.delete(position));
+              attachFiles.current?.(files, event.clipboardData?.getData('text/plain') ?? '');
               return true;
             },
             blur() { cancel(); notice(''); return false; },
@@ -219,7 +241,7 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
       }),
     });
     editor.current = view;
-    return () => { disposed = true; cancel(); cancelCompletion.current = null; editor.current = null; view.destroy(); };
+    return () => { disposed = true; cancel(); cancelCompletion.current = null; attachFiles.current = null; editor.current = null; view.destroy(); };
   }, [repoId]);
 
   useEffect(() => {
@@ -263,14 +285,21 @@ export default function MarkdownEditor({ value, onChange, repoId, api, disabled 
     <div className="markdown-editor-toolbar">
       <span id={labelId}>{label}</span>
       <div className="markdown-editor-keymap">
+        {onUpload && <><input ref={fileInput} type="file" aria-label="Choose attachments" hidden multiple disabled={disabled} onChange={event => {
+          const files = Array.from(event.currentTarget.files ?? []);
+          event.currentTarget.value = '';
+          attachFiles.current?.(files);
+          editor.current?.focus();
+        }} /><Button type="text" icon={<Paperclip size={16} />} disabled={disabled} onClick={() => fileInput.current?.click()}>Add files</Button></>}
         <span className="markdown-editor-mode" aria-live="polite">{disabled ? 'READ ONLY' : vimEnabled ? mode : 'PLAIN'}</span>
         <Switch size="small" checked={vimEnabled} onChange={setVimEnabled} aria-label="Enable Vim keymap" aria-controls={contentId} checkedChildren="VIM" unCheckedChildren="VIM" />
       </div>
     </div>
     <div ref={host} className="markdown-editor-host" />
     <div className="markdown-editor-footer">
-      <span id={hintId}>{onSubmit ? 'Enter send · Shift+Enter newline · ' : ''}Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete{onUpload ? ' · Paste images or files to attach' : ''}{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
+      <span id={hintId}>{onSubmit ? 'Enter send · Shift+Enter newline · @file · /skill:name · Paste files' : `Markdown · /skill:name · @file or @"path with spaces" · Ctrl-Space to complete${onUpload ? ' · Paste images or files to attach' : ''}`}{vimEnabled ? ' · i insert / Esc normal' : ''}</span>
       <span id={statusId} role={attachmentError ? 'alert' : 'status'} aria-live="polite" className={completionError || attachmentError ? 'markdown-editor-error' : ''}>{disabled ? '' : attachmentNotice || completionNotice}</span>
     </div>
+    {children && <div className="markdown-editor-controls">{children}</div>}
   </div>;
 }

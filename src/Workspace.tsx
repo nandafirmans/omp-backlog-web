@@ -1,10 +1,9 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Breadcrumb, Button, Checkbox, Drawer, Input, InputNumber, Modal, Segmented, Select, Tabs, Tag } from 'antd';
+import { Button, Checkbox, Drawer, Input, InputNumber, Modal, Segmented, Select, Tabs, Tag } from 'antd';
 import { ArrowsInIcon, ArrowsOutIcon, FolderIcon, LightningIcon, PauseIcon, PlusIcon, ShieldCheckIcon } from '@phosphor-icons/react';
-import { Link, useBlocker, useLocation, useNavigate, useParams } from 'react-router';
+import { Link, useBlocker, useLinkClickHandler, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
-import type { AssistedConfirmation } from '../server/drafting-contracts';
 import { attachmentReference } from './attachments';
 import type { AttachmentReference, StagedAttachment } from './attachments';
 import MarkdownEditor from './MarkdownEditor';
@@ -17,6 +16,7 @@ import WorkspaceCommit from './WorkspaceCommit';
 import RunTranscript from './RunTranscript';
 import BlockedRecovery from './BlockedRecovery';
 import TicketExecution from './TicketExecution';
+import ModelPicker from './ModelPicker';
 import RunUsage from './RunUsage';
 import CompletionPolicy from './CompletionPolicy';
 import LifecycleProgress from './LifecycleProgress';
@@ -45,6 +45,10 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const { repoId, ticketId, runId } = useParams();
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const newTicketPath = `/projects/${encode(repoId ?? '')}/tickets/new`;
+  const openNewTicket = useLinkClickHandler<HTMLElement>(newTicketPath);
+  const openAgentTicket = useLinkClickHandler<HTMLElement>(`${newTicketPath}/agent`);
+  const openProjectPicker = useLinkClickHandler<HTMLElement>('/projects/new');
   const home = pathname === '/';
   const settingsView = pathname === '/settings';
   const picking = pathname === '/projects/new';
@@ -97,7 +101,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
     {claimedRuns.map(run => <section key={run.id} className="active-run" aria-label={`Claimed run ${run.ticketId} in ${snapshot.repos.find(value => value.id === run.repoId)?.name ?? run.repoId}`}><div><Status value={run.status} /><strong>{snapshot.repos.find(value => value.id === run.repoId)?.name} / {run.ticketId}</strong>{run.dialog && <Tag className="attention">Answer needed</Tag>}</div><div className="toolbar"><Button onClick={() => setRunId(run.id)}>Open run</Button><RunControls run={run} api={api} execute={execute} busy={busy} /></div>{run.dialog && runId !== run.id && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}</section>)}
     <p className="operation-status" role="status" aria-live="polite">{pending ? 'Working...' : notice}</p>
     {home || picking ? <section className="home-view" aria-labelledby="home-heading">
-      <div className="section-heading"><div><h1 id="home-heading">Projects</h1><p className="muted">Choose a project to manage tickets and review runs.</p></div><Link className="home-action" to="/projects/new">Add project +</Link></div>
+      <div className="section-heading"><div><h1 id="home-heading">Projects</h1><p className="muted">Choose a project to manage tickets and review runs.</p></div><Button type="primary" href="/projects/new" onClick={openProjectPicker}>Add project +</Button></div>
       {home && scheduler}
       {snapshot.repos.length ? <ul className="project-grid" aria-label="Projects">
         {snapshot.repos.map(project => {
@@ -119,12 +123,12 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
     </section> : settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : repo ? <>
       {assisting ? <TicketEditor key={`agent-${repo.id}`} assisted repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : <>
       <header className="project-header">
-        <div className="project-title"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Projects</Link> }, { title: <span aria-current="page">{repo.name}</span> }]} /><h1 title={repo.path}>{repo.name}</h1></div>
+        <div className="project-title"><h1 title={repo.path}>{repo.name}</h1></div>
         <div className="project-controls">
           <div className="execution-control" title="Execution permission"><Select aria-label="Execution permission" popupMatchSelectWidth={280} disabled={busy} value={repo.mode} onChange={value => void changeMode(value)} options={modeOptions} /></div>
           <Button className="completion-policy-trigger" disabled={busy || !!ticketId || creating} onClick={() => setCompletionOpen(true)}>Completion: {repo.completion?.mode === 'autonomous' ? 'Autonomous' : 'Human review'}</Button>
-          <Link className="new-ticket-link" ref={newTicketLink} onClick={event => { returnFocus.current = event.currentTarget; }} to={`/projects/${encode(repo.id)}/tickets/new`}><PlusIcon size={16} aria-hidden="true" />New ticket</Link>
-          <Link className="agent-ticket-link" to={`/projects/${encode(repo.id)}/tickets/new/agent`}>Create with agent</Link>
+          <Button type="primary" className="new-ticket-link" ref={element => { newTicketLink.current = element instanceof HTMLAnchorElement ? element : null; }} href={newTicketPath} icon={<PlusIcon size={16} aria-hidden="true" />} onClick={event => { if (event.currentTarget instanceof HTMLAnchorElement) returnFocus.current = event.currentTarget; openNewTicket(event); }}>New ticket</Button>
+          <Button href={`${newTicketPath}/agent`} onClick={openAgentTicket}>Create with agent</Button>
         </div>
       </header>
       <p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. Current runs continue.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and global capacity still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'} {claimedRuns.length}/{snapshot.settings.maxConcurrentTickets} global slots occupied. One run per project.</p>
@@ -182,17 +186,10 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   const [uploadError, setUploadError] = useState('');
   const [stagedCount, setStagedCount] = useState(0);
   const [draftFiles, setDraftFiles] = useState<{ name: string; file: File }[]>([]);
-  const [agentReady, setAgentReady] = useState(!assisted);
-  const [assistedUsed, setAssistedUsed] = useState(assisted);
   const [agentDirty, setAgentDirty] = useState(false);
   const [recoveryDirty, setRecoveryDirty] = useState(false);
   const [executionDirty, setExecutionDirty] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
-  const [publishing, setPublishing] = useState(false);
-  const [confirmationMode, setConfirmationMode] = useState<Mode>();
-  const assistedAttempt = useRef<{ markdown: string; files: { name: string; file: File }[]; confirmation: string } | null>(null);
-  const publicationLock = useRef(false);
-  const saveWorkspaceBeforePublication = useRef<(() => Promise<void>) | null>(null);
   const [attachmentUrls, setAttachmentUrls] = useState<Record<string, string>>({});
   const [publications, setPublications] = useState<TicketPublication[]>([]);
   const [publicationError, setPublicationError] = useState('');
@@ -208,8 +205,8 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
   const dirty = draft !== base.markdown;
   const actionsBusy = busy || uploading || stagedCount > 0 || executionDirty;
   const savedNavigation = useRef(false);
-  const editorBusy = busy || agentBusy || publishing || (assisted && !agentReady);
-  const unsaved = dirty || recoveryDirty || executionDirty || agentDirty || agentBusy || publishing || stagedCount > 0 || (!ticket && hasServerTicket);
+  const editorBusy = busy || agentBusy;
+  const unsaved = (!assisted && dirty) || recoveryDirty || executionDirty || agentDirty || agentBusy || stagedCount > 0 || (!ticket && hasServerTicket);
   const blocker = useBlocker(({ currentLocation, nextLocation }) => unsaved && !savedNavigation.current && currentLocation.pathname !== nextLocation.pathname);
   const working = !!ticket && activeStatuses.includes(ticket.status);
   const path = ticket ? `/api/repos/${encode(ticket.repoId)}/tickets/${encode(ticket.id)}` : '';
@@ -329,61 +326,6 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
     event.preventDefault();
     if (!draft || editorBusy || uploading) return;
     const submitted = draft;
-    if (!ticket && assistedUsed) {
-      if (publicationLock.current) return;
-      publicationLock.current = true;
-      setPublishing(true); setConflict('');
-      try {
-        if (assisted) {
-          if (!saveWorkspaceBeforePublication.current) throw new Error('Open a saved agent workspace before publishing.');
-          await saveWorkspaceBeforePublication.current();
-        }
-        const files = staged.current.map(({ name, file }) => ({ name, file }));
-        let attempt = assistedAttempt.current;
-        if (!attempt || attempt.markdown !== submitted || attempt.files.length !== files.length || !attempt.files.every((file, index) => file.name === files[index].name && file.file === files[index].file)) {
-          assistedAttempt.current = null;
-          const data = new FormData();
-          data.set('markdown', submitted);
-          for (const file of files) data.append('files', file.file, file.name);
-          const confirmation = await api<AssistedConfirmation>(`/api/repos/${encode(repo.id)}/assisted-prepare`, { method: 'POST', body: data });
-          setConfirmationMode(confirmation.mode);
-          if (!await modal.confirm({
-            title: confirmation.mode === 'automatic' ? 'Create ticket with Automatic execution enabled?' : 'Create reviewed ticket?',
-            content: confirmation.mode === 'automatic'
-              ? 'Current project mode: Automatic. The complete reviewed Markdown and all staged attachment bytes have been validated. Creating this ticket may immediately start implementation under standing permission. OMP can execute commands with your filesystem permissions; this is not sandboxed. Cancel keeps your draft, conversation and files without creating a ticket.'
-              : `Current project mode: ${modes[confirmation.mode]}. ${confirmation.mode === 'paused' ? 'New starts remain paused.' : 'Exact-revision approval is still required before implementation.'} Create the reviewed Markdown and all staged attachment bytes? Cancel preserves everything in this tab.`,
-            okText: confirmation.mode === 'automatic' ? 'Create ticket · allow Automatic execution' : 'Create reviewed ticket',
-            cancelText: 'Keep reviewing',
-          })) return;
-          attempt = { markdown: submitted, files, confirmation: confirmation.confirmation };
-          assistedAttempt.current = attempt;
-        }
-        const confirmed = attempt;
-        await execute('Ticket created with all reviewed attachments. Repository permission still applies.', async () => {
-          try {
-            const data = new FormData();
-            data.set('markdown', confirmed.markdown);
-            data.set('confirmation', confirmed.confirmation);
-            for (const file of confirmed.files) data.append('files', file.file, file.name);
-            // Keep the same confirmation after a lost response: the server owns exact-once publication.
-            const saved = await api<Ticket>(`/api/repos/${encode(repo.id)}/assisted-create`, { method: 'POST', body: data });
-            for (const file of staged.current) file.uploaded = true;
-            setStagedCount(0); setUploadError('');
-            acceptRevision(saved);
-            setDraft(saved.markdown); setConflict('');
-            savedNavigation.current = true;
-            onCreated(saved.id);
-          } catch (cause) {
-            if (typeof cause === 'object' && cause !== null && 'status' in cause && typeof cause.status === 'number' && cause.status >= 400 && cause.status < 500) assistedAttempt.current = null;
-            setConflict(`${message(cause)} Your reviewed Markdown, conversation and staged files are preserved. Retry keeps the same publication confirmation after an uncertain response; a stale payload or mode requires a fresh review. No manual-create fallback is used.`);
-            throw cause;
-          }
-        });
-      } catch (cause) {
-        setConflict(`${message(cause)} Your draft, conversation and staged files are preserved; no ticket was intentionally submitted without confirmation.`);
-      } finally { publicationLock.current = false; setPublishing(false); }
-      return;
-    }
     await execute(ticket ? 'Ticket saved. Revision permissions refreshed.' : 'Ticket created. Repository permission still applies.', async () => {
       try {
         if (!ticket && !serverTicket.current) {
@@ -452,15 +394,15 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
         {uploadError && <div className="error-banner" role="alert"><p>{uploadError}</p>{hasServerTicket && <Button disabled={busy || uploading || stale} onClick={() => void flushUploads().catch(() => undefined)}>Retry uploads</Button>}</div>}
       </div>
       <p className="muted">Every uploaded file needs a Markdown link or image with a descriptive purpose label or title before execution. Explain what screenshots demonstrate, including viewport and acceptable differences. Purpose quality remains part of human review.</p>
-      {!ticket && assistedUsed && <aside className="assisted-publication-note"><p>Agent-assisted creation validates and publishes the reviewed Markdown and all staged files together. {confirmationMode ? `Last reviewed project mode: ${modes[confirmationMode]}. ` : ''}Current mode is rechecked before publication. Automatic mode may start implementation immediately after explicit creation. Cancelling confirmation creates nothing.</p></aside>}
-      <div className="toolbar editor-actions"><Button type="primary" htmlType="submit" className="primary" disabled={editorBusy || uploading || !!ticket?.removed || !draft}>{publishing ? 'Reviewing / creating ticket…' : ticket ? 'Save revision' : hasServerTicket ? 'Finish creating ticket' : 'Create ticket'}</Button><small>Explicit save only. Edits never silently replace an active run's instructions.</small></div>
+      <div className="toolbar editor-actions"><Button type="primary" htmlType="submit" className="primary" disabled={editorBusy || uploading || !!ticket?.removed || !draft}>{ticket ? 'Save revision' : hasServerTicket ? 'Finish creating ticket' : 'Create ticket'}</Button><small>Explicit save only. Edits never silently replace an active run's instructions.</small></div>
     </form>;
   return <div className={assisted ? 'panel editor-panel agent-creation-page' : 'panel editor-panel'}>
     {modalContext}
-    <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Leave page" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Unsaved editor changes and tab-local attachment bytes will be lost. Saved workspace discussion, plans and ticket text remain available. An owned drafting process will be stopped. Reloading requires reattaching staged files.</p></Modal>
-    {assisted ? <header className="agent-page-heading"><Breadcrumb className="page-breadcrumb" aria-label="Page location" items={[{ title: <Link to="/">Projects</Link> }, { title: <Link to={`/projects/${encode(repo.id)}`}>{repo.name}</Link> }, { title: <span aria-current="page">Create with agent</span> }]} /><h1>Create with Agent</h1><p className="muted">Discuss, research, refine an optional plan, and generate task proposals for review. Generation creates no tickets. Existing reviewed single-ticket publication remains separate. Save workspace edits explicitly; publication attachments need reattaching after reload.</p></header> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
+    <Modal title="Leave unsaved changes?" open={blocker.state === 'blocked'} okText="Leave page" cancelText="Keep editing" onOk={() => blocker.state === 'blocked' && blocker.proceed()} onCancel={() => blocker.state === 'blocked' && blocker.reset()}><p>Unsaved editor changes and unsubmitted tab-local attachments will be lost. Saved conversations and accepted ticket-creation operations remain available; leaving does not cancel accepted work.</p></Modal>
+    {assisted ? <h1 className="visually-hidden">Create with Agent</h1> : <div className="section-heading"><div>{ticket && <p className="ticket-reference">{ticket.id} · {ticket.revision.slice(0, 10)}</p>}<h2>{ticket ? ticket.title : 'Describe the change'}</h2></div>{ticket && <Status value={ticket.status} />}</div>}
     {ticket?.removed && <p className="error-banner" role="alert">Ticket file is missing. Restore its file in the repository before taking action.</p>}
     {ticket?.error && <p className="error-banner" role="alert">{ticket.error}</p>}
+    {ticket?.creationHold && <p className="notice" role="status">Created from chat; held from execution, including Automatic mode. Approve this revision to release the hold. Existing project permissions, pauses and dependency gates still apply.</p>}
     {stale && <div className="notice"><div><h3>Requirements changed{working ? ' during execution' : ' outside this editor'}.</h3><p>Your editor has not been overwritten. The current run keeps its immutable revision; changed requirements require new approval.</p></div></div>}
     {(stale || conflict) && <div className="conflict-box" role="alert"><p>{conflict || 'A newer ticket or attachment revision is available. Preserve your draft and reconcile before saving.'}</p><div className="toolbar"><Button onClick={() => { void navigator.clipboard.writeText(draft).catch(() => setConflict('Clipboard unavailable. Select and copy the Markdown from the editor before loading the current version.')); }}>Copy my draft</Button><Button download={`${ticket?.id ?? 'ticket'}-draft.md`} href={`data:text/markdown;charset=utf-8,${encode(draft)}`}>Download draft</Button><Button disabled={busy || uploading} onClick={() => void loadCurrentVersion()}>Load current version</Button></div></div>}
     {ticket && <div className="ticket-facts"><p><span>Dependencies</span>{ticket.dependencies.length ? ticket.dependencies.join(', ') : 'None'}</p><p><span>Approval</span>{ticket.approvedRevision === ticket.revision ? 'Current revision approved' : 'Current revision not approved'}</p><p><span>Acceptance criteria</span>{ticket.criteria.length}</p></div>}
@@ -479,19 +421,13 @@ function TicketEditor({ repo, ticket, tickets = [], settings, api, execute, busy
     {ticket && settings && <TicketExecution ticket={ticket} settings={settings} api={api} execute={execute} disabled={busy || uploading || stagedCount > 0 || dirty || stale || working || ticket.removed || !!ticket.error} onDirtyChange={setExecutionDirty} />}
     {ticket && <div className="requirements-heading"><h3>Requirements</h3><Button disabled={actionsBusy || (editing && unsaved)} onClick={() => setEditing(value => !value)}>{editing ? 'Reading view' : 'Edit Markdown'}</Button></div>}
     {!editing && <article className="ticket-reading" aria-label="Ticket requirements"><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => url.startsWith('attachments/') ? `${attachmentBase}${url.slice('attachments/'.length)}` : defaultUrlTransform(url)} components={{ a: ({ href, children }) => <a href={href} rel="noreferrer">{children}</a> }}>{draft.replace(/^(?:\uFEFF)?---[ \t]*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/, '')}</Markdown></article>}
-    {assisted && <AgentTicketDraft repoId={repo.id} api={api} files={draftFiles} onUpload={uploadFiles} ticketMarkdown={draft} initialTicketMarkdown={template} saveBeforePublicationRef={saveWorkspaceBeforePublication} onDirtyChange={setAgentDirty} onBusyChange={setAgentBusy} onReadyChange={setAgentReady} disabled={busy || publishing || uploading || hasServerTicket} onLoadTicket={(markdown, discardFiles) => {
-      if (discardFiles) {
-        for (const file of staged.current) if (file.objectUrl) URL.revokeObjectURL(file.objectUrl);
-        staged.current = []; setDraftFiles([]); setStagedCount(0); setAttachmentUrls({}); setUploadError('');
-      }
-      setDraft(markdown); setBase({ markdown, revision: '' }); setConflict(''); setPreview(false);
-    }} onTicketSaved={markdown => { setBase({ markdown, revision: '' }); }} onBeforeWorkspaceChange={async () => {
-      if (staged.current.length && !await modal.confirm({ title: 'Discard this workspace’s tab-local attachments?', content: 'Attachment bytes are not stored with the workspace. Switching drops these staged files; you must reattach them before sending or publishing their references later. Saved Markdown and discussion remain.', okText: 'Discard files and continue', cancelText: 'Keep this workspace', okButtonProps: { danger: true } })) return false;
+    {assisted && <AgentTicketDraft repoId={repo.id} api={api} files={draftFiles} onUpload={uploadFiles} onDirtyChange={setAgentDirty} onBusyChange={setAgentBusy} disabled={busy || uploading} onClearFiles={() => {
+      for (const file of staged.current) if (file.objectUrl) URL.revokeObjectURL(file.objectUrl);
+      staged.current = []; setDraftFiles([]); setStagedCount(0); setAttachmentUrls({}); setUploadError('');
+    }} onBeforeWorkspaceChange={async () => {
+      if (staged.current.length && !await modal.confirm({ title: 'Discard unsubmitted attachments?', content: 'Switching drops files staged in this tab. Submitted conversation attachments remain saved.', okText: 'Discard files and continue', cancelText: 'Keep this conversation', okButtonProps: { danger: true } })) return false;
       return true;
-    }} onUseDraft={async markdown => {
-      if (latestDraft.current !== base.markdown && !await modal.confirm({ title: 'Replace unsaved ticket review?', content: 'The assistant proposal replaces the single-ticket Markdown editor. Copy useful edits first. Conversation, plans and staged attachments remain.', okText: 'Replace ticket text', cancelText: 'Keep ticket text', okButtonProps: { danger: true } })) return;
-      setDraft(markdown); setConflict(''); setAssistedUsed(true);
-    }}>{ticketForm}</AgentTicketDraft>}
+    }} />}
     {!assisted && ticketForm}
     {ticket && <>
       <section className="detail-section" aria-labelledby="attachment-heading"><h3 id="attachment-heading">Attachments</h3><p className="muted">Paste files into either editor to attach them. References are not executable instructions. Describe each file's purpose in the Markdown. Use synthetic examples, never credentials.</p>{ticket.attachments.length ? <ul className="attachment-list">{ticket.attachments.map(file => <li key={file.name}><Button type="link" href={`${path}/attachments/${encode(file.name)}`} target="_blank" rel="noreferrer">{file.name}</Button><small>{(file.size / 1024).toFixed(1)} KB</small><Button onClick={() => setAttachment(attachment === file.name ? '' : file.name)}>{attachment === file.name ? 'Close preview' : 'Preview'}</Button></li>)}</ul> : <p className="muted">No attachments.</p>}{attachment && ticket.attachments.some(file => file.name === attachment) && <AttachmentPreview key={`${attachment}-${ticket.revision}`} name={attachment} url={`${path}/attachments/${encode(attachment)}`} api={api} />}</section>
@@ -518,34 +454,37 @@ interface FolderListing { path: string; parent: string | null; directories: stri
 function FolderPicker({ api, execute, busy, onClose, onRegistered }: { api: RequestApi; execute: Execute; busy: boolean; onClose: () => void; onRegistered: (id: string) => void }) {
   const [listing, setListing] = useState<FolderListing>();
   const [error, setError] = useState('');
+  const [browseError, setBrowseError] = useState<{ path: string; cause: string }>();
   const [loading, setLoading] = useState(true);
   const sequence = useRef(0);
   const browse = useCallback(async (path = '') => {
     const next = ++sequence.current;
-    setLoading(true); setError('');
+    setLoading(true); setError(''); setBrowseError(undefined);
     try { const value = await api<FolderListing>(`/api/folders${path ? `?path=${encode(path)}` : ''}`); if (next === sequence.current) setListing(value); }
-    catch (cause) { if (next === sequence.current) setError(message(cause)); }
+    catch (cause) { if (next === sequence.current) setBrowseError({ path, cause: message(cause) }); }
     finally { if (next === sequence.current) setLoading(false); }
   }, [api]);
   useEffect(() => {
-    let active = true;
-    async function loadRoots() {
-      try { const value = await api<FolderListing>('/api/folders'); if (active) setListing(value); }
-      catch (cause) { if (active) setError(message(cause)); }
-      finally { if (active) setLoading(false); }
-    }
-    void loadRoots();
-    return () => { active = false; };
+    let cancelled = false;
+    const initialSequence = sequence.current;
+    void api<FolderListing>('/api/folders').then(value => {
+      if (!cancelled && sequence.current === initialSequence) setListing(value);
+    }).catch(cause => {
+      if (!cancelled && sequence.current === initialSequence) setBrowseError({ path: '', cause: message(cause) });
+    }).finally(() => {
+      if (!cancelled && sequence.current === initialSequence) setLoading(false);
+    });
+    return () => { cancelled = true; };
   }, [api]);
   async function register() {
-    if (!listing?.path) return;
+    if (!listing?.path || loading || browseError || busy) return;
     setError('');
     await execute('Repository registered paused.', async () => {
       try { const repo = await api<Repo>('/api/repos', json('POST', { path: listing.path })); onRegistered(repo.id); }
       catch (cause) { setError(message(cause)); throw cause; }
     });
   }
-  return <Modal open className="folder-dialog" title="Choose a repository" width={720} onCancel={onClose} mask={{ closable: false }} footer={<div className="dialog-actions"><Button onClick={onClose}>Cancel</Button><Button type="primary" className="primary" disabled={busy || loading || !listing?.path} onClick={() => void register()}>Register this directory</Button></div>}><p className="muted">Only permitted roots are browsable. The backend resolves the real execution directory and detects its Git root. New repositories are paused.</p>{error && <p role="alert" className="error-banner">{error}</p>}<p className="path folder-path">{listing?.path || 'Permitted roots'}</p><div className="toolbar"><Button disabled={loading} onClick={() => void browse()}>Permitted roots</Button>{listing?.parent && <Button disabled={loading} onClick={() => void browse(listing.parent ?? '')}>Parent folder ↑</Button>}</div>{loading ? <p role="status">Reading directories...</p> : <ul className="folder-list">{listing?.directories.map(path => <li key={path}><Button onClick={() => void browse(path)}>{path.split('/').filter(Boolean).at(-1) || path}<span aria-hidden="true">→</span></Button></li>)}{listing?.directories.length === 0 && <li className="muted">No child directories.</li>}</ul>}</Modal>;
+  return <Modal open className="folder-dialog" title="Choose a repository" width={720} onCancel={onClose} mask={{ closable: false }} footer={<div className="dialog-actions"><Button onClick={onClose}>Cancel</Button><Button type="primary" className="primary" disabled={busy || loading || !!browseError || !listing?.path} onClick={() => void register()}>Register this directory</Button></div>}><p className="muted">Only permitted roots are browsable. The backend resolves the real execution directory and detects its Git root. New repositories are paused.</p>{error && <p role="alert" className="error-banner">{error}</p>}{browseError && <div role="alert" className="error-banner"><p>Could not read {browseError.path || 'permitted roots'}: {browseError.cause}</p><p>Retry, choose a folder from the previous listing, or return to permitted roots.</p><Button onClick={() => void browse(browseError.path)}>Retry</Button></div>}<p className="path folder-path">{listing?.path || 'Permitted roots'}</p><div className="toolbar"><Button disabled={loading} onClick={() => void browse()}>Permitted roots</Button>{listing?.parent && <Button disabled={loading} onClick={() => void browse(listing.parent ?? '')}>Parent folder ↑</Button>}</div>{loading ? <p role="status">Reading directories...</p> : <ul className="folder-list">{listing?.directories.map(path => <li key={path}><Button onClick={() => void browse(path)}>{path.split('/').filter(Boolean).at(-1) || path}<span aria-hidden="true">→</span></Button></li>)}{listing?.directories.length === 0 && <li className="muted">No child directories.</li>}</ul>}</Modal>;
 }
 
 interface ExecutionModels {
@@ -620,14 +559,14 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
       setBase(saved); setDraft(saved); setRoots(saved.roots.join('\n'));
     });
   }
-  return <section className="settings-view">
+  return <section id="execution-settings" className="settings-view">
     {modalContext}
     {blocker.state === 'blocked' && <div className="notice" role="alert"><p>Leave execution settings and discard unsaved changes?</p><div className="toolbar"><Button onClick={() => blocker.reset()}>Keep editing settings</Button><Button danger onClick={() => blocker.proceed()}>Discard changes &amp; leave</Button></div></div>}
-    <h1>Execution settings</h1>
+    <h2>Execution settings</h2>
     <p className="lead">Defaults for new ticket runs. Existing sessions and your global OMP configuration stay unchanged.</p>
     <form className="panel settings-form" onSubmit={event => void save(event)}>
       <section className="settings-section" aria-labelledby="settings-agent-heading">
-        <div className="settings-section-intro"><h2 id="settings-agent-heading">OMP &amp; model</h2><p>Choose the agent and reasoning settings used across projects.</p></div>
+        <div className="settings-section-intro"><h3 id="settings-agent-heading">OMP &amp; model</h3><p>Choose the agent and reasoning settings used across projects.</p></div>
         <div className="settings-fields">
           <label htmlFor="settings-engineering-mode">Engineering Mode<Select id="settings-engineering-mode" aria-label="Global engineering mode" value={draft.engineeringMode ?? 'pstack'} options={[{ value: 'standard', label: 'Standard OMP' }, { value: 'pstack', label: 'OMP + pstack' }]} disabled={busy} onChange={engineeringMode => { if (engineeringMode === 'standard' || engineeringMode === 'pstack') setDraft(current => ({ ...current, engineeringMode })); }} aria-describedby="settings-engineering-mode-help" /><small id="settings-engineering-mode-help">Standard OMP uses native implementation without requiring pstack. OMP + pstack requires its installed capabilities. New attempts inherit this choice unless overridden; existing runs retain their mode and limits.</small></label>
           <label htmlFor="settings-executable">OMP executable<Input id="settings-executable" value={draft.executable} disabled={busy} onChange={event => {
@@ -636,10 +575,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
             setLoading(false); setError('');
             setDraft(current => ({ ...current, executable }));
           }} required /><small>Command on PATH or absolute path. Refresh models after changing it.</small></label>
-          <div className="settings-model-grid">
-            <label htmlFor="settings-model">Model<Select id="settings-model" aria-label="Execution model" showSearch optionFilterProp="label" value={draft.model} options={modelOptions} loading={loading} disabled={busy} onChange={changeModel} aria-describedby="execution-model-help" /><small id="execution-model-help">Search by name or provider. OMP configured default resolves when a run starts.</small></label>
-            <label htmlFor="settings-thinking">Thinking level<Select id="settings-thinking" aria-label="Execution thinking level" showSearch optionFilterProp="label" value={draft.thinking ?? ''} options={thinkingOptions.map(option => ({ ...option, disabled: !!option.value && !currentDiscovery?.thinkingLevels.includes(option.value) }))} disabled={busy} loading={loading} onChange={thinking => setDraft(current => ({ ...current, thinking }))} aria-describedby="execution-thinking-help" /><small id="execution-thinking-help">Supported levels depend on the model. OMP default uses its configuration.</small></label>
-          </div>
+          <ModelPicker model={draft.model} thinking={draft.thinking ?? ''} modelOptions={modelOptions} thinkingOptions={thinkingOptions.map(option => ({ ...option, disabled: !!option.value && !currentDiscovery?.thinkingLevels.includes(option.value) }))} disabled={busy} loading={loading} modelAriaLabel="Execution model" thinkingLabel="Thinking level" thinkingAriaLabel="Execution thinking level" modelHelp="Search by name or provider. OMP configured default resolves when a run starts." thinkingHelp="Supported levels depend on the model. OMP default uses its configuration." onModelChange={changeModel} onThinkingChange={thinking => setDraft(current => ({ ...current, thinking }))} />
           <div className="settings-discovery">
             <Button htmlType="button" disabled={busy || loading || !draft.executable.trim()} onClick={() => void discover(draft.executable, draft.model, executionChanged)}>{error ? 'Retry model discovery' : 'Refresh models'}</Button>
             <span role="status">{loading ? 'Discovering models and thinking levels…' : currentDiscovery ? `${currentDiscovery.models.length} models available${currentDiscovery.model ? '' : '. Choose a model to discover thinking levels.'}` : 'Refresh models to verify this executable and selection.'}</span>
@@ -651,7 +587,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
         </div>
       </section>
       <section className="settings-section" aria-labelledby="settings-limits-heading">
-        <div className="settings-section-intro"><h2 id="settings-limits-heading">Run limits</h2><p>Global capacity across independent projects and per-run guardrails, not spending limits. Exhaustion requires review and explicit retry.</p></div>
+        <div className="settings-section-intro"><h3 id="settings-limits-heading">Run limits</h3><p>Global capacity across independent projects and per-run guardrails, not spending limits. Exhaustion requires review and explicit retry.</p></div>
         <div className="settings-fields">
           <label htmlFor="settings-concurrency">Concurrent tickets<InputNumber id="settings-concurrency" type="number" min={1} max={4} step={1} required disabled={busy} status={capacityInvalid ? 'error' : undefined} aria-invalid={capacityInvalid} aria-describedby="settings-concurrency-help" value={Number.isNaN(draft.maxConcurrentTickets) ? null : draft.maxConcurrentTickets} onChange={value => setDraft({ ...draft, maxConcurrentTickets: value ?? NaN })} /><small id="settings-concurrency-help" className={capacityInvalid ? 'warning-text' : undefined}>{capacityInvalid ? 'Enter a whole number from 1 to 4.' : '1–4 tickets across independent projects; never more than one per project. Paused and stopping runs retain their slots. Lowering capacity does not stop existing runs.'}</small></label>
           <div className="form-columns">
@@ -668,7 +604,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
         </div>
       </section>
       <section className="settings-section" aria-labelledby="settings-folders-heading">
-        <div className="settings-section-intro"><h2 id="settings-folders-heading">Folder access</h2><p>Limit which project directories the folder picker can browse.</p></div>
+        <div className="settings-section-intro"><h3 id="settings-folders-heading">Folder access</h3><p>Limit which project directories the folder picker can browse.</p></div>
         <div className="settings-fields"><label htmlFor="settings-roots">Permitted folder roots<Input.TextArea id="settings-roots" autoSize={{ minRows: 2, maxRows: 5 }} value={roots} disabled={busy} onChange={event => setRoots(event.target.value)} required spellCheck={false} aria-describedby="settings-roots-help" /><small id="settings-roots-help">One absolute directory per line. Browsing cannot escape these roots, including through symlinks.</small></label><p className="settings-safety">Folder access is not an execution sandbox. Agents retain the backend OS user's permissions.</p></div>
       </section>
       {stale && <p className="error-banner" role="alert">Saved execution settings changed elsewhere. Your selections are preserved. Load saved settings before saving again.</p>}
@@ -690,6 +626,19 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
   useEffect(() => { section.current?.scrollIntoView({ block: 'start', behavior: 'instant' }); section.current?.focus({ preventScroll: true }); }, [run.id]);
   const old = !!ticket && run.revision !== ticket.revision;
   const [view, setView] = useState('transcript');
+  const unresolvedSummary = useRef<HTMLElement>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const firstUnresolved = run.verification?.find(receipt => receipt.outcome !== 'passed');
+  useEffect(() => {
+    if (view !== 'evidence' || !focusRequest || !unresolvedSummary.current) return;
+    const frame = requestAnimationFrame(() => {
+      const summary = unresolvedSummary.current;
+      if (!summary) return;
+      if (summary.parentElement instanceof HTMLDetailsElement) summary.parentElement.open = true;
+      summary.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [view, focusRequest]);
   return <section ref={section} className="panel run-panel" tabIndex={-1} aria-labelledby="run-heading"><div className="section-heading"><div><p className="run-reference">{repo?.name ?? run.repoId} / {run.ticketId}</p><h1 id="run-heading">Run details</h1></div><Button onClick={onClose}>Close run</Button></div><div className="toolbar"><Status value={run.status} /><span className="muted">{new Date(run.started).toLocaleString()}</span><RunControls run={run} api={api} execute={execute} busy={busy} /></div>{run.status === 'stopping' && <p className="notice" role="status">Stopping... Waiting for the agent and its child work to actually stop. Completed actions are not rolled back.</p>}{old && <p className="warning-text">Requirements changed during or after this run. This evidence belongs to an older revision and cannot complete the current ticket.</p>}{run.error && <p role="alert" className="error-banner">{run.error}</p>}{run.blocker && <section className="blocker-box"><h3>Blocked · prerequisite needed</h3><p>{run.blocker}</p></section>}{run.dialog && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}
     {run.reviewFeedback && <section className="detail-section"><h3>Human change request</h3><p>Linked to this run and revision; supplied to the next authorized attempt.</p><pre tabIndex={0}>{run.reviewFeedback.message}</pre></section>}
     {run.blocker && <p><Link to={`/projects/${encode(run.repoId)}/tickets/${encode(run.ticketId)}`}>Review blocker recovery instructions on ticket</Link></p>}
@@ -703,20 +652,20 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
     <div className="run-summary-line">
       <span>{run.verification?.length ?? 0} checks reported · {run.evidence.length} evidence notes</span>
       {run.lifecycle && <><Tag className={run.lifecycle.phase === 'assistance' ? 'attention' : ''}>{lifecycleLabels[run.lifecycle.phase]}</Tag><Button type="link" onClick={() => setView('evidence')}>{run.lifecycle.verification.length} host checks · {run.lifecycle.reviews.length} independent reviews</Button></>}
-      {!!run.verification?.some(receipt => receipt.outcome !== 'passed') && <Button type="link" onClick={() => setView('evidence')}>Review unresolved checks</Button>}
+      {firstUnresolved && <Button type="link" onClick={() => { setView('evidence'); setFocusRequest(value => value + 1); }}>Review unresolved checks</Button>}
       {run.status === 'needs_review' && !lifecycleOwnsCompletion(run) && <span className="warning-text">Awaiting human review · not accepted</span>}
     </div>
     {run.lifecycle?.phase === 'assistance' && <p className="error-banner" role="alert"><strong>Needs assistance.</strong> {run.lifecycle.exception || 'Autonomous completion stopped without establishing Done.'} <Button type="link" onClick={() => setView('evidence')}>Inspect lifecycle &amp; recovery evidence</Button></p>}
     <Tabs className="run-views" activeKey={view} onChange={setView} tabBarGutter={20} aria-label="Run sections" items={[
       { key: 'transcript', label: 'Transcript', forceRender: true, children: <RunTranscript key={run.id} run={run} /> },
-      { key: 'evidence', label: `Evidence (${(run.verification?.length ?? 0) + (run.lifecycle?.verification.length ?? 0) + (run.lifecycle?.reviews.length ?? 0)})`, children: <>
+      { key: 'evidence', label: `Evidence (${run.evidence.length + (run.verification?.length ?? 0) + (run.lifecycle?.verification.length ?? 0) + (run.lifecycle?.reviews.length ?? 0)})`, forceRender: true, children: <>
         <LifecycleProgress run={run} />
         <section className="detail-section"><h3>Acceptance evidence</h3><p className="muted">Agent claims, not independent verification. Review every criterion before accepting this revision.</p>
           {ticket && !old && ticket.criteria.length > 0 && <details className="run-record"><summary>Requirements · {ticket.criteria.length} criteria</summary><ol className="criteria-list">{ticket.criteria.map((criterion, i) => <li key={`${i}-${criterion}`}>{criterion}</li>)}</ol></details>}
           {run.evidence.length ? <div className="run-records">{run.evidence.map((item, i) => <details className="run-record" key={i}><summary><span className="run-record-index">{i + 1}.</span> {item.split('\n').find(line => line.trim()) || 'Recorded evidence'}</summary><pre tabIndex={0}>{item}</pre></details>)}</div> : <p className="muted">No verification evidence recorded.</p>}
         </section>
         <section className="detail-section"><h3>Verification receipts</h3><p className="muted">Outcomes, commands and recipe identities are agent-reported. Host records receipt time and artifact bytes/hash, not whether a check ran or its conclusion is correct.</p>
-          {run.verification?.length ? <div className="run-records">{run.verification.map(receipt => <details className="run-record" key={receipt.id}><summary><Tag className={`run-outcome run-outcome-${receipt.outcome}`}>{receipt.outcome.replaceAll('_', ' ')}</Tag> {receipt.criterion}</summary><div className="run-record-body"><p>{receipt.feature} → {receipt.entryPoint}</p><pre tabIndex={0}>{receipt.method}{'\n'}{receipt.details}</pre><p>Recipe (reported): {receipt.recipe}</p><small>Run {receipt.runId} · revision {receipt.revision} · recorded {new Date(receipt.recorded).toLocaleString()}</small>{receipt.artifact && <p><a href={`/api/runs/${encode(run.id)}/proof/${encode(receipt.artifact.id)}`} download>{receipt.artifact.name}</a> · {receipt.artifact.size} bytes · SHA-256 <code>{receipt.artifact.sha256}</code></p>}</div></details>)}</div> : <p className="muted">No structured receipts. Legacy text evidence is unverified.</p>}
+          {run.verification?.length ? <div className="run-records">{run.verification.map(receipt => <details className="run-record" key={receipt.id}><summary ref={receipt.id === firstUnresolved?.id ? unresolvedSummary : undefined}><Tag className={`run-outcome run-outcome-${receipt.outcome}`}>{receipt.outcome.replaceAll('_', ' ')}</Tag> {receipt.criterion}</summary><div className="run-record-body"><p>{receipt.feature} → {receipt.entryPoint}</p><pre tabIndex={0}>{receipt.method}{'\n'}{receipt.details}</pre><p>Recipe (reported): {receipt.recipe}</p><small>Run {receipt.runId} · revision {receipt.revision} · recorded {new Date(receipt.recorded).toLocaleString()}</small>{receipt.artifact && <p><a href={`/api/runs/${encode(run.id)}/proof/${encode(receipt.artifact.id)}`} download>{receipt.artifact.name}</a> · {receipt.artifact.size} bytes · SHA-256 <code>{receipt.artifact.sha256}</code></p>}</div></details>)}</div> : <p className="muted">No structured receipts. Legacy text evidence is unverified.</p>}
         </section>
       </> },
       { key: 'files', label: 'Files', children: <section className="detail-section"><h3>Changed files</h3><p className="muted">Recorded workspace changes, not an acceptance decision.</p><pre className="transcript" tabIndex={0}>{run.changedFiles || (repo?.git ? 'No changed-file summary recorded.' : 'Git change tracking unavailable for this workspace.')}</pre></section> },

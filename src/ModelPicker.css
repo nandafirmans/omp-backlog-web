@@ -1,0 +1,12 @@
+.model-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: 16px 20px;
+  align-items: start;
+  min-width: 0;
+}
+
+.model-picker > label { font: 400 13px/1.7 var(--font-mono); }
+.model-picker > label small { font-weight: 400; }
+.model-picker .ant-select { width: 100%; min-width: 0; }
+.form-columns > .model-picker { grid-column: 1 / -1; }
