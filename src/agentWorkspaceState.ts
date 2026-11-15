@@ -2,7 +2,7 @@ import type { AgentWorkspace } from '../server/agent-workspace-contracts';
 
 
 export function acceptedComposerText(current: string, submitted: string, accepted: boolean): string {
-  return accepted && current.replace(/\r\n/g, '\n') === submitted.replace(/\r\n/g, '\n') ? '' : current;
+  return accepted && current.replace(/\r\n?/g, '\n') === submitted.replace(/\r\n?/g, '\n') ? '' : current;
 }
 
 

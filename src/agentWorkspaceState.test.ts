@@ -55,5 +55,7 @@ test('only an accepted exact submitted draft clears the composer', () => {
   expect(acceptedComposerText('submitted', 'submitted', false)).toBe('submitted');
   expect(acceptedComposerText('newer typing', 'submitted', true)).toBe('newer typing');
   expect(acceptedComposerText('first line\nsecond line', 'first line\r\nsecond line', true)).toBe('');
+  expect(acceptedComposerText('first line\nsecond line', 'first line\rsecond line', true)).toBe('');
+  expect(acceptedComposerText('first line\rsecond line', 'first line\r\nsecond line', true)).toBe('');
   expect(acceptedComposerText('newer\nmessage', 'first line\r\nsecond line', true)).toBe('newer\nmessage');
 });

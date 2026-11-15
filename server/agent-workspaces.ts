@@ -199,7 +199,7 @@ async function connect(store: Store, repo: Repo, id: string): Promise<AgentWorks
           // composer so reconnect/reload starts with a blank draft, just like OMP CLI.
           // Never clear a newer human edit or the synthetic task-extraction prompt.
           const submitted = draft.messages[acceptedTurn.userMessageIndex]?.text;
-          if (turn.intent !== 'task_extraction' && submitted?.trim() && current.prompt.replace(/\r\n/g, '\n') === submitted.replace(/\r\n/g, '\n')) {
+          if (turn.intent !== 'task_extraction' && submitted?.trim() && current.prompt.replace(/\r\n?/g, '\n') === submitted.replace(/\r\n?/g, '\n')) {
             current.prompt = '';
             current.version++;
           }

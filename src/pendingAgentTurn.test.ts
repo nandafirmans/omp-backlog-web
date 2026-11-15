@@ -38,10 +38,14 @@ test('clarification recovery retains the reply separately from its pinned questi
   body.set('intent', 'discussion');
   const turn = pendingAgentTurn('workspace', body);
   turn.composerText = reply;
+  turn.replyResponseIndex = 3;
   const recovered = structuredClone(turn);
   expect(pendingTurnBody(recovered).get('prompt')).toBe(submitted);
   expect(pendingTurnBody(recovered).has('composerText')).toBe(false);
+  expect(recovered.replyResponseIndex).toBe(3);
+  expect(pendingTurnBody(recovered).has('replyResponseIndex')).toBe(false);
   expect(acceptedComposerText(reply, recovered.composerText!, true)).toBe('');
   expect(acceptedComposerText('Newer answer', recovered.composerText!, true)).toBe('Newer answer');
   expect(acceptedComposerText(reply, recovered.composerText!, false)).toBe(reply);
 });
+

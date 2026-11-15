@@ -326,11 +326,12 @@ test('accepted chat clears the persisted composer, while a rejected request keep
     const initial = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
     const id = initial.workspace.id;
     const message = 'Plan a small expense tracker\nKeep exports read-only';
-    const edited = await (await call(`/${id}`, 'PATCH', { version: initial.workspace.version, prompt: message })).json() as AgentWorkspaceSnapshot;
+    const savedMessage = message.replace('\n', '\r');
+    const edited = await (await call(`/${id}`, 'PATCH', { version: initial.workspace.version, prompt: savedMessage })).json() as AgentWorkspaceSnapshot;
     await call(`/${id}/connect`, 'POST', {});
     await call(`/${id}/session/model`, 'POST', { provider: 'fixture', modelId: 'vision' });
     expect((await call(`/${id}/session/turn`, 'POST', form(message))).status).toBe(400);
-    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.prompt).toBe(message);
+    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.prompt).toBe(savedMessage);
     expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.title).toBe('Untitled workspace');
     const key = crypto.randomUUID();
     const response = await call(`/${id}/session/turn`, 'POST', form(message), key);

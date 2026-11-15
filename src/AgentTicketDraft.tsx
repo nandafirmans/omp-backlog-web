@@ -35,6 +35,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const [workspace, setWorkspace] = useState<AgentWorkspace>();
   const [snapshot, setSnapshot] = useState<DraftSnapshot | null>(null);
   const [prompt, setPrompt] = useState('');
+  const [replies, setReplies] = useState<Record<number, string>>({});
   const [title, setTitle] = useState('');
   const savedTitle = useRef('');
   const [showArchived, setShowArchived] = useState(false);
@@ -74,7 +75,11 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const unavailable = disabled || busy || !workspace || workspace.archived;
   const connected = !!snapshot && snapshot.status !== 'stopped';
   const dirty = !!workspace && (title !== workspace.title || prompt !== workspace.prompt);
-  const input = JSON.stringify([prompt, intent, excluded, files.map(file => [file.name, file.file.size, file.file.lastModified]), snapshot?.model, snapshot?.thinking, workspace?.version]);
+  const replyDirty = Object.values(replies).some(text => text.length > 0);
+  const clarification = responseOperations.find(item => item.responseIndex === ticketResponse && item.state === 'clarification');
+  const clarifying = !!clarification;
+  const composerText = clarification ? replies[clarification.responseIndex] ?? '' : prompt;
+  const input = JSON.stringify([composerText, intent, excluded, files.map(file => [file.name, file.file.size, file.file.lastModified]), snapshot?.model, snapshot?.thinking, workspace?.version]);
   const preparation = prepared?.input === input ? prepared.value : undefined;
   const contexts = preparation?.contexts ?? Array.from(new Map<string, Pick<DraftContext, 'key' | 'label' | 'detail'>>([
     ...files.map(file => [`upload:${file.name}`, { key: `upload:${file.name}`, label: file.name, detail: 'Check context to validate these bytes for the effective model.' }] as const),
@@ -82,7 +87,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   ]).values()).map(context => ({ ...context, status: excluded.includes(context.key) ? 'excluded' : 'pending' }));
   const messages = snapshot?.messages ?? workspace?.messages ?? emptyMessages;
 
-  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => { onDirtyChange(dirty || replyDirty); }, [dirty, replyDirty, onDirtyChange]);
   useEffect(() => { onBusyChange(busy); }, [busy, onBusyChange]);
   useEffect(() => {
     const previous = savedTitle.current;
@@ -105,8 +110,13 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     const submitted = turn.entries.find(entry => entry.name === 'prompt')?.value;
     const kind = turn.entries.find(entry => entry.name === 'intent')?.value;
     if (!accepted || kind === 'task_extraction' || typeof submitted !== 'string' || !submitted.trim()) return;
-    setPrompt(current => acceptedComposerText(acceptedComposerText(current, submitted, true), turn.composerText ?? submitted, true));
-    if (turn.composerText !== undefined) { setTicketResponse(undefined); setFollowing(true); }
+    if (turn.replyResponseIndex !== undefined) {
+      const index = turn.replyResponseIndex;
+      setReplies(current => ({ ...current, [index]: acceptedComposerText(current[index] ?? '', turn.composerText ?? submitted, true) }));
+      setTicketResponse(undefined); setFollowing(true);
+    } else {
+      setPrompt(current => acceptedComposerText(current, turn.composerText ?? submitted, true));
+    }
     if (saved) setWorkspace(current => current?.id === saved.id
       ? mergeWorkspaceRuntime(saved.prompt === '' && acceptedComposerText(current.prompt, submitted, true) === '' ? { ...current, prompt: '' } : current, saved)
       : current);
@@ -114,6 +124,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
 
   function load(value: AgentWorkspaceSnapshot, discardFiles = true) {
     setTicketResponse(undefined);
+    setReplies({});
     setGenerationModels(undefined); setGenerationModel(''); setGenerationThinking('');
     localStorage.setItem(selectionKey, value.workspace.id);
     openedWorkspace.current = value.workspace.id;
@@ -121,6 +132,9 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     void readPendingTurn(value.workspace.id).then(turn => {
       if (!alive.current || openedWorkspace.current !== value.workspace.id) return;
       setPending(turn); setPendingReady(true);
+      if (turn?.replyResponseIndex !== undefined && turn.composerText !== undefined) {
+        setReplies({ [turn.replyResponseIndex]: turn.composerText });
+      }
     }).catch(cause => { if (alive.current) setError(failure(cause)); });
     setBatchOperations(value.batchOperations ?? []);
     setResponseOperations(value.responseOperations ?? []);
@@ -222,9 +236,9 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     finally { locked.current = false; if (alive.current) setOperation(''); }
   }
 
-  async function saveEditors(submittedPrompt = prompt) {
+  async function saveEditors() {
     if (!workspace) throw new Error('Open a workspace first.');
-    const value = await api<AgentWorkspaceSnapshot>(path, json({ version: workspace.version, ...(title !== workspace.title ? { title } : {}), prompt: submittedPrompt }, 'PATCH'));
+    const value = await api<AgentWorkspaceSnapshot>(path, json({ version: workspace.version, ...(title !== workspace.title ? { title } : {}), prompt }, 'PATCH'));
     if (!alive.current) return value;
     setWorkspace(value.workspace); remember(value.workspace); setSnapshot(value.draft);
     setEligibleResponseIndices(value.eligibleResponseIndices ?? []);
@@ -234,6 +248,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
 
 
   async function protectSwitch() {
+    if (replyDirty && !await modal.confirm({ title: 'Discard unsent ticket replies?', content: 'Ticket replies are separate from the saved chat draft. Switching conversations discards these unsent replies.', okText: 'Discard replies and continue', cancelText: 'Keep editing', okButtonProps: { danger: true } })) return false;
     if (dirty) {
       if (!await modal.confirm({ title: 'Save conversation before switching?', content: 'Save your title and unsent message before opening another conversation. A conflicting save preserves your edits.', okText: 'Save and continue', cancelText: 'Keep editing' })) return false;
       await saveEditors();
@@ -259,7 +274,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     });
   }
 
-  function contextBody(submittedPrompt = prompt) {
+  function contextBody(submittedPrompt = composerText) {
     const data = new FormData();
     data.set('prompt', submittedPrompt); data.set('excluded', JSON.stringify(excluded));
     data.set('intent', intent);
@@ -295,7 +310,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
       setWorkspace(current => current ? { ...current, model: next.model, thinking: next.thinking } : current);
       const current = await api<AgentWorkspaceSnapshot>(path);
       setWorkspace(previous => previous ? mergeWorkspaceRuntime(previous, current.workspace) : previous);
-      const key = JSON.stringify([prompt, intent, excluded, files.map(file => [file.name, file.file.size, file.file.lastModified]), next.model, next.thinking, current.workspace.version]);
+      const key = JSON.stringify([composerText, intent, excluded, files.map(file => [file.name, file.file.size, file.file.lastModified]), next.model, next.thinking, current.workspace.version]);
       await prepare(key, current.workspace.version);
     });
   }
@@ -335,21 +350,23 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   }
 
   function send(clarification?: ResponseOperation) {
-    if (unavailable || pending || !pendingReady || !prompt.trim()) return;
+    const text = clarification ? replies[clarification.responseIndex] ?? '' : prompt;
+    if (unavailable || pending || !pendingReady || !text.trim()) return;
     const submittedPrompt = clarification
-      ? `Clarification for ticket creation from assistant response ${clarification.responseIndex + 1}:\n\nSource response:\n${messages[clarification.responseIndex].text}\n\nQuestions:\n${(clarification.questions ?? []).map(question => `- ${question}`).join('\n')}\n\nMy answers:\n${prompt}`
-      : prompt;
+      ? `Clarification for ticket creation from assistant response ${clarification.responseIndex + 1}:\n\nSource response:\n${messages[clarification.responseIndex].text}\n\nQuestions:\n${(clarification.questions ?? []).map(question => `- ${question}`).join('\n')}\n\nMy answers:\n${text}`
+      : text;
     void run('Preparing message…', async () => {
       if (!connected) await connect();
-      const saved = await saveEditors(submittedPrompt);
+      const saved = await saveEditors();
       const body = contextBody(submittedPrompt);
       body.set('contextVersion', String(saved.workspace.version));
       const checked = await api<DraftPreparation>(`${path}/session/context`, { method: 'POST', body });
-      const key = JSON.stringify([prompt, intent, excluded, files.map(file => [file.name, file.file.size, file.file.lastModified]), saved.draft?.model, saved.draft?.thinking, saved.workspace.version]);
+      const key = JSON.stringify([text, intent, excluded, files.map(file => [file.name, file.file.size, file.file.lastModified]), saved.draft?.model, saved.draft?.thinking, saved.workspace.version]);
       if (alive.current) setPrepared({ input: key, value: checked });
       if (!checked.ready) throw new Error('Selected context is not ready. Replace unreadable references or explicitly mark them reference-only, then check again.');
       const turn = pendingAgentTurn(workspace!.id, body);
-      if (clarification) turn.composerText = prompt;
+      turn.composerText = text;
+      if (clarification) turn.replyResponseIndex = clarification.responseIndex;
       await storePendingTurn(turn);
       setPending(turn); setPendingUnknown(false);
       setOperation('Starting discussion turn…');
@@ -404,10 +421,8 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     });
   }
 
-  const clarification = responseOperations.find(item => item.responseIndex === ticketResponse && item.state === 'clarification');
-  const clarifying = !!clarification;
   const composer = workspace && <div className="agent-composer" onFocus={() => { if (!connected && !unavailable && !pending) void run('Loading chat capabilities…', async () => { await connect(); }); }}>
-          <MarkdownEditor label={clarifying ? 'Reply' : 'Message'} value={prompt} onChange={setPrompt} repoId={repoId} api={api} commands={snapshot?.commands ?? []} disabled={disabled || workspace.archived} onUpload={onUpload} onSubmit={() => send(clarification)}>
+          <MarkdownEditor label={clarifying ? 'Reply' : 'Message'} value={composerText} onChange={text => clarification ? setReplies(current => ({ ...current, [clarification.responseIndex]: text })) : setPrompt(text)} repoId={repoId} api={api} commands={snapshot?.commands ?? []} disabled={disabled || workspace.archived} onUpload={onUpload} onSubmit={() => send(clarification)}>
           {!!files.length && <p className="agent-composer-hint">Attached · {files.map(file => file.file.name).join(', ')} · Staged until sent</p>}
           <div className="agent-composer-controls">
             <details className="agent-composer-advanced" onToggle={event => { if (event.currentTarget.open && !connected && !unavailable) void run('Loading model settings…', async () => { await connect(); }); }}><summary>{snapshot?.model ? `${snapshot.model.id} · ${snapshot.thinking || "default"}` : "Model settings"}</summary>
@@ -488,7 +503,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
       </div><p className="muted">Retry first checks host state and reuses the original key and bytes. Discard records a host rejection before clearing browser storage, so a delayed request cannot start inference.</p></>}
       {!pendingReady && <Button disabled={disabled || !!operation} onClick={() => void run('Checking pending storage…', async () => { const turn = await readPendingTurn(workspace.id); setPending(turn); setPendingReady(true); })}>Check pending storage</Button>}
     </aside>}
-    {(error || snapshot?.error) && <div className="error-banner" role="alert">{error && <p>{error}</p>}{snapshot?.error && snapshot.error !== error && <p>{snapshot.error}</p>}<p>Available edits, files and conversation are preserved. No failed turn is replayed automatically.</p>{workspace && <Button disabled={busy || disabled} onClick={() => void run('Loading saved workspace…', async () => { if (dirty && !await modal.confirm({ title: 'Replace local editor changes?', content: 'Load the saved workspace without merging your local edits. Copy them first if needed. Tab-local attachments remain.', okText: 'Load saved editors', cancelText: 'Keep edits', okButtonProps: { danger: true } })) { setError(error); return; } load(await api<AgentWorkspaceSnapshot>(path), false); })}>Load saved editors…</Button>}</div>}
+    {(error || snapshot?.error) && <div className="error-banner" role="alert">{error && <p>{error}</p>}{snapshot?.error && snapshot.error !== error && <p>{snapshot.error}</p>}<p>Available edits, files and conversation are preserved. No failed turn is replayed automatically.</p>{workspace && <Button disabled={busy || disabled} onClick={() => void run('Loading saved workspace…', async () => { if ((dirty || replyDirty) && !await modal.confirm({ title: 'Replace local editor changes?', content: 'Load the saved workspace without merging your local edits or unsent ticket replies. Copy them first if needed. Tab-local attachments remain.', okText: 'Load saved editors', cancelText: 'Keep edits', okButtonProps: { danger: true } })) { setError(error); return; } load(await api<AgentWorkspaceSnapshot>(path), false); })}>Load saved editors…</Button>}</div>}
     {!workspace ? <div className="agent-conversation-empty">{operation ? <><h2>Opening chat</h2><p>Your saved conversation will appear here.</p></> : <><h2>Chat could not be loaded</h2><p>Retry loading the selected conversation.</p><Button disabled={disabled} onClick={() => { if (locked.current) return; locked.current = true; setError(''); setOperation('Loading workspaces…'); setLoadAttempt(current => current + 1); }}>Retry loading chat</Button></>}</div> : <div className="agent-workspace-columns agent-workspace-columns-discussion">
       <section className="agent-ticket-draft" aria-label="Persistent discussion">
         {!!snapshot?.activity?.length && <details className="agent-safety-help"><summary>Activity · {snapshot.activity.length}</summary>{snapshot.activity.map((activity, index) => <p key={index}>{activity.type} · {activity.status} · {activity.detail}</p>)}</details>}
