@@ -24,6 +24,7 @@ interface Props {
 const statuses = boardGroups.flatMap(group => group.statuses);
 const label = (status: string) => status.replaceAll('_', ' ');
 const encode = encodeURIComponent;
+const moveHelp = 'Drag a card to reorder or request a move. Use each card’s Actions menu for keyboard or touch moves. Ready and Done require confirmation.';
 type DropTarget = { group: string; before?: string };
 
 function targetBefore(column: Element, y: number, sourceId?: string) {
@@ -213,17 +214,21 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
 
   return <section className="ticket-workspace" aria-label="Project tickets">
     {modalContext}
+    <span id="board-move-help" hidden>{moveHelp}</span>
     <div className="board-toolbar">
       <Segmented aria-label="Ticket layout" value={layout} onChange={value => { clearDrag(); setLayout(value); }} options={[{ value: 'board', label: <span className="view-label"><ColumnsIcon size={16} aria-hidden="true" />Board</span> }, { value: 'list', label: <span className="view-label"><ListBulletsIcon size={16} aria-hidden="true" />List</span> }]} />
       <Input className="ticket-search" aria-label="Search tickets" placeholder="Search by title or ID…" prefix={<MagnifyingGlassIcon size={16} aria-hidden="true" />} value={search} allowClear onChange={event => setSearch(event.target.value)} />
       <Button aria-pressed={assistanceOnly} type={assistanceOnly ? 'primary' : 'default'} onClick={() => { clearDrag(); setAssistanceOnly(value => !value); setAttentionFilter(null); }}>Needs assistance · {assistanceIds.size}</Button>
+      <Popover trigger="click" placement="bottom" content={<p className="board-help-content">{moveHelp}</p>}>
+        <Button aria-describedby="board-move-help">Move help</Button>
+      </Popover>
       <Popover trigger="click" placement="bottomRight" title="Display" content={<div className="board-display">
         <Checkbox checked={showEmpty} onChange={event => setShowEmpty(event.target.checked)}>Show empty columns</Checkbox>
         <div className="display-statuses"><strong>Visible ticket statuses</strong>{statuses.map(status => <Checkbox key={status} checked={!hidden.includes(status)} onChange={event => setHidden(previous => event.target.checked ? previous.filter(value => value !== status) : [...previous, status])}><span className={`status-label status-dot-${status}`}><span aria-hidden="true" />{label(status)}</span><span className="display-count">{matching.filter(ticket => ticket.status === status).length}</span></Checkbox>)}</div>
         <Button type="link" onClick={() => { setShowEmpty(false); setHidden([]); setAttentionFilter(null); setAssistanceOnly(false); }}>Reset display</Button>
       </div>}><Button className="display-button" icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />}>Display{hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}</Button></Popover>
     </div>
-    <p className="board-instructions" id="board-move-help">{dragging ? 'Drop between cards in a highlighted column. Hold near an edge to scroll. Ready and Done require confirmation.' : 'Drag a card to reorder or request a move. Use each card’s Actions menu for keyboard or touch moves.'}</p>
+    {dragging && <p className="board-drag-hint" role="status">Drop between cards in a highlighted column. Hold near an edge to scroll. Ready and Done require confirmation.</p>}
     <p className="board-announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
     <div ref={surface} id="ticket-board-region" className={`ticket-surface ${layout === 'list' ? 'ticket-list-view' : 'kanban-board'}`} role="region" aria-label="Tickets grouped by workflow stage" aria-busy={busy} tabIndex={0} onDragOver={event => { if (dragSource.current) pointer.current = { x: event.clientX, y: event.clientY }; }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) pointer.current = null; }}>
       {visibleColumns.map(column => {
@@ -233,6 +238,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
           <div className="kanban-heading"><h2 id={`column-${column.id}`}>{column.label}</h2><span className="kanban-count">{column.tickets.length}</span></div>
           {column.id === 'active' && <p className="board-group-note">Agent-managed · paused work still holds the slot</p>}
           {column.id === 'attention' && <div className="board-status-filters" aria-label="Filter attention statuses">{column.statuses.map(status => <button type="button" key={status} aria-pressed={attentionFilter === status} onClick={() => setAttentionFilter(previous => previous === status ? null : status)}>{label(status)} <span>{column.tickets.filter(ticket => ticket.status === status).length}</span></button>)}</div>}
+          {layout === 'list' && shownTickets.length > 0 && <div className="board-list-header" aria-hidden="true"><span>ID</span><span>Title</span><span>Status</span><span>Next action</span><span>Actions</span></div>}
           <ol className="ticket-list">{shownTickets.map((value, index) => {
             const run = snapshot.runs.find(run => run.id === value.runId);
             const movable = canMoveTicket(value) && !lifecycleOwnsCompletion(run) && !disabled;
@@ -244,13 +250,16 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
             return <li key={value.id} data-ticket-id={value.id} className={`${dragging?.id === value.id ? 'is-dragging ' : ''}${over?.group === column.id && over.before === value.id ? 'drop-before' : ''}`}>
               <article className={`ticket-card board-ticket ${selectedId === value.id ? 'selected' : ''}`} aria-label={`${value.id}: ${value.title}, ${label(value.status)}`} draggable={movable && layout === 'board'} onDragStart={event => { if (!movable || (event.target as HTMLElement).closest('a, .board-card-actions')) { event.preventDefault(); return; } dragSource.current = value; setDragging(value); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', value.id); event.dataTransfer.setDragImage(event.currentTarget, 24, 24); }} onDragEnd={clearDrag}>
                 <div className="board-card-top"><button type="button" className="board-drag-handle" disabled={!movable} aria-label={`Drag ${value.id}; use Actions for keyboard or touch moves`} aria-describedby="board-move-help" title={movable ? 'Drag to move; use Actions without dragging' : 'Unavailable while active, invalid, or saving'}><DotsSixVerticalIcon size={18} aria-hidden="true" /></button><span className="ticket-meta">{value.id}</span><Tag className={`badge status-${value.status}`}>{label(value.status)}</Tag></div>
-                {run?.lifecycle && <Tag className={run.lifecycle.phase === 'assistance' ? 'attention' : ''}>{lifecycleLabels[run.lifecycle.phase]}</Tag>}
                 <Link draggable={false} className="board-ticket-title" aria-current={selectedId === value.id ? 'page' : undefined} onClick={event => onOpen(event.currentTarget)} to={details}><strong>{value.title || value.id}</strong></Link>
-                {(value.removed || value.dependencies.length > 0) && <small>{value.removed ? 'Ticket file removed' : `Depends on ${value.dependencies.join(', ')}`}</small>}
-                {reason && <span className="ticket-error" title={reason}>{reason}</span>}
-                {value.status === 'interrupted' && <small className="warning-text">Partial changes may remain. Review before retrying.</small>}
-                {value.approvedRevision === value.revision && <span className="permission-note">✓ Revision approved</span>}
-                {run?.lifecycle && <Link draggable={false} to={`/runs/${encode(run.id)}`} onClick={event => onOpen(event.currentTarget)}>Review lifecycle evidence</Link>}
+                <div className="board-ticket-details">
+                  {run?.lifecycle && <Tag className={run.lifecycle.phase === 'assistance' ? 'attention' : ''}>{lifecycleLabels[run.lifecycle.phase]}</Tag>}
+                  {value.removed && <small>Ticket file removed</small>}
+                  {value.dependencies.length > 0 && <small>Depends on {value.dependencies.join(', ')}</small>}
+                  {reason && <span className="ticket-error" title={reason}>{reason}</span>}
+                  {value.status === 'interrupted' && <small className="warning-text">Partial changes may remain. Review before retrying.</small>}
+                  {value.approvedRevision === value.revision && <span className="permission-note">✓ Revision approved</span>}
+                  {run?.lifecycle && <Link draggable={false} to={`/runs/${encode(run.id)}`} onClick={event => onOpen(event.currentTarget)}>Review lifecycle evidence</Link>}
+                </div>
                 <div className="board-card-actions">
                   <Link to={run?.dialog ? `/runs/${encode(run.id)}` : details} onClick={event => onOpen(event.currentTarget)}>{run?.dialog ? 'Answer needed' : value.status === 'interrupted' ? 'Review recovery' : value.status === 'blocked' ? 'View blocker' : value.status === 'failed' ? 'View error' : value.status === 'needs_review' ? 'Review evidence' : 'Open ticket'}</Link>
                   <Dropdown trigger={['click']} menu={{ items: [
@@ -259,7 +268,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
                     { type: 'divider' },
                     { key: 'up', label: 'Move up in column', disabled: !movable || !previous, onClick: () => void move(value, column.id, previous?.id) },
                     { key: 'down', label: 'Move down in column', disabled: !movable || !next, onClick: () => void move(value, column.id, afterNext?.id) },
-                  ] }}><Button ref={element => { if (element) controls.current.set(value.id, element); else controls.current.delete(value.id); }} size="small" type="text" aria-label={`Actions for ${value.id}`} disabled={disabled} icon={<DotsThreeIcon size={20} aria-hidden="true" />} /></Dropdown>
+                  ] }}><Button ref={element => { if (element) controls.current.set(value.id, element); else controls.current.delete(value.id); }} type="text" aria-label={`Actions for ${value.id}`} disabled={disabled} icon={<DotsThreeIcon size={20} aria-hidden="true" />} /></Dropdown>
                 </div>
               </article>
             </li>;

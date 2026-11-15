@@ -91,6 +91,7 @@ export default function RichMarkdownEditor(props: RichMarkdownEditorProps) {
   const [parseError, setParseError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [pasteError, setPasteError] = useState('');
   const [recoveredAttachments, setRecoveredAttachments] = useState('');
   const helpId = useId();
   useEffect(() => { latest.current = props; }, [props]);
@@ -146,6 +147,7 @@ export default function RichMarkdownEditor(props: RichMarkdownEditorProps) {
     pending.current = true;
     setUploading(true);
     setUploadError('');
+    setPasteError('');
     setRecoveredAttachments('');
     const revision = externalRevision.current;
     const source = latest.current.value;
@@ -176,6 +178,14 @@ export default function RichMarkdownEditor(props: RichMarkdownEditorProps) {
     userEdit.current = true;
     const files = Array.from(event.clipboardData.files);
     if (!files.length) return;
+    if (pending.current) {
+      event.preventDefault();
+      event.stopPropagation();
+      const text = event.clipboardData.getData('text/plain');
+      if (text) editor.current?.insertMarkdown(text);
+      setPasteError('Another attachment is still being added. Paste these files again after it finishes.');
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     void uploadFiles(files, event.clipboardData.getData('text/plain'));
@@ -220,6 +230,7 @@ export default function RichMarkdownEditor(props: RichMarkdownEditorProps) {
     </div>
     {disabled && <p className="rich-markdown-status" role="status">Preview is read-only while this ticket is being saved.</p>}
     {uploading && <p className="rich-markdown-status" role="status" aria-live="polite">Adding attachments…</p>}
+    {pasteError && <p className="rich-markdown-error" role="alert">{pasteError}</p>}
     {uploadError && <p className="rich-markdown-error" role="alert">{uploadError}</p>}
     {recoveredAttachments && <textarea className="rich-markdown-references" aria-label="Preserved attachment references" readOnly value={recoveredAttachments} />}
     {document.prefix && <details className="rich-markdown-metadata">

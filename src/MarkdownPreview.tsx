@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Components } from 'react-markdown';
+import type { Heading, Root, RootContent } from 'mdast';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { theme } from 'antd';
@@ -54,6 +55,37 @@ function MermaidDiagram({ source }: { source: string }) {
     </figure>
   );
 }
+function planNavigation() {
+  return (tree: Root) => {
+    if (tree.children[0]?.type === 'heading' && tree.children[0].depth === 1) tree.children.shift();
+    const ids = new Map<string, number>();
+    const headings: { title: string; id: string }[] = [];
+    for (const node of tree.children) {
+      if (node.type !== 'heading') continue;
+      const text = (children: Heading['children']): string => children.map(child => 'value' in child ? child.value : 'children' in child ? text(child.children) : '').join('');
+      const title = text(node.children);
+      const slug = title.toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').trim().replace(/\s+/g, '-') || 'section';
+      const count = ids.get(slug) ?? 0;
+      ids.set(slug, count + 1);
+      const id = count ? `${slug}-${count}` : slug;
+      node.data = { ...node.data, hProperties: { ...node.data?.hProperties, id } };
+      if (node.depth === 2) headings.push({ title, id });
+    }
+    if (!headings.length) return;
+    const contents: RootContent = {
+      type: 'blockquote',
+      data: { hName: 'nav', hProperties: { className: 'plan-contents', 'aria-label': 'On this page' } },
+      children: [
+        { type: 'paragraph', children: [{ type: 'strong', children: [{ type: 'text', value: 'On this page' }] }] },
+        { type: 'list', ordered: false, spread: false, children: headings.map(({ title, id }) => ({
+          type: 'listItem', spread: false, children: [{ type: 'paragraph', children: [{ type: 'link', url: `#${id}`, children: [{ type: 'text', value: title }] }] }],
+        })) },
+      ],
+    };
+    tree.children.unshift(contents);
+  };
+}
+
 
 const components: Components = {
   pre({ children }) {
@@ -68,16 +100,16 @@ const components: Components = {
   table({ children }) {
     return <div className="markdown-table" tabIndex={0} role="region" aria-label="Scrollable table"><table>{children}</table></div>;
   },
-  // Keep references clickable without sending the reader's browsing context externally.
   a({ href, children }) {
-    return <a href={href} rel="noreferrer">{children}</a>;
+    const documentSource = !!href && !/^(?:[a-z]+:|#|\/)/i.test(href) && /\.md(?:#|$)/i.test(href);
+    return <a href={href} target={documentSource ? '_blank' : undefined} rel="noreferrer">{children}{documentSource && <span className="document-link-note"> (source, new tab)</span>}</a>;
   },
 };
 
 export default function MarkdownPreview({ source }: { source: string }) {
   return (
     <article className="plan-document" aria-label="Rendered implementation plan">
-      <Markdown remarkPlugins={[remarkGfm]} components={components} skipHtml>{source}</Markdown>
+      <Markdown remarkPlugins={[remarkGfm, planNavigation]} components={components} skipHtml>{source}</Markdown>
     </article>
   );
 }
