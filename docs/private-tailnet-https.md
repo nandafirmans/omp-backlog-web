@@ -359,6 +359,8 @@ To return to MagicDNS-based HTTPS instead of the custom domain:
 
 4. Use the HTTPS URL printed by Serve. That `.ts.net` name again requires MagicDNS-compatible client DNS; it does not solve a custom Secure DNS provider bypassing MagicDNS.
 
+To use a different Tailscale Serve HTTPS port, include that port in both `OMP_BACKLOG_ORIGIN` (for example, `https://device.example-tailnet.ts.net:8443`) and the `tailscale serve --https=8443` command. The configured origin must exactly match the browser URL.
+
 ## Deployment verification checklist
 
 Run these checks against your own deployment; the example endpoints above are not live verification targets:

@@ -18,6 +18,14 @@ Approved defaults:
 
 One backend process and one database remain sufficient. Scheduling is a backend module, not another service. Opt-in independent reviewer sessions remain under their own ticket owner; no Redis, Docker or second scheduler is required. Phase 6A permits cross-repository concurrency only. See [architecture and Phase 6B boundary](docs/phase-6-concurrent-execution.md).
 
+### Current agent-creation journey
+
+Create with agent uses one project-scoped chat and composer with automatic initialization/connection. Normal chat and conversational planning never create tickets or start implementation. Clicking a completed assistant response's **Create tickets** authorizes backend-owned, snapshot-bound generation, validation and journaled saving without a plan, proposal review or publication confirmation. The host chooses ticket IDs and enforces duplicate protection and safe interrupted-publication recovery.
+
+Response-created tickets carry a persistent execution hold, including Automatic projects. Existing exact-revision approval explicitly releases it; creation does not change project mode. Manual creation remains independent. Historical conversations/plans/proposals remain readable, and already accepted interrupted publication journals retain recovery. The old plan/task review/editor and new legacy mutation routes are removed. Older completed responses may generate from their saved text prefix without fabricating missing supplementary context; unavailable attachment bytes require a follow-up with reattached files. Native exploration is read-only and host-scoped; skills grant no additional authority. In-flight provider steering is not exposed; Stop and subsequent conversational follow-up are supported.
+
+Implemented behavior, capability-specific verification and remaining boundaries: [current workflow](docs/current-agent-workflow.md#chat-first-response-ticket-creation), [runtime adapter evidence](docs/agent-chat-runtime.md). Historical mandatory review steps described in older receipts are not current creation requirements.
+
 The initial project setup is runnable development tooling and a project overview only. Login, repository management, tickets, scheduling, and execution controls must not be presented as operational before implementation and verification.
 
 ## 1. Architecture

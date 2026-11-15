@@ -93,7 +93,7 @@ test('batch reserves IDs, survives restart and publishes once with dependencies'
       }
       expect(store.get('batchOperations', op.id)?.state).toBe('publishing');
       await expect(publishBatch(store, repo, workspace.id, op.id)).rejects.toMatchObject({ status: 409 });
-      expect((await request(`/api/repos/repo/agent-workspaces/${workspace.id}/batch-publish`, { method: 'POST', body: JSON.stringify({ confirmation: op.id }) })).status).toBe(409);
+      expect((await request(`/api/repos/repo/agent-workspaces/${workspace.id}/batch-publish`, { method: 'POST', body: JSON.stringify({ confirmation: op.id }) })).status).toBe(410);
       expect(store.get('batchOperations', op.id)?.state).toBe('publishing');
       await reconcileTickets(store, true);
       const state = await (await request('/api/state')).json() as { tickets: { id: string }[] };

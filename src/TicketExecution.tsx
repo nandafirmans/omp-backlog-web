@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, InputNumber, Modal, Select } from 'antd';
 import type { ExecutionOverrides, Settings, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
+import ModelPicker from './ModelPicker';
 
 interface Models { models: { provider: string; id: string; name: string }[]; model: string; thinkingLevels: string[] }
 interface Props { ticket: Ticket; settings: Settings; api: RequestApi; disabled: boolean; onDirtyChange: (dirty: boolean) => void; execute: (notice: string, work: () => Promise<void>) => Promise<boolean> }
@@ -64,12 +65,11 @@ export default function TicketExecution({ ticket, settings, api, disabled, onDir
     <p className="muted">Ticket-specific overrides. Existing runs remain unchanged. Save first, then separately review &amp; retry; partial work and workspace gates remain.</p>
     <div className="form-columns">
       <label>Engineering Mode<Select aria-label="Ticket engineering mode" value={draft.engineeringMode ?? inherit} options={[{ value: inherit, label: `Inherit global · ${settings.engineeringMode === 'standard' ? 'Standard OMP' : 'OMP + pstack'}` }, { value: 'standard', label: 'Standard OMP' }, { value: 'pstack', label: 'OMP + pstack' }]} disabled={disabled} onChange={value => setDraft(draft => ({ ...draft, engineeringMode: value === 'standard' || value === 'pstack' ? value : undefined }))} /><small>Applies to fresh attempts. Existing runs keep their mode and limits; reviewed blocker recovery retains its source run's mode.</small></label>
-      <label>Ticket model<Select aria-label="Ticket execution model" showSearch optionFilterProp="label" value={draft.model ?? inherit} options={models} disabled={disabled || loading} onChange={value => {
+      <ModelPicker modelLabel="Ticket model" thinkingLabel="Ticket thinking level" modelAriaLabel="Ticket execution model" thinkingAriaLabel="Ticket thinking level" model={draft.model ?? inherit} thinking={draft.thinking ?? inherit} modelOptions={models} thinkingOptions={levels.map(level => ({ ...level, disabled: ![inherit, ''].includes(level.value) && !current?.thinkingLevels.includes(level.value) }))} disabled={disabled || loading} onModelChange={value => {
         const model = value === inherit ? undefined : value;
         setDraft(value => ({ ...value, model, thinking: undefined }));
         void discover(model ?? settings.model);
-      }} /></label>
-      <label>Ticket thinking level<Select aria-label="Ticket thinking level" value={draft.thinking ?? inherit} options={levels.map(level => ({ ...level, disabled: ![inherit, ''].includes(level.value) && !current?.thinkingLevels.includes(level.value) }))} disabled={disabled || loading} onChange={value => setDraft(draft => ({ ...draft, thinking: value === inherit ? undefined : value }))} /></label>
+      }} onThinkingChange={value => setDraft(draft => ({ ...draft, thinking: value === inherit ? undefined : value }))} />
       <label>Run token budget (optional)<InputNumber<number> aria-label="Ticket token budget" min={1} max={10000000} step={10000} placeholder={unlimited ? 'No cumulative token limit' : settings.tokenBudget === null ? 'Workspace: no cumulative limit' : `Workspace: ${settings.tokenBudget.toLocaleString('en-US')}`} value={draft.tokenBudget ?? null} disabled={disabled || unlimited} status={invalidBudget ? 'error' : undefined} formatter={(value, info) => info.userTyping ? info.input : value === undefined || value === null || String(value) === '' ? '' : Number(value).toLocaleString('en-US')} onChange={value => setDraft(draft => ({ ...draft, tokenBudget: value ?? undefined }))} /><small>Clear to inherit workspace budget{settings.tokenBudget === null ? ' (currently no cumulative limit)' : ''}. Cumulative input/output/cache tokens, not context-window capacity.</small></label>
     </div>
     <Checkbox checked={unlimited} disabled={disabled} onChange={event => setDraft(draft => ({ ...draft, tokenBudget: event.target.checked ? null : undefined }))}>No cumulative token limit</Checkbox>

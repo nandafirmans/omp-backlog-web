@@ -23,6 +23,14 @@ test('only permitted current revisions with Done dependencies are eligible', () 
     expect(eligible(store, { ...repo, mode: 'automatic' }, { ...ticket, status })).toBe(false);
   }
 });
+test('creation hold overrides Automatic and approval without changing unrelated eligibility', () => {
+  const automatic = { ...repo, mode: 'automatic' as const };
+  expect(eligible(store, automatic, { ...ticket, status: 'draft', approvedRevision: null })).toBe(true);
+  for (const status of ['draft', 'ready'] as const) {
+    expect(eligible(store, automatic, { ...ticket, status, creationHold: true })).toBe(false);
+    expect(eligible(store, repo, { ...ticket, status, creationHold: true })).toBe(false);
+  }
+});
 test('editing previously executed work cannot silently rerun in automatic mode', () => {
   const run: Run = { id: 'run', repoId: repo.id, ticketId: ticket.id, revision: 'old', status: 'done', started: 1, finished: 2, pid: null, sessionId: null, sessionFile: null, snapshot: '', transcript: '', evidence: [], blocker: null, changedFiles: '', dialog: null, error: null };
   store.save('runs', run);

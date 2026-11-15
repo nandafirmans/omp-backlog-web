@@ -45,7 +45,11 @@ import { handleAgentWorkspaceRequest } from ${JSON.stringify(join(import.meta.di
 const store = createStore(${JSON.stringify(data)}); const repo = store.get('repos', 'repo');
 async function call(path, method, body, key) { const url = 'http://localhost/api/repos/repo/agent-workspaces' + path; const headers = new Headers(key ? { 'Idempotency-Key': key } : {}); if (!(body instanceof FormData)) headers.set('Content-Type', 'application/json'); return handleAgentWorkspaceRequest(store, repo, new Request(url, { method, headers, ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }) }), new URL(url).pathname.split('/').filter(Boolean)); }
 const created = await (await call('', 'POST', {})).json(); const id = created.workspace.id;
-await call('/' + id, 'PATCH', { version: 1, prompt: 'durable editor', ticketMarkdown: 'reviewed ticket', planMarkdown: 'reviewed plan' });
+const historical = store.get('agentWorkspaces', id);
+historical.ticketMarkdown = 'reviewed ticket'; historical.currentPlanRevisionId = 'old-plan';
+historical.planRevisions = [{ id: 'old-plan', revisionHash: 'old-hash', markdown: 'reviewed plan', createdAt: 1 }];
+store.save('agentWorkspaces', historical);
+await call('/' + id, 'PATCH', { version: 1, prompt: 'durable editor' });
 await call('/' + id + '/connect', 'POST', {});
 const form = new FormData(); form.set('prompt', 'FIXTURE:HOLD'); form.set('excluded', '[]');
 await call('/' + id + '/session/turn', 'POST', form, 'restart-accepted-turn');

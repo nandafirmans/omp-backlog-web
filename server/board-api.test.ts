@@ -6,6 +6,7 @@ import { createApi } from './api';
 import { closeStore, createStore, database, digest, token } from './store';
 import { writeTicket } from './tickets';
 import type { Runtime } from './contracts';
+import { eligible } from './runtime';
 
 test('board transitions save position together and reject invalid placement before approval', async () => {
   const root = await mkdtemp(join(tmpdir(), 'backlog-board-test-'));
@@ -16,6 +17,9 @@ test('board transitions save position together and reject invalid placement befo
     const repo = { id: 'repo', path: workspace, name: 'Board fixture', git: false, mode: 'paused' as const, lastStarted: 0 };
     store.save('repos', repo);
     const ticket = await writeTicket(store, repo, '---\nid: T001\ntitle: Move card\ndepends_on: []\n---\n\nSave the requested board position without changing execution permission.\n\nDone when:\n- Position is saved.\n');
+    store.save('repos', { ...repo, mode: 'automatic' });
+    store.save('tickets', { ...ticket, creationHold: true });
+    expect(eligible(store, { ...repo, mode: 'automatic' }, store.get('tickets', 'repo/T001')!)).toBe(false);
     const runtime: Runtime = { wake() {}, async reconcile() {}, async control() {}, async answer() {}, async close() {} };
     const api = createApi(store, runtime);
     const cookie = token(); const csrf = token();
@@ -29,14 +33,20 @@ test('board transitions save position together and reject invalid placement befo
       expect((await call('approve', order)).status).toBe(400);
       expect(store.get('tickets', 'repo/T001')!.status).toBe('draft');
       expect(store.get('tickets', 'repo/T001')!.approvedRevision).toBeNull();
+      expect(store.get('tickets', 'repo/T001')!.creationHold).toBe(true);
     }
     expect((await call('approve', 12, 'stale')).status).toBe(409);
     expect((await call('done', 12)).status).toBe(409);
     expect(store.get('tickets', 'repo/T001')!.order).toBe(ticket.order);
+    expect(store.get('tickets', 'repo/T001')!.creationHold).toBe(true);
+    expect((await call('reorder', 9)).status).toBe(200);
+    expect(store.get('tickets', 'repo/T001')!.creationHold).toBe(true);
     expect((await call('approve', 12.5)).status).toBe(200);
     expect(store.get('tickets', 'repo/T001')!.status).toBe('ready');
     expect(store.get('tickets', 'repo/T001')!.order).toBe(12.5);
     expect(store.get('tickets', 'repo/T001')!.approvedRevision).toBe(ticket.revision);
+    expect(store.get('tickets', 'repo/T001')!.creationHold).toBeUndefined();
+    expect(eligible(store, store.get('repos', repo.id)!, store.get('tickets', 'repo/T001')!)).toBe(true);
     expect((await call('reorder', undefined)).status).toBe(400);
     expect((await call('reorder', 8)).status).toBe(200);
     expect(store.get('tickets', 'repo/T001')!.order).toBe(8);

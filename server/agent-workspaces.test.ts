@@ -3,20 +3,23 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentWorkspaceSnapshot, AgentWorkspaceSummary } from './agent-workspace-contracts';
-import type { Repo, Store } from './contracts';
+import type { Repo, Store, Ticket } from './contracts';
 import type { DraftPreparation, DraftSnapshot } from './drafting-contracts';
 import { handleAgentWorkspaceRequest, WORKSPACE_LIMITS } from './agent-workspaces';
 import { closeDrafts, handleDraftRequest } from './drafting';
 import { closeStore, createStore } from './store';
 import { HttpError } from './tickets';
+import { settleResponseOperations } from './response-operations';
 
 interface WorkspaceFixture {
   root: string; repo: Repo;
   call(path?: string, method?: string, value?: unknown, key?: string, repo?: Repo): Promise<Response>;
   legacyTurn(id: string): Promise<Response>;
+  tickets(): Ticket[];
+  store(): Store;
   reopen(): Promise<void>;
 }
-async function fixture(run: (context: WorkspaceFixture) => Promise<void>, mode = '') {
+async function fixture(run: (context: WorkspaceFixture) => Promise<void>, mode = '', allowTickets = false) {
   const root = await mkdtemp(join(tmpdir(), 'omp-agent-workspaces-'));
   let store: Store = createStore(join(root, 'private'));
   const previousAgent = process.env.PI_CODING_AGENT_DIR; const previousProfile = process.env.OMP_PROFILE;
@@ -38,13 +41,16 @@ async function fixture(run: (context: WorkspaceFixture) => Promise<void>, mode =
     };
     await run({
       root, repo, call,
+      store: () => store,
       legacyTurn: id => {
         const url = `http://localhost/api/repos/${repo.id}/drafts/${id}/turn`;
         return handleDraftRequest(store, repo, new Request(url, { method: 'POST', body: form('Rejected direct turn') }), new URL(url).pathname.split('/').filter(Boolean));
       },
+      tickets: () => store.list('tickets'),
       reopen: async () => { await closeDrafts(store); closeStore(store); store = createStore(join(root, 'private')); },
     });
-    expect(store.list('tickets')).toEqual([]); expect(store.list('runs')).toEqual([]);
+    if (!allowTickets) expect(store.list('tickets')).toEqual([]);
+    expect(store.list('runs')).toEqual([]);
   } finally {
     await closeDrafts(store); closeStore(store);
     if (previousAgent === undefined) delete process.env.PI_CODING_AGENT_DIR; else process.env.PI_CODING_AGENT_DIR = previousAgent;
@@ -64,23 +70,195 @@ async function waitFor(call: WorkspaceFixture['call'], id: string, predicate: (d
   throw new Error('Workspace fixture did not reach the observable state');
 }
 async function log(root: string) { return (await readFile(join(root, 'child.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line) as { event: string; command?: string; message?: string }); }
+test('a completed response creates one held batch once and retains its result after reload', async () => {
+  await fixture(async ({ call, reopen, tickets, root }) => {
+    const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+    const id = created.workspace.id;
+    const initial = form('Describe a useful change');
+    initial.append('files', new File(['durable source'], 'source.txt', { type: 'text/plain' }));
+    expect((await call(`/${id}/session/turn`, 'POST', initial, crypto.randomUUID())).status).toBe(200);
+    await waitFor(call, id, draft => draft.messages[1]?.status === 'complete');
+    const before = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+    expect(before.eligibleResponseIndices).toEqual([1]);
+    expect(await (await call(`/${id}/attachments/1/source.txt`)).text()).toBe('durable source');
+    expect((await call(`/${id}/attachments/1/missing.txt`)).status).toBe(404);
+    expect(JSON.stringify(before)).not.toContain('durable source');
+    expect(before.responseOperations).toEqual([]);
+    expect((await call(`/${id}/session/turn`, 'POST', form('Later unrelated requirement'), crypto.randomUUID())).status).toBe(200);
+    await waitFor(call, id, draft => draft.messages[3]?.status === 'complete');
+    const [first, duplicate] = await Promise.all([call(`/${id}/responses/1/tickets`, 'POST', {}), call(`/${id}/responses/1/tickets`, 'POST', {})]);
+    expect(first.status).toBe(202); expect(duplicate.status).toBe(202);
+    const until = Date.now() + 15000;
+    let saved = before;
+    // The isolated child and its settlement sampler require the real platform clock.
+    while (Date.now() < until) {
+      saved = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+      if (saved.responseOperations?.[0]?.state !== 'generating' && saved.responseOperations?.[0]?.state !== 'publishing') break;
+      await Bun.sleep(20);
+    }
+    expect(saved.responseOperations).toHaveLength(1);
+    expect(saved.responseOperations![0]!.state).toBe('complete');
+    expect(saved.responseOperations![0]!.tickets).toHaveLength(1);
+    expect(tickets()).toHaveLength(1);
+    expect(tickets()[0]!.creationHold).toBe(true);
+    expect(await readFile(join(root, 'repo', '.omp-backlog', 'tickets', tickets()[0]!.id, 'attachments', 'source.txt'), 'utf8')).toBe('durable source');
+    const generation = (await log(root)).filter(entry => entry.event === 'prompt').at(-1)?.message;
+    expect(generation).toContain('Describe a useful change');
+    expect(generation).not.toContain('Later unrelated requirement');
+    await reopen();
+    const reloaded = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+    expect((await call(`/${id}/responses/1/tickets/retry`, 'POST', {})).status).toBe(409);
+    expect(reloaded.responseOperations).toEqual(saved.responseOperations);
+    expect(await (await call(`/${id}/attachments/1/source.txt`)).text()).toBe('durable source');
+    expect((await call(`/${id}/responses/1/tickets`, 'POST', {})).status).toBe(202);
+    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).responseOperations).toHaveLength(1);
+  }, 'extraction-valid', true);
+}, 30000);
 
-test('workspace editors, immutable plan approvals and scoping survive a Store reopen without starting OMP', async () => {
-  await fixture(async ({ call, reopen, repo, root }) => {
+test('ticket generation can explicitly replace an unavailable model without changing frozen source or chat settings', async () => {
+  await fixture(async ({ call, store, tickets, reopen }) => {
+    const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+    const id = created.workspace.id;
+    await call(`/${id}/session/turn`, 'POST', form('Document the expense tracker setup'), crypto.randomUUID());
+    await waitFor(call, id, draft => draft.messages[1]?.status === 'complete');
+    const original = store().get('agentWorkspaces', id)!;
+    original.acceptedTurns[0]!.model = { provider: 'fixture', id: 'retired' };
+    original.prompt = 'Keep this unsent message';
+    store().save('agentWorkspaces', original);
+    expect((await call(`/${id}/responses/1/tickets`, 'POST', { model: 'fixture/text' })).status).toBe(400);
+    expect((await call(`/${id}/responses/1/tickets`, 'POST', {})).status).toBe(202);
+    await settleResponseOperations(store());
+    const failed = store().get('agentWorkspaces', id)!.responseOperations![0]!;
+    expect(failed.state).toBe('interrupted');
+    expect(failed.error).toContain('fixture/retired is unavailable');
+    const discovered = await (await call(`/${id}/responses/1/models`, 'POST', { model: 'fixture/text' })).json();
+    expect(discovered.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'vision', images: true }), expect.objectContaining({ id: 'text', images: false })]));
+    expect(discovered.thinkingLevels).toEqual(['off']);
+    expect(discovered.saved.model).toEqual({ provider: 'fixture', id: 'retired' });
+    expect(discovered.requiresImages).toBe(false);
+    expect((await call(`/${id}/responses/1/tickets/retry`, 'POST', { model: 'fixture/text', thinking: 'off' })).status).toBe(202);
+    await settleResponseOperations(store());
+    const saved = store().get('agentWorkspaces', id)!;
+    expect(saved.responseOperations![0]).toMatchObject({ state: 'complete', sourceHash: failed.sourceHash, generation: { model: { provider: 'fixture', id: 'text' }, thinking: 'off' } });
+    expect(saved.acceptedTurns).toEqual(original.acceptedTurns);
+    expect(saved.messages).toEqual(original.messages);
+    expect(saved.model).toEqual(original.model);
+    expect(saved.thinking).toBe(original.thinking);
+    expect(saved.prompt).toBe(original.prompt);
+    expect(tickets()).toHaveLength(1);
+    expect(tickets()[0]!.creationHold).toBe(true);
+    expect((await call(`/${id}/responses/1/tickets/retry`, 'POST', { model: 'fixture/vision', thinking: 'medium' })).status).toBe(409);
+    await reopen();
+    expect(store().get('agentWorkspaces', id)!.responseOperations![0]!.generation).toEqual({ model: { provider: 'fixture', id: 'text' }, thinking: 'off' });
+    expect(tickets()).toHaveLength(1);
+  }, 'extraction-valid', true);
+}, 30000);
+
+test('generation model replacement cannot drop retained images or bypass thinking validation', async () => {
+  await fixture(async ({ call, store, tickets, root }) => {
+    const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+    const id = created.workspace.id;
+    const initial = form('Implement the tracker shown in the reference');
+    initial.append('files', new File([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')], 'reference.png'));
+    expect((await call(`/${id}/session/turn`, 'POST', initial, crypto.randomUUID())).status).toBe(200);
+    await waitFor(call, id, draft => draft.messages[1]?.status === 'complete');
+    expect((await call(`/${id}/responses/1/tickets`, 'POST', { model: 'fixture/text', thinking: 'off' })).status).toBe(202);
+    await settleResponseOperations(store());
+    expect(store().get('agentWorkspaces', id)!.responseOperations![0]).toMatchObject({ state: 'interrupted', error: expect.stringContaining('does not support them') });
+    expect(tickets()).toHaveLength(0);
+    const models = await (await call(`/${id}/responses/1/models`, 'POST', {})).json();
+    expect(models.requiresImages).toBe(true);
+    expect((await call(`/${id}/responses/1/tickets/retry`, 'POST', { model: 'fixture/vision', thinking: 'unsupported' })).status).toBe(202);
+    await settleResponseOperations(store());
+    expect(store().get('agentWorkspaces', id)!.responseOperations![0]).toMatchObject({ state: 'interrupted', error: 'The saved thinking level is unavailable' });
+    expect(tickets()).toHaveLength(0);
+    expect((await call(`/${id}/responses/1/tickets/retry`, 'POST', { model: 'fixture/vision', thinking: 'off' })).status).toBe(202);
+    await settleResponseOperations(store());
+    expect(store().get('agentWorkspaces', id)!.responseOperations![0]!.state).toBe('complete');
+    const prompts = (await log(root)).filter(entry => entry.event === 'prompt');
+    expect(prompts).toHaveLength(2);
+    expect(prompts.at(-1)).toMatchObject({ images: 1 });
+    expect(tickets()).toHaveLength(1);
+    expect(tickets()[0]!.creationHold).toBe(true);
+  }, 'extraction-valid', true);
+}, 30000);
+
+test('older completed responses create from their saved prefix without requiring a legacy wizard or later context', async () => {
+  await fixture(async ({ call, tickets, store, root }) => {
+    const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+    const id = created.workspace.id;
+    await call(`/${id}/session/turn`, 'POST', form('Document the expense tracker setup'), crypto.randomUUID());
+    await waitFor(call, id, draft => draft.messages[1]?.status === 'complete');
+    await call(`/${id}/session`, 'DELETE');
+    const saved = store().get('agentWorkspaces', id)!;
+    delete saved.acceptedTurns[0]!.sourceContext;
+    saved.messages.push({ role: 'user', text: 'LATER PRIVATE REQUIREMENT', status: 'complete' });
+    saved.planRevisions.push({ id: 'later-plan', revisionHash: 'later', markdown: 'LATER PLAN MUST NOT LEAK', createdAt: Date.now() });
+    saved.currentPlanRevisionId = 'later-plan';
+    store().save('agentWorkspaces', saved);
+    const before = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+    expect(before.eligibleResponseIndices).toEqual([1]);
+    expect(tickets()).toEqual([]);
+    expect((await call(`/${id}/responses/1/tickets`, 'POST', {})).status).toBe(202);
+    await settleResponseOperations(store());
+    const result = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+    expect(result.responseOperations?.[0]?.state).toBe('complete');
+    expect(tickets()).toHaveLength(1);
+    expect(tickets()[0]!.creationHold).toBe(true);
+    const generation = (await log(root)).filter(entry => entry.event === 'prompt').at(-1)?.message;
+    expect(generation).toContain('Document the expense tracker setup');
+    expect(generation).not.toContain('LATER PRIVATE REQUIREMENT');
+    expect(generation).not.toContain('LATER PLAN MUST NOT LEAK');
+  }, 'extraction-valid', true);
+}, 20000);
+
+test('automatic decomposition preserves dependencies and clarification creates no tickets', async () => {
+  await fixture(async ({ call, tickets }) => {
+    for (const [prompt, expected] of [['FIXTURE:RESPONSE:MULTIPLE', 'complete'], ['FIXTURE:RESPONSE:QUESTIONS', 'clarification']] as const) {
+      const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+      const id = created.workspace.id;
+      expect((await call(`/${id}/session/turn`, 'POST', form(prompt), crypto.randomUUID())).status).toBe(200);
+      await waitFor(call, id, draft => draft.messages[1]?.status === 'complete');
+      expect((await call(`/${id}/responses/1/tickets`, 'POST', {})).status).toBe(202);
+      const until = Date.now() + 15000;
+      let result: AgentWorkspaceSnapshot | undefined;
+      // Real child processes and native settlement use the platform clock.
+      while (Date.now() < until) {
+        result = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+        if (result.responseOperations?.[0]?.state !== 'generating' && result.responseOperations?.[0]?.state !== 'publishing') break;
+        await Bun.sleep(20);
+      }
+      expect(result?.responseOperations?.[0]?.state).toBe(expected);
+      if (expected === 'complete') {
+        expect(result?.responseOperations?.[0]?.tickets).toHaveLength(2);
+        expect(tickets()).toHaveLength(2);
+        expect(tickets().find(ticket => ticket.dependencies.length)?.dependencies).toEqual([tickets().find(ticket => !ticket.dependencies.length)!.id]);
+        expect(tickets().every(ticket => ticket.creationHold)).toBe(true);
+      } else {
+        expect(result?.responseOperations?.[0]?.questions?.length).toBeGreaterThan(0);
+        expect(tickets()).toHaveLength(2);
+      }
+      await call(`/${id}/session`, 'DELETE');
+    }
+  }, 'extraction-valid', true);
+}, 45000);
+
+test('conversation edits and read-only historical records survive reopen without starting OMP', async () => {
+  await fixture(async ({ call, reopen, repo, root, store }) => {
     const createdResponse = await call('', 'POST', { title: 'Review checkout' }); expect(createdResponse.status).toBe(201);
-    let saved = await createdResponse.json() as AgentWorkspaceSnapshot; const id = saved.workspace.id;
+    const saved = await createdResponse.json() as AgentWorkspaceSnapshot; const id = saved.workspace.id;
     expect(saved.draft).toBeNull(); expect(saved.workspace.version).toBe(1);
-    saved = await (await call(`/${id}`, 'PATCH', { version: 1, prompt: 'Discuss checkout', ticketMarkdown: '---\nid: checkout\n---\nDone when: tests pass', planMarkdown: 'Inspect → propose → review', title: 'Checkout plan' })).json() as AgentWorkspaceSnapshot;
-    const first = saved.workspace.planRevisions[0]!;
-    saved = await (await call(`/${id}`, 'PATCH', { version: 2, approvePlanRevisionId: first.id })).json() as AgentWorkspaceSnapshot;
-    expect(saved.workspace.planRevisions[0]!.approvedAt).toBeNumber();
+    const retained = store().get('agentWorkspaces', id)!;
+    retained.ticketMarkdown = 'Historical ticket text';
+    retained.planRevisions = [{ id: 'old-plan', revisionHash: 'hash', markdown: 'Retained plan', createdAt: 1, approvedAt: 2 }];
+    retained.currentPlanRevisionId = 'old-plan';
+    store().save('agentWorkspaces', retained);
+    expect((await call(`/${id}`, 'PATCH', { version: 1, prompt: 'Discuss checkout', title: 'Checkout plan' })).status).toBe(200);
     expect((await call(`/${id}`, 'PATCH', { version: 1, prompt: 'stale tab' })).status).toBe(409);
-    saved = await (await call(`/${id}`, 'PATCH', { version: 3, planMarkdown: 'Inspect → ask → review' })).json() as AgentWorkspaceSnapshot;
-    expect(saved.workspace.planRevisions[0]).toEqual({ ...first, approvedAt: saved.workspace.planRevisions[0]!.approvedAt });
-    expect(saved.workspace.planRevisions[1]!.approvedAt).toBeUndefined();
-    expect((await call(`/${id}`, 'PATCH', { version: 4, approvePlanRevisionId: first.id })).status).toBe(409);
-    const same = await (await call(`/${id}`, 'PATCH', { version: 4, planMarkdown: 'Inspect → ask → review', archived: true })).json() as AgentWorkspaceSnapshot;
-    expect(same.workspace.planRevisions).toHaveLength(2);
+    for (const field of ['planMarkdown', 'ticketMarkdown', 'approvePlanRevisionId']) expect((await call(`/${id}`, 'PATCH', { version: 2, [field]: 'replacement' })).status).toBe(410);
+    const same = await (await call(`/${id}`, 'PATCH', { version: 2, archived: true })).json() as AgentWorkspaceSnapshot;
+    expect(same.workspace.planRevisions).toEqual(retained.planRevisions);
+    expect(same.workspace.ticketMarkdown).toBe('Historical ticket text');
     await reopen();
     const loaded = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
     expect(loaded).toEqual(same); expect(loaded.draft).toBeNull();
@@ -95,7 +273,7 @@ test('workspace editors, immutable plan approvals and scoping survive a Store re
 });
 
 test('native reconnect restores exact model/thinking, retains discussion and sends only on explicit idempotent Send', async () => {
-  await fixture(async ({ call, reopen, root, legacyTurn }) => {
+  await fixture(async ({ call, reopen, root, legacyTurn, store }) => {
     const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot; const id = created.workspace.id;
     const opened = await (await call(`/${id}/connect`, 'POST', {})).json() as AgentWorkspaceSnapshot;
     expect(opened.draft?.status).toBe('idle'); expect((await log(root)).filter(row => row.command === 'prompt')).toHaveLength(0);
@@ -114,7 +292,8 @@ test('native reconnect restores exact model/thinking, retains discussion and sen
     const first = await waitFor(call, id, draft => draft.status !== 'busy');
     expect(first.messages).toHaveLength(2); expect(first.messages[1]!.status).toBe('complete');
     const afterTurn = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
-    expect(afterTurn.workspace.version).toBe(2);
+    expect(afterTurn.workspace.title).toBe('Discuss the first requirement');
+    expect(afterTurn.workspace.version).toBeGreaterThan(untouched.workspace.version);
     await reopen();
     const loaded = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
     expect(loaded.workspace.messages).toEqual(first.messages); expect(loaded.draft).toBeNull();
@@ -124,7 +303,10 @@ test('native reconnect restores exact model/thinking, retains discussion and sen
     expect(reconnected.draft?.model).toEqual({ provider: 'fixture', id: 'vision' }); expect(reconnected.draft?.thinking).toBe('off');
     expect(reconnected.draft?.messages).toEqual(first.messages);
     expect((await log(root)).filter(row => row.command === 'prompt')).toHaveLength(1);
-    await call(`/${id}`, 'PATCH', { version: afterTurn.workspace.version, planMarkdown: '@^'.repeat(16384) });
+    const historical = store().get('agentWorkspaces', id)!;
+    historical.currentPlanRevisionId = 'retained-large-plan';
+    historical.planRevisions.push({ id: 'retained-large-plan', revisionHash: 'historical', markdown: '@^'.repeat(16384), createdAt: 1 });
+    store().save('agentWorkspaces', historical);
     const prepared = await (await call(`/${id}/session/context`, 'POST', form('Now clarify acceptance'))).json() as DraftPreparation;
     expect(prepared.contexts.at(-1)?.detail).toContain('image bytes');
     expect(prepared.contexts.at(-1)?.detail).toContain('plan truncated');
@@ -143,26 +325,70 @@ test('accepted chat clears the persisted composer, while a rejected request keep
   await fixture(async ({ call, reopen }) => {
     const initial = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
     const id = initial.workspace.id;
-    const message = 'Plan a small expense tracker';
-    const edited = await (await call(`/${id}`, 'PATCH', { version: initial.workspace.version, prompt: message })).json() as AgentWorkspaceSnapshot;
+    const message = 'Plan a small expense tracker\nKeep exports read-only';
+    const savedMessage = message.replace('\n', '\r');
+    const edited = await (await call(`/${id}`, 'PATCH', { version: initial.workspace.version, prompt: savedMessage })).json() as AgentWorkspaceSnapshot;
     await call(`/${id}/connect`, 'POST', {});
     await call(`/${id}/session/model`, 'POST', { provider: 'fixture', modelId: 'vision' });
     expect((await call(`/${id}/session/turn`, 'POST', form(message))).status).toBe(400);
-    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.prompt).toBe(message);
+    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.prompt).toBe(savedMessage);
+    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.title).toBe('Untitled workspace');
     const key = crypto.randomUUID();
-    expect((await call(`/${id}/session/turn`, 'POST', form(message), key)).status).toBe(200);
+    const response = await call(`/${id}/session/turn`, 'POST', form(message), key);
+    expect(response.status).toBe(200);
+    const acknowledgement = await response.json() as DraftSnapshot & { acceptedTurnKey?: string };
+    expect(acknowledgement.acceptedTurnKey).toBe(key);
+    expect(acknowledgement.messages[1]?.status).toBe('partial');
     const accepted = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
     expect(accepted.workspace.prompt).toBe('');
+    expect(accepted.workspace.title).toBe('Plan a small expense tracker');
+    expect(accepted.workspace.titleSource).toBe('automatic');
     expect(accepted.workspace.version).toBeGreaterThan(edited.workspace.version);
-    expect(accepted.workspace.messages[0]?.text).toBe(message);
-    expect((await call(`/${id}/session/turn`, 'POST', form(message), key)).status).toBe(200);
+    expect(accepted.workspace.messages[0]?.text.replace(/\r\n/g, '\n')).toBe(message);
+    const duplicate = await call(`/${id}/session/turn`, 'POST', form(message), key);
+    expect(duplicate.status).toBe(200);
+    expect((await duplicate.json() as DraftSnapshot & { acceptedTurnKey?: string }).acceptedTurnKey).toBe(key);
     await waitFor(call, id, draft => draft.status !== 'busy');
     await reopen();
     const restored = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
     expect(restored.workspace.prompt).toBe('');
-    expect(restored.workspace.messages[0]?.text).toBe(message);
+    expect(restored.workspace.title).toBe('Plan a small expense tracker');
+    expect((await (await call()).json() as AgentWorkspaceSummary[])[0]?.title).toBe('Plan a small expense tracker');
+    expect(restored.workspace.messages[0]?.text.replace(/\r\n/g, '\n')).toBe(message);
   });
 }, 20000);
+
+test('existing untitled conversations get durable names without inference and manual names stay protected', async () => {
+  await fixture(async ({ call, store, reopen, root }) => {
+    const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+    const value = store().get('agentWorkspaces', created.workspace.id)!;
+    value.messages = [{ role: 'user', text: '/skill:ponytail\n\n# **Personal expense tracker**\nUse React and TypeScript', status: 'complete' }];
+    value.acceptedTurns = [{ key: 'old', hash: 'old', contextHash: 'old', contextVersion: 1, acceptedAt: 1, intent: 'discussion', sourceWorkspaceId: value.id, sourcePlanRevisionId: null, model: null, thinking: '', researchReferenceIds: [], userMessageIndex: 0, assistantMessageIndex: 1, status: 'failed' }];
+    store().save('agentWorkspaces', value);
+    const list = await (await call()).json() as AgentWorkspaceSummary[];
+    expect(list[0]?.title).toBe('Personal expense tracker');
+    await reopen();
+    const restored = await (await call(`/${value.id}`)).json() as AgentWorkspaceSnapshot;
+    expect(restored.workspace.title).toBe('Personal expense tracker');
+    expect((await call(`/${value.id}`, 'PATCH', { version: restored.workspace.version, title: 'Untitled workspace' })).status).toBe(200);
+    await reopen();
+    expect((await (await call(`/${value.id}`)).json() as AgentWorkspaceSnapshot).workspace.title).toBe('Untitled workspace');
+    const explicit = await (await call('', 'POST', { title: 'My custom name' })).json() as AgentWorkspaceSnapshot;
+    const named = store().get('agentWorkspaces', explicit.workspace.id)!;
+    named.messages = value.messages; named.acceptedTurns = value.acceptedTurns;
+    store().save('agentWorkspaces', named);
+    expect((await (await call(`/${named.id}`)).json() as AgentWorkspaceSnapshot).workspace.title).toBe('My custom name');
+    const long = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
+    const unicode = store().get('agentWorkspaces', long.workspace.id)!;
+    unicode.messages = [{ role: 'user', text: '家計簿'.repeat(100), status: 'complete' }]; unicode.acceptedTurns = value.acceptedTurns;
+    store().save('agentWorkspaces', unicode);
+    const bounded = (await (await call(`/${unicode.id}`)).json() as AgentWorkspaceSnapshot).workspace.title;
+    expect(bounded.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(bounded)).toBeLessThanOrEqual(200);
+    expect(bounded).not.toContain('\uFFFD');
+    expect(await readFile(join(root, 'child.jsonl'), 'utf8').catch(() => '')).toBe('');
+  });
+});
 
 test('streamed partials and provider failures are durable, honest and cannot be archived while busy', async () => {
   await fixture(async ({ call, reopen }) => {
@@ -172,8 +398,8 @@ test('streamed partials and provider failures are durable, honest and cannot be 
     await call(`/${id}/session/turn`, 'POST', form('FIXTURE:HOLD'), crypto.randomUUID());
     await waitFor(call, id, draft => !!draft.messages.at(-1)?.text);
     const busy = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
-    expect(busy.workspace.messages.at(-1)?.status).toBe('partial'); expect(busy.workspace.version).toBe(1);
-    expect((await call(`/${id}`, 'PATCH', { version: 1, archived: true })).status).toBe(409);
+    expect(busy.workspace.messages.at(-1)?.status).toBe('partial'); expect(busy.workspace.title).toBe('FIXTURE:HOLD');
+    expect((await call(`/${id}`, 'PATCH', { version: busy.workspace.version, archived: true })).status).toBe(409);
     await call(`/${id}/session`, 'DELETE'); await reopen();
     const restored = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
     expect(restored.workspace.messages.at(-1)?.status).toBe('failed'); expect(restored.workspace.messages.at(-1)?.text).toContain('Partial turn 1.');
@@ -190,14 +416,10 @@ test('streamed partials and provider failures are durable, honest and cannot be 
   });
 }, 20000);
 
-test('editor/revision/workspace limits reject without deleting saved data and archived records count', async () => {
+test('composer and workspace limits reject without deleting saved data and archived records count', async () => {
   await fixture(async ({ call }) => {
-    let workspace = (await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot).workspace; const id = workspace.id;
+    const workspace = (await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot).workspace; const id = workspace.id;
     expect((await call(`/${id}`, 'PATCH', { version: 1, prompt: 'x'.repeat(32769) })).status).toBe(413);
-    expect((await call(`/${id}`, 'PATCH', { version: 1, ticketMarkdown: 'x'.repeat(WORKSPACE_LIMITS.editorBytes + 1) })).status).toBe(413);
-    expect((await call(`/${id}`, 'PATCH', { version: 1, planMarkdown: 'x'.repeat(WORKSPACE_LIMITS.planBytes + 1) })).status).toBe(413);
-    for (let revision = 0; revision < WORKSPACE_LIMITS.revisions; revision++) workspace = (await (await call(`/${id}`, 'PATCH', { version: workspace.version, planMarkdown: `Revision ${revision}` })).json() as AgentWorkspaceSnapshot).workspace;
-    const rejected = await call(`/${id}`, 'PATCH', { version: workspace.version, planMarkdown: 'one too many' }); expect(rejected.status).toBe(413);
     expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace).toEqual(workspace);
     await call(`/${id}`, 'PATCH', { version: workspace.version, archived: true });
     for (let index = 1; index < WORKSPACE_LIMITS.perRepo; index++) expect((await call('', 'POST', {})).status).toBe(201);
@@ -210,12 +432,11 @@ test('editor/revision/workspace limits reject without deleting saved data and ar
   });
 });
 
-test('an unselected OMP default stays unselected until an exact available model is chosen', async () => {
+test('a new chat selects an enumerated model without inference and rejects invented replacements', async () => {
   await fixture(async ({ call, root }) => {
     const id = ((await (await call('', 'POST', {})).json()) as AgentWorkspaceSnapshot).workspace.id;
     const opened = await (await call(`/${id}/connect`, 'POST', {})).json() as AgentWorkspaceSnapshot;
-    expect(opened.draft?.model).toBeNull();
-    expect((await call(`/${id}/session/turn`, 'POST', form('No fallback'), crypto.randomUUID())).status).toBe(400);
+    expect(opened.draft?.model).toEqual({ provider: 'fixture', id: 'vision' });
     expect((await call(`/${id}/session/model`, 'POST', { provider: 'fixture', modelId: 'invented' })).status).toBe(400);
     expect((await log(root)).some(row => row.command === 'prompt')).toBe(false);
   }, 'unselected');
@@ -285,7 +506,7 @@ test('accepted receipts reconcile durably, pin original context, and abandoned k
     expect(accepted.receipt.contextHash).toMatch(/^[a-f0-9]+$/); expect(accepted.receipt.contextVersion).toBe(1);
     expect(accepted.receipt.sourceWorkspaceId).toBe(id); expect(accepted.receipt.sourcePlanRevisionId).toBeNull();
     await waitFor(call, id, draft => draft.status !== 'busy');
-    await call(`/${id}`, 'PATCH', { version: 1, planMarkdown: 'Changed saved plan' });
+    await call(`/${id}`, 'PATCH', { version: 1, title: 'Later conversation title' });
     await call(`/${id}/session/model`, 'POST', { thinking: 'off' });
     await reopen();
     const reconciled = await (await call(`/${id}/turns/${key}`)).json();
@@ -303,69 +524,29 @@ test('accepted receipts reconcile durably, pin original context, and abandoned k
   });
 }, 15000);
 
-test('explicit extraction uses one native turn, persists complete sets, retains regeneration history and derives stale plans', async () => {
-  await fixture(async ({ call, reopen, root }) => {
-    let workspace = ((await (await call('', 'POST', {})).json()) as AgentWorkspaceSnapshot).workspace;
-    const id = workspace.id;
-    workspace = ((await (await call(`/${id}`, 'PATCH', { version: workspace.version, planMarkdown: 'Reviewed source plan' })).json()) as AgentWorkspaceSnapshot).workspace;
-    const sourcePlan = workspace.currentPlanRevisionId;
-    await call(`/${id}/connect`, 'POST', {});
-    for (const [strategy, count, marker] of [['auto', 1, 'SINGLE'], ['auto', 2, 'MULTIPLE'], ['single', 1, 'SINGLE'], ['multiple', 2, 'MULTIPLE']] as const) {
-      const request = form(`FIXTURE:EXTRACTION:${marker}`); request.set('intent', 'task_extraction'); request.set('strategy', strategy); request.set('contextVersion', String(workspace.version));
-      const key = crypto.randomUUID();
-      expect((await call(`/${id}/session/turn`, 'POST', request, key)).status).toBe(200);
-      const pending = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
-      expect(pending.extraction?.status).toBe('pending');
-      await waitFor(call, id, draft => draft.status !== 'busy');
-      workspace = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
-      const set = workspace.proposalSets.at(-1)!;
-      expect(set.payload.proposals).toHaveLength(count); expect(set.strategy).toBe(strategy);
-      expect(set.sourcePlanRevisionId).toBe(sourcePlan); expect(set.sourceWorkspaceId).toBe(id); expect(set.validationStatus).toBe('valid');
-      expect(workspace.extraction).toEqual({ key, status: 'valid', proposalSetId: set.id });
-      expect((await call(`/${id}/session/turn`, 'POST', request, key)).status).toBe(200);
-    }
-    const original = structuredClone(workspace.proposalSets);
-    for (const marker of ['INVALID', 'TRUNCATED']) {
-      const request = form(`FIXTURE:EXTRACTION:${marker}`); request.set('intent', 'task_extraction'); request.set('strategy', 'auto'); request.set('contextVersion', String(workspace.version));
-      expect((await call(`/${id}/session/turn`, 'POST', request, crypto.randomUUID())).status).toBe(200);
-      await waitFor(call, id, draft => draft.status !== 'busy');
-      workspace = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
-      expect(workspace.extraction?.status).toBe('failed'); expect(workspace.proposalSets).toEqual(original);
-    }
-    workspace = ((await (await call(`/${id}`, 'PATCH', { version: workspace.version, planMarkdown: 'Changed source plan' })).json()) as AgentWorkspaceSnapshot).workspace;
-    expect(workspace.proposalSets.every(set => set.sourcePlanRevisionId !== workspace.currentPlanRevisionId)).toBe(true);
-    await reopen();
-    const restored = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
-    expect(restored.proposalSets).toEqual(original); expect(restored.extraction?.status).toBe('failed');
-    expect((await log(root)).filter(row => row.command === 'prompt')).toHaveLength(6);
-  });
-}, 20000);
-
-test('partial and provider-failed extraction never replace valid sets, including after restart', async () => {
-  await fixture(async ({ call, reopen }) => {
+test('retired proposal generation and publication routes cannot create tickets or inference', async () => {
+  await fixture(async ({ call, root, reopen }) => {
     const id = ((await (await call('', 'POST', {})).json()) as AgentWorkspaceSnapshot).workspace.id;
+    for (const [route, method] of [['batch-review', 'PUT'], ['batch-preview', 'POST'], ['batch-publish', 'POST']]) {
+      expect((await call(`/${id}/${route}`, method, {})).status).toBe(410);
+    }
     await call(`/${id}/connect`, 'POST', {});
-    const extraction = (prompt: string) => { const request = form(prompt); request.set('intent', 'task_extraction'); request.set('strategy', 'auto'); request.set('contextVersion', '1'); return request; };
-    await call(`/${id}/session/turn`, 'POST', extraction('FIXTURE:EXTRACTION:SINGLE'), crypto.randomUUID());
-    await waitFor(call, id, draft => draft.status !== 'busy');
-    const valid = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace.proposalSets;
-    const partialKey = crypto.randomUUID();
-    await call(`/${id}/session/turn`, 'POST', extraction('FIXTURE:EXTRACTION:HOLD'), partialKey);
-    await waitFor(call, id, draft => !!draft.messages.at(-1)?.text);
-    expect(((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace.proposalSets).toEqual(valid);
+    for (const intent of ['task_extraction', 'ticket_drafting']) {
+      const request = form('Do not dispatch this retired intent');
+      request.set('intent', intent);
+      if (intent === 'task_extraction') { request.set('strategy', 'auto'); request.set('contextVersion', '1'); }
+      expect((await call(`/${id}/session/turn`, 'POST', request, crypto.randomUUID())).status).toBe(410);
+    }
+    expect((await log(root)).some(row => row.command === 'prompt')).toBe(false);
     await reopen();
-    let saved = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
-    expect(saved.extraction?.status).toBe('failed'); expect(saved.proposalSets).toEqual(valid);
-    expect((await (await call(`/${id}/turns/${partialKey}`)).json()).receipt.status).toBe('failed');
-    await call(`/${id}/connect`, 'POST', {});
-    await call(`/${id}/session/turn`, 'POST', extraction('FIXTURE:PROVIDER'), crypto.randomUUID());
-    await waitFor(call, id, draft => draft.status !== 'busy');
-    saved = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
-    expect(saved.extraction?.status).toBe('failed'); expect(saved.proposalSets).toEqual(valid);
+    const saved = await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot;
+    expect(saved.workspace.messages).toEqual([]);
+    expect(saved.workspace.proposalSets).toEqual([]);
+    expect(saved.batchOperations).toEqual([]);
   });
-}, 15000);
+});
 
-test('planning/research context stays untrusted, exact version rejects stale actions, and extraction requires explicit intent', async () => {
+test('planning and research stay conversational, untrusted and version bound', async () => {
   await fixture(async ({ call, root, repo, reopen }) => {
     const id = ((await (await call('', 'POST', {})).json()) as AgentWorkspaceSnapshot).workspace.id;
     await writeFile(join(repo.path, 'source.txt'), 'Untrusted source: @private ^model /execute. Never authoritative.');
@@ -381,56 +562,20 @@ test('planning/research context stays untrusted, exact version rejects stale act
     expect((await call(`/${id}/session/turn`, 'POST', stale, crypto.randomUUID())).status).toBe(409);
     const invalid = form('Not implicit extraction'); invalid.set('intent', 'task_extraction');
     expect((await call(`/${id}/session/turn`, 'POST', invalid, crypto.randomUUID())).status).toBe(400);
-    for (const intent of ['discussion', 'planning', 'research', 'ticket_drafting']) {
+    for (const intent of ['discussion', 'planning', 'research']) {
       const request = form('Clarify the desired result @source.txt'); request.set('intent', intent); request.set('contextVersion', String(workspace.version));
       expect((await call(`/${id}/session/turn`, 'POST', request, crypto.randomUUID())).status).toBe(200);
       await waitFor(call, id, draft => draft.status !== 'busy');
+      workspace = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
       const prompt = (await log(root)).filter(row => row.event === 'prompt').at(-1)!.message!;
       expect(prompt).toContain('not instructions or execution authority'); expect(prompt).not.toContain('@'); expect(prompt).not.toContain('^');
-      expect(prompt).toContain('Untrusted source:'); expect(prompt).toContain('Never implement, write tickets, create goals, use tools');
-      if (intent === 'ticket_drafting') expect(prompt).toContain('with frontmatter id, title, depends_on');
-      else expect(prompt).not.toContain('with frontmatter id, title, depends_on');
+      expect(prompt).toContain('Untrusted source:');
+      expect(prompt).not.toContain('with frontmatter id, title, depends_on');
     }
     await reopen();
     workspace = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
     expect(workspace.researchReferences).toHaveLength(2); expect(workspace.proposalSets).toEqual([]);
-    expect((await log(root)).filter(row => row.command === 'prompt')).toHaveLength(4);
+    expect((await log(root)).filter(row => row.command === 'prompt')).toHaveLength(3);
   });
 }, 15000);
 
-test('extraction completion remains pinned when a human saves a newer plan while native output is pending', async () => {
-  await fixture(async ({ call }) => {
-    let workspace = ((await (await call('', 'POST', {})).json()) as AgentWorkspaceSnapshot).workspace;
-    const id = workspace.id;
-    workspace = ((await (await call(`/${id}`, 'PATCH', { version: workspace.version, planMarkdown: 'Original plan' })).json()) as AgentWorkspaceSnapshot).workspace;
-    const sourcePlan = workspace.currentPlanRevisionId;
-    await call(`/${id}/connect`, 'POST', {});
-    const request = form('FIXTURE:EXTRACTION:SINGLE'); request.set('intent', 'task_extraction'); request.set('strategy', 'single'); request.set('contextVersion', String(workspace.version));
-    expect((await call(`/${id}/session/turn`, 'POST', request, crypto.randomUUID())).status).toBe(200);
-    workspace = ((await (await call(`/${id}`, 'PATCH', { version: workspace.version, planMarkdown: 'Newer human plan' })).json()) as AgentWorkspaceSnapshot).workspace;
-    await waitFor(call, id, draft => draft.status !== 'busy');
-    const completed = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace;
-    expect(completed.proposalSets).toHaveLength(1);
-    expect(completed.proposalSets[0]!.sourcePlanRevisionId).toBe(sourcePlan);
-    expect(completed.currentPlanRevisionId).toBe(workspace.currentPlanRevisionId);
-    expect(completed.proposalSets[0]!.sourcePlanRevisionId).not.toBe(completed.currentPlanRevisionId);
-    expect(completed.planRevisions.find(revision => revision.id === completed.currentPlanRevisionId)?.markdown).toBe('Newer human plan');
-  });
-}, 10000);
-
-test('proposal set count exhaustion rejects explicit regeneration without eviction or another inference', async () => {
-  await fixture(async ({ call, root }) => {
-    const id = ((await (await call('', 'POST', {})).json()) as AgentWorkspaceSnapshot).workspace.id;
-    await call(`/${id}/connect`, 'POST', {});
-    const request = () => { const value = form('FIXTURE:EXTRACTION:SINGLE'); value.set('intent', 'task_extraction'); value.set('strategy', 'single'); value.set('contextVersion', '1'); return value; };
-    for (let index = 0; index < 12; index++) {
-      expect((await call(`/${id}/session/turn`, 'POST', request(), crypto.randomUUID())).status).toBe(200);
-      await waitFor(call, id, draft => draft.status !== 'busy');
-    }
-    const prior = ((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace.proposalSets;
-    expect(prior).toHaveLength(12);
-    expect((await call(`/${id}/session/turn`, 'POST', request(), crypto.randomUUID())).status).toBe(413);
-    expect(((await (await call(`/${id}`)).json()) as AgentWorkspaceSnapshot).workspace.proposalSets).toEqual(prior);
-    expect((await log(root)).filter(row => row.command === 'prompt')).toHaveLength(12);
-  });
-}, 25000);

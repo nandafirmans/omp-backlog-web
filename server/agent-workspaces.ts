@@ -1,15 +1,15 @@
 import { mkdir, open, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AgentWorkspace, AgentWorkspaceRecord, AgentWorkspaceSnapshot, AgentWorkspaceSummary, WorkspaceTurnReceipt } from './agent-workspace-contracts';
+import type { AgentWorkspace, AgentWorkspaceRecord, AgentWorkspaceSnapshot, AgentWorkspaceSummary, ResponseOperation, WorkspaceTurnReceipt } from './agent-workspace-contracts';
 import type { Repo, Store } from './contracts';
-import type { DraftContext, DraftSnapshot, DraftTurnOptions } from './drafting-contracts';
-import { createWorkspaceDraft, handleDraftRequest, readDraftBody, workspaceDraftSnapshot } from './drafting';
+import type { DraftContext, DraftSnapshot } from './drafting-contracts';
+import { createWorkspaceDraft, discoverExecutionModels, handleDraftRequest, readDraftBody, workspaceDraftSnapshot } from './drafting';
 import { groupMembers, identity } from './process-identity';
 import { database, digest } from './store';
 import { HttpError, MAX_ATTACHMENTS_TOTAL } from './tickets';
 import { researchRepository } from './agent-research';
-import { EXTRACTION_LIMITS, extractionInstruction, validateTaskExtraction } from './task-extraction';
-import { inspectBatch, operationFor, previewBatch, publicOperation, publishBatch, recoverBatch, saveBatchReview } from './batch-publication';
+import { inspectBatch, operationFor, publicOperation, recoverBatch } from './batch-publication';
+import { acceptResponseOperation, activeResponseOwner, responseOperations } from './response-operations';
 
 export const WORKSPACE_LIMITS = { perRepo: 16, global: 64, revisions: 32, editorBytes: 256 * 1024, planBytes: 32 * 1024, historyBytes: 512 * 1024, messages: 128, turns: 64, contextBytes: 64 * 1024, contextMessages: 12 } as const;
 const live = new Map<string, { store: Store; draftId: string }>();
@@ -33,9 +33,27 @@ function record(store: Store, repo: Repo, id: string): AgentWorkspaceRecord {
   });
   return value;
 }
+function nameConversation(value: AgentWorkspaceRecord): void {
+  if (value.title !== 'Untitled workspace' || value.titleSource === 'manual') return;
+  const turn = value.acceptedTurns.find(turn => turn.intent !== 'task_extraction');
+  const message = turn && value.messages[turn.userMessageIndex];
+  if (message?.role !== 'user') return;
+  const line = message.text.split(/\r?\n/).map(line => line.trim().replace(/^#{1,6}\s+/, '')).find(line => line && !line.startsWith('/skill:'));
+  if (!line) return;
+  const text = line.replace(/!\[([^\]]*)\]\([^)]*\)|\[([^\]]*)\]\([^)]*\)/g, '$1$2').replace(/[*`_]/g, '').replace(/\s+/g, ' ').trim();
+  let title = '';
+  let characters = 0;
+  for (const character of text) {
+    if (bytes(title + character) > 180 || characters >= 72) { title = title.trimEnd() + '…'; break; }
+    title += character; characters++;
+  }
+  if (!title || title === value.title) return;
+  value.title = title; value.titleSource = 'automatic'; value.version++;
+}
 function publicWorkspace(value: AgentWorkspaceRecord): AgentWorkspace {
   return {
     id: value.id, repoId: value.repoId, title: value.title, createdAt: value.createdAt,
+    titleSource: value.titleSource,
     updatedAt: value.updatedAt, archived: value.archived, version: value.version,
     prompt: value.prompt, ticketMarkdown: value.ticketMarkdown,
     currentPlanRevisionId: value.currentPlanRevisionId, planRevisions: value.planRevisions,
@@ -55,13 +73,17 @@ function native(store: Store, repo: Repo, id: string): DraftSnapshot | null {
 function snapshot(store: Store, repo: Repo, id: string): AgentWorkspaceSnapshot {
   const draft = native(store, repo, id);
   const value = record(store, repo, id);
+  const version = value.version;
+  nameConversation(value);
+  if (value.version !== version) store.save('agentWorkspaces', value);
   if (!draft && value.messages.some(message => message.status === 'partial')) {
     value.messages = value.messages.map(message => message.status === 'partial' ? { ...message, status: 'failed' } : message);
     settleTurns(value, 'Native session disconnected before completion; no inference was replayed.');
     value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
   }
   const rows = database(store).query<{ value: string }, [string, string, string, number]>("SELECT value FROM records WHERE kind='batchOperations' AND json_extract(value,'$.repoId')=? AND json_extract(value,'$.repoPath')=? AND json_extract(value,'$.workspaceId')=? ORDER BY CASE WHEN json_extract(value,'$.state') IN ('publishing','blocked') OR (json_extract(value,'$.state')='prepared' AND coalesce(json_extract(value,'$.invalidated'),0)=0 AND json_extract(value,'$.expires')>?) THEN 0 ELSE 1 END, rowid DESC LIMIT 128").all(repo.id, repo.path, id, Date.now());
-  return { workspace: publicWorkspace(value), draft, batchOperations: rows.reverse().map(row => publicOperation(JSON.parse(row.value), store)) };
+  const eligibleResponseIndices = value.acceptedTurns.filter(turn => turn.status === 'complete' && turn.intent !== 'task_extraction' && (turn.model || value.model) && value.messages[turn.assistantMessageIndex]?.role === 'assistant' && value.messages[turn.assistantMessageIndex]?.status === 'complete' && value.messages[turn.assistantMessageIndex]?.text.trim()).map(turn => turn.assistantMessageIndex);
+  return { workspace: publicWorkspace(value), draft, eligibleResponseIndices, responseOperations: responseOperations(store, repo, id), batchOperations: rows.reverse().map(row => publicOperation(JSON.parse(row.value), store)) };
 }
 function detached(value: AgentWorkspaceRecord): DraftSnapshot {
   return { id: value.id, status: 'stopped', models: [], model: value.model, thinking: value.thinking, thinkingLevels: [], messages: value.messages, error: 'No native session is connected. Saved text is retained; Connect never replays inference.' };
@@ -78,10 +100,10 @@ function editorLimit(value: AgentWorkspaceRecord): void {
   if (bytes(value.prompt) > 32768 || value.planRevisions.some(revision => bytes(revision.markdown) > WORKSPACE_LIMITS.planBytes)
     || bytes(value.title) + bytes(value.prompt) + bytes(value.ticketMarkdown) + value.planRevisions.reduce((total, revision) => total + bytes(revision.markdown), 0) > WORKSPACE_LIMITS.editorBytes) throw new HttpError(413, 'Workspace editor text exceeds its 256 KiB total, 32 KiB prompt or 32 KiB plan limit; saved text was not changed');
 }
-function savedContext(value: AgentWorkspaceRecord, includeHistory: boolean, turn: DraftTurnOptions): { message: string; context: DraftContext; instruction?: string } {
+function savedContext(value: AgentWorkspaceRecord, includeHistory: boolean): { message: string; context: DraftContext } {
   const plan = value.planRevisions.find(revision => revision.id === value.currentPlanRevisionId);
   const messages = includeHistory ? value.messages.slice(-WORKSPACE_LIMITS.contextMessages).map(message => ({ ...message })) : [];
-  const data = { plan: plan ? { id: plan.id, markdown: plan.markdown, approved: plan.approvedAt !== undefined } : null, messages, research: value.researchResults };
+  const data = { plan: plan ? { id: plan.id, markdown: plan.markdown, approved: plan.approvedAt !== undefined } : null, messages, research: value.researchResults, ticketQuestions: (value.responseOperations ?? []).filter(op => op.state === 'clarification').map(({ responseIndex, questions }) => ({ responseIndex, questions })) };
   const encoded = () => JSON.stringify(data).replaceAll('@', '\\u0040').replaceAll('^', '\\u005e');
   while (bytes(encoded()) > WORKSPACE_LIMITS.contextBytes && messages.length) messages.shift();
   let planTruncated = false;
@@ -91,9 +113,8 @@ function savedContext(value: AgentWorkspaceRecord, includeHistory: boolean, turn
   }
   if (bytes(encoded()) > WORKSPACE_LIMITS.contextBytes) throw new HttpError(413, 'Saved research exceeds the bounded encoded context; nothing was sent');
   const message = encoded();
-  const instruction = turn.intent === 'task_extraction' ? extractionInstruction({ workspaceId: value.id, planRevisionId: value.currentPlanRevisionId, strategy: turn.strategy!, referenceIds: value.researchReferences.map(reference => reference.id) }) : undefined;
   const omitted = value.messages.length - messages.length;
-  return { message, instruction, context: { key: 'workspace:history', label: 'Saved discussion, plan and host research', status: 'ready', detail: `${includeHistory ? `Seeds ${messages.length} latest saved messages on the next Send; ${omitted} older/oversized messages omitted` : 'Conversation already seeded in this native session; saved messages are not retransmitted'}. Supplies the current plan and explicitly retrieved research as untrusted JSON, at most 64 KiB total (plan at most 32 KiB); plan ${planTruncated ? 'truncated to fit encoded context' : 'supplied in full'}; no hidden summary. Previously transmitted image bytes and old file contents are not replayed. The native session retains its own already-sent turns until disconnected.` } };
+  return { message, context: { key: 'workspace:history', label: 'Saved conversation and host research', status: 'ready', detail: `${includeHistory ? `Seeds ${messages.length} latest saved messages on the next Send; ${omitted} older/oversized messages omitted` : 'Conversation already seeded in this native session; saved messages are not retransmitted'}. Supplies retained historical plan and retrieved research as untrusted JSON, at most 64 KiB total; plan ${planTruncated ? 'truncated to fit encoded context' : 'supplied in full'}. Previously transmitted image bytes and old file contents are not replayed.` } };
 }
 function settleTurns(value: AgentWorkspaceRecord, disconnectedError?: string): void {
   for (const turn of value.acceptedTurns) {
@@ -106,15 +127,8 @@ function settleTurns(value: AgentWorkspaceRecord, disconnectedError?: string): v
       continue;
     }
     turn.status = 'complete';
-    if (turn.intent !== 'task_extraction') continue;
-    try {
-      const payload = validateTaskExtraction(message.text, { workspaceId: value.id, planRevisionId: turn.sourcePlanRevisionId, strategy: turn.strategy!, referenceIds: turn.researchReferenceIds });
-      if (value.proposalSets.length >= EXTRACTION_LIMITS.sets || bytes(JSON.stringify(value.proposalSets)) + bytes(JSON.stringify(payload)) + bytes(JSON.stringify(value.researchReferences)) > EXTRACTION_LIMITS.storedBytes) throw new Error('Proposal set storage limit reached; previous sets were retained.');
-      const set = { id: crypto.randomUUID(), strategy: payload.strategy, sourceWorkspaceId: value.id, sourcePlanRevisionId: turn.sourcePlanRevisionId, createdAt: Date.now(), validationStatus: 'valid' as const, payload, researchReferences: structuredClone(value.researchReferences.filter(reference => turn.researchReferenceIds.includes(reference.id))) };
-      value.proposalSets.push(set); turn.proposalSetId = set.id;
-      value.extraction = { key: turn.key, status: 'valid', proposalSetId: set.id };
-    } catch (error) {
-      turn.status = 'failed'; turn.error = error instanceof Error ? error.message : 'Task extraction validation failed; previous sets were retained.';
+    if (turn.intent === 'task_extraction') {
+      turn.status = 'failed'; turn.error = 'Legacy proposal extraction was retired. Create tickets from a completed chat response.';
       value.extraction = { key: turn.key, status: 'failed', error: turn.error };
     }
   }
@@ -122,6 +136,7 @@ function settleTurns(value: AgentWorkspaceRecord, disconnectedError?: string): v
 function saveNative(store: Store, repo: Repo, id: string, draft: DraftSnapshot): void {
   const value = record(store, repo, id);
   value.messages = structuredClone(draft.messages);
+  nameConversation(value);
   if (draft.model) {
     if (value.model && (value.model.provider !== draft.model.provider || value.model.id !== draft.model.id || value.thinking !== draft.thinking)) value.version++;
     value.model = { ...draft.model }; value.thinking = draft.thinking;
@@ -135,6 +150,7 @@ export async function assertWorkspaceOwners(store: Store): Promise<void> {
   await mkdir(directory, { recursive: true, mode: 0o700 });
   for (const entry of await readdir(directory)) {
     if (!entry.endsWith('.json')) continue;
+    if (activeResponseOwner(store, entry)) continue;
     const id = entry.slice(0, -5);
     const binding = live.get(keyFor(store, id));
     if (binding?.store === store) continue;
@@ -163,12 +179,12 @@ async function connect(store: Store, repo: Repo, id: string): Promise<AgentWorks
   try {
     const draft = await createWorkspaceDraft(store, repo, {
       messages: value.messages, model: value.model, thinking: value.thinking,
-      context: turn => savedContext(record(store, repo, id), !seeded, turn),
+      context: () => savedContext(record(store, repo, id), !seeded),
       validateTurn: (prompt, turn) => {
         const current = record(store, repo, id);
         if (current.archived) throw new HttpError(409, 'Archived workspace cannot send');
         if (turn.contextVersion !== undefined && turn.contextVersion !== current.version) throw new HttpError(409, 'Saved workspace context changed; nothing was accepted. Discard this unaccepted request and prepare a new explicit action.');
-        if (turn.intent === 'task_extraction' && (current.proposalSets.length >= EXTRACTION_LIMITS.sets || bytes(JSON.stringify(current.proposalSets)) + EXTRACTION_LIMITS.payloadBytes > EXTRACTION_LIMITS.storedBytes)) throw new HttpError(413, 'Proposal set storage limit reached; saved sets were retained');
+        if (turn.intent === 'task_extraction' || turn.intent === 'ticket_drafting') throw new HttpError(410, 'Legacy proposal extraction and ticket drafting were removed. Discuss the outcome, then use Create tickets beneath a completed response.');
         if (current.acceptedTurns.length >= WORKSPACE_LIMITS.turns || current.messages.length + 2 > WORKSPACE_LIMITS.messages
           || current.messages.reduce((total, message) => total + bytes(message.text), 0) + bytes(prompt) + 256 * 1024 > WORKSPACE_LIMITS.historyBytes) throw new HttpError(413, 'Workspace history limit reached; saved history is retained. Create another workspace to continue.');
       },
@@ -177,13 +193,13 @@ async function connect(store: Store, repo: Repo, id: string): Promise<AgentWorks
         if (!receipt) throw new HttpError(409, 'Turn has no idempotency reservation');
         store.transaction(() => {
           const current = record(store, repo, id);
-          const acceptedTurn: WorkspaceTurnReceipt = { ...receipt, contextHash: turn.contextHash, contextVersion: current.version, acceptedAt: Date.now(), intent: turn.intent, ...(turn.strategy ? { strategy: turn.strategy } : {}), sourceWorkspaceId: id, sourcePlanRevisionId: current.currentPlanRevisionId, model: structuredClone(draft.model), thinking: draft.thinking, researchReferenceIds: current.researchReferences.map(reference => reference.id), userMessageIndex: draft.messages.length - 2, assistantMessageIndex: draft.messages.length - 1, status: 'accepted' };
+          const acceptedTurn: WorkspaceTurnReceipt = { ...receipt, contextHash: turn.contextHash, contextVersion: current.version, acceptedAt: Date.now(), intent: turn.intent, ...(turn.strategy ? { strategy: turn.strategy } : {}), sourceWorkspaceId: id, sourcePlanRevisionId: current.currentPlanRevisionId, model: structuredClone(draft.model), thinking: draft.thinking, researchReferenceIds: current.researchReferences.map(reference => reference.id), userMessageIndex: draft.messages.length - 2, assistantMessageIndex: draft.messages.length - 1, status: 'accepted', sourceContext: { plan: structuredClone(current.planRevisions.find(plan => plan.id === current.currentPlanRevisionId) ?? null), research: structuredClone(current.researchResults), preparedMessage: turn.preparedMessage, preparedImages: turn.preparedImages, uploads: turn.uploads } };
           current.acceptedTurns.push(acceptedTurn);
           // An accepted chat turn is already durable in messages. Clear the saved
           // composer so reconnect/reload starts with a blank draft, just like OMP CLI.
           // Never clear a newer human edit or the synthetic task-extraction prompt.
           const submitted = draft.messages[acceptedTurn.userMessageIndex]?.text;
-          if (turn.intent !== 'task_extraction' && submitted?.trim() && current.prompt === submitted) {
+          if (turn.intent !== 'task_extraction' && submitted?.trim() && current.prompt.replace(/\r\n?/g, '\n') === submitted.replace(/\r\n?/g, '\n')) {
             current.prompt = '';
             current.version++;
           }
@@ -194,6 +210,15 @@ async function connect(store: Store, repo: Repo, id: string): Promise<AgentWorks
         seeded = true;
       },
       changed: draft => saveNative(store, repo, id, draft),
+      research: result => {
+        const current = record(store, repo, id);
+        const active = current.acceptedTurns.findLast(turn => turn.status === 'accepted');
+        if (!active?.sourceContext) throw new Error('Research has no accepted conversation turn');
+        const retained = current.acceptedTurns.reduce((total, turn) => total + bytes(JSON.stringify(turn.sourceContext?.exploration ?? [])), 0);
+        if (retained + bytes(result) > 256 * 1024) throw new Error('Retained exploration context limit reached');
+        (active.sourceContext.exploration ??= []).push(result);
+        store.save('agentWorkspaces', current);
+      },
       spawned: async pid => {
         spawnedPid = pid;
         const owner = await identity(pid);
@@ -226,7 +251,13 @@ async function turnReceipt(request: Request): Promise<TurnReceipt> {
 
 export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, request: Request, segments: string[]): Promise<Response> {
   const id = segments[4]; const action = segments[5];
-  if (segments.length === 4 && request.method === 'GET') return json(store.list('agentWorkspaces').filter(value => value.repoId === repo.id && value.repoPath === repo.path).sort((a, b) => b.updatedAt - a.updatedAt).map(summary));
+  if (segments.length === 4 && request.method === 'GET') return json(store.list('agentWorkspaces').filter(value => value.repoId === repo.id && value.repoPath === repo.path).sort((a, b) => b.updatedAt - a.updatedAt).map(value => {
+    const normalized = record(store, repo, value.id);
+    const version = normalized.version;
+    nameConversation(normalized);
+    if (normalized.version !== version) store.save('agentWorkspaces', normalized);
+    return summary(normalized);
+  }));
   if (segments.length === 4 && request.method === 'POST') {
     const input = await payload(request, ['title']);
     if (input.title !== undefined && (typeof input.title !== 'string' || !input.title.trim() || bytes(input.title) > 200)) throw new HttpError(400, 'Workspace title must be nonempty text no larger than 200 bytes');
@@ -235,31 +266,59 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
       if (all.length >= WORKSPACE_LIMITS.global || all.filter(value => value.repoId === repo.id).length >= WORKSPACE_LIMITS.perRepo) throw new HttpError(429, 'Workspace count limit reached (16 per repository, 64 global, including archived); existing workspaces were retained');
       const now = Date.now();
       const value: AgentWorkspaceRecord = { id: crypto.randomUUID(), repoId: repo.id, repoPath: repo.path, title: typeof input.title === 'string' ? input.title.trim() : 'Untitled workspace', createdAt: now, updatedAt: now, archived: false, version: 1, prompt: '', ticketMarkdown: '', currentPlanRevisionId: null, planRevisions: [], messages: [], model: null, thinking: '', acceptedTurns: [], rejectedTurns: [], researchReferences: [], researchResults: [], proposalSets: [], extraction: null };
+      if (typeof input.title === 'string') value.titleSource = 'manual';
       store.save('agentWorkspaces', value); return value;
     });
     return json({ workspace: publicWorkspace(workspace), draft: null }, 201);
   }
   record(store, repo, id || '');
-  if (segments.length === 6 && action === 'batch-review' && request.method === 'PUT') {
-    const input = await payload(request, ['version', 'reviewVersion', 'proposalSetId', 'proposals', 'selectedKeys']);
-    const review = saveBatchReview(store, repo, id!, input);
-    return json({ ...snapshot(store, repo, id!), review });
+  if (segments.length === 8 && action === 'attachments' && request.method === 'GET') {
+    const index = Number(segments[6]);
+    if (!Number.isSafeInteger(index) || index < 0) throw new HttpError(400, 'Invalid attachment message');
+    const value = record(store, repo, id!);
+    const upload = value.acceptedTurns.filter(turn => turn.userMessageIndex <= index).reverse().flatMap(turn => turn.sourceContext?.uploads ?? []).find(file => file.name === segments[7]);
+    if (!upload) throw new HttpError(404, 'Attachment bytes were not retained with this conversation');
+    return new Response(Buffer.from(upload.data, 'base64'), { headers: { 'Content-Type': 'application/octet-stream', 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(upload.name)}`, 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; sandbox", 'Cache-Control': 'no-store' } });
   }
+  if (segments.length === 8 && action === 'responses' && segments[7] === 'models' && request.method === 'POST') {
+    const input = await payload(request, ['model']);
+    if (input.model !== undefined && (typeof input.model !== 'string' || input.model.length > 385 || /\p{Cc}/u.test(input.model))) throw new HttpError(400, 'Invalid generation model');
+    if (!/^(0|[1-9]\d*)$/.test(segments[6]!)) throw new HttpError(400, 'Invalid response index');
+    const value = record(store, repo, id!);
+    const index = Number(segments[6]);
+    const turn = value.acceptedTurns.find(turn => turn.assistantMessageIndex === index);
+    if (!turn || turn.status !== 'complete' || value.messages[index]?.role !== 'assistant' || value.messages[index]?.status !== 'complete') throw new HttpError(409, 'Choose a completed assistant response');
+    const discovery = await discoverExecutionModels(store.settings().executable, typeof input.model === 'string' ? input.model : '');
+    const saved = value.responseOperations?.find(op => op.responseIndex === index)?.generation ?? { model: turn.model ?? value.model, thinking: turn.thinking };
+    return json({ ...discovery, saved, requiresImages: value.acceptedTurns.some(turn => turn.assistantMessageIndex <= index && !!turn.sourceContext?.preparedImages.length) });
+  }
+  if ((segments.length === 8 || segments.length === 9 && segments[8] === 'retry') && action === 'responses' && segments[7] === 'tickets' && request.method === 'POST') {
+    const input = await payload(request, ['model', 'thinking']);
+    let selection: ResponseOperation['generation'];
+    if (input.model !== undefined || input.thinking !== undefined) {
+      if (typeof input.model !== 'string' || !input.model.includes('/') || input.model.length > 385 || /\p{Cc}/u.test(input.model)
+        || typeof input.thinking !== 'string' || !input.thinking || input.thinking.length > 32 || /\p{Cc}/u.test(input.thinking)) throw new HttpError(400, 'Choose an explicit generation model and thinking level');
+      const separator = input.model.indexOf('/');
+      const model = { provider: input.model.slice(0, separator), id: input.model.slice(separator + 1) };
+      if (!model.provider || model.provider.length > 128 || !model.id || model.id.length > 256) throw new HttpError(400, 'Invalid generation model');
+      selection = { model, thinking: input.thinking };
+    }
+    if (!/^(0|[1-9]\d*)$/.test(segments[6]!)) throw new HttpError(400, 'Invalid response index');
+    const retry = segments.length === 9;
+    if (retry) {
+      responseOperations(store, repo, id!);
+      await assertWorkspaceOwners(store);
+    }
+    acceptResponseOperation(store, repo, id!, Number(segments[6]), retry, selection);
+    return json(snapshot(store, repo, id!), 202);
+  }
+  if (['batch-review', 'batch-preview', 'batch-publish'].includes(action) && request.method !== 'GET') throw new HttpError(410, 'Legacy proposal review and publication were removed. Use Create tickets beneath a completed chat response.');
   if (segments.length === 7 && action === 'batch-operations' && request.method === 'GET') return json(publicOperation(operationFor(store, repo, id!, segments[6]!), store));
   if (segments.length === 8 && action === 'batch-operations' && segments[7] === 'inspect' && request.method === 'GET') return json(await inspectBatch(store, repo, id!, segments[6]!));
   if (segments.length === 8 && action === 'batch-operations' && segments[7] === 'recover' && request.method === 'POST') {
     const input = await payload(request, ['confirm']);
     if (input.confirm !== true) throw new HttpError(400, 'Explicit recovery confirmation is required');
     return json(publicOperation(await recoverBatch(store, repo, id!, segments[6]!), store));
-  }
-  if (segments.length === 6 && action === 'batch-preview' && request.method === 'POST') {
-    const input = await payload(request, ['version', 'reviewId', 'reviewVersion', 'acknowledgeStalePlan']);
-    return json(publicOperation(await previewBatch(store, repo, id!, input), store));
-  }
-  if (segments.length === 6 && action === 'batch-publish' && request.method === 'POST') {
-    const input = await payload(request, ['confirmation']);
-    if (typeof input.confirmation !== 'string') throw new HttpError(400, 'Confirmation is required');
-    return json(publicOperation(await publishBatch(store, repo, id!, input.confirmation), store));
   }
   if (segments.length === 5 && request.method === 'GET') return json(snapshot(store, repo, id!));
   if (segments.length === 7 && action === 'turns' && request.method === 'GET') {
@@ -268,13 +327,14 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
     const turn = value.acceptedTurns.find(turn => turn.key === segments[6]);
     if (!turn) return json(value.rejectedTurns.includes(segments[6]!) ? { accepted: false, resolved: true, status: 'rejected' } : { accepted: false });
     const receipt: Omit<WorkspaceTurnReceipt, 'hash'> & { hash?: string } = { ...turn };
-    delete receipt.hash;
+    delete receipt.hash; delete receipt.sourceContext;
     return json({ accepted: true, receipt });
   }
   if (segments.length === 5 && request.method === 'PATCH') {
     const input = await payload(request, ['version', 'title', 'archived', 'prompt', 'ticketMarkdown', 'planMarkdown', 'approvePlanRevisionId']);
+    if (['ticketMarkdown', 'planMarkdown', 'approvePlanRevisionId'].some(field => field in input)) throw new HttpError(410, 'Legacy plan and ticket editors were removed. Plans belong in chat; edit saved tickets in their ticket editor.');
     if (!Number.isSafeInteger(input.version)) throw new HttpError(400, 'A workspace editor version is required');
-    for (const field of ['title', 'prompt', 'ticketMarkdown', 'planMarkdown', 'approvePlanRevisionId']) if (input[field] !== undefined && typeof input[field] !== 'string') throw new HttpError(400, `${field} must be text`);
+    for (const field of ['title', 'prompt']) if (input[field] !== undefined && typeof input[field] !== 'string') throw new HttpError(400, `${field} must be text`);
     if (input.archived !== undefined && typeof input.archived !== 'boolean') throw new HttpError(400, 'archived must be boolean');
     if (typeof input.title === 'string' && (!input.title.trim() || bytes(input.title) > 200)) throw new HttpError(400, 'Workspace title must be nonempty text no larger than 200 bytes');
     const operationKey = keyFor(store, id!);
@@ -283,23 +343,9 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
       const value = record(store, repo, id!);
       if (value.version !== input.version) throw new HttpError(409, 'Workspace changed in another editor; reload before saving');
       if (input.archived === true && native(store, repo, id!)?.status === 'busy') throw new HttpError(409, 'Stop the native turn explicitly before archiving');
-      if (typeof input.title === 'string') value.title = input.title.trim();
+      if (typeof input.title === 'string') { value.title = input.title.trim(); value.titleSource = 'manual'; }
       if (typeof input.archived === 'boolean') value.archived = input.archived;
       if (typeof input.prompt === 'string') value.prompt = input.prompt;
-      if (typeof input.ticketMarkdown === 'string') value.ticketMarkdown = input.ticketMarkdown;
-      if (typeof input.planMarkdown === 'string') {
-        const current = value.planRevisions.find(revision => revision.id === value.currentPlanRevisionId);
-        if (current?.markdown !== input.planMarkdown) {
-          if (value.planRevisions.length >= WORKSPACE_LIMITS.revisions) throw new HttpError(413, 'Plan revision limit reached; prior revisions were retained');
-          const revision = { id: crypto.randomUUID(), revisionHash: digest(input.planMarkdown), markdown: input.planMarkdown, createdAt: Date.now() };
-          value.planRevisions.push(revision); value.currentPlanRevisionId = revision.id;
-        }
-      }
-      if (typeof input.approvePlanRevisionId === 'string') {
-        const current = value.planRevisions.find(revision => revision.id === value.currentPlanRevisionId);
-        if (!current || input.approvePlanRevisionId !== current.id) throw new HttpError(409, 'Approval must name the exact current plan revision');
-        current.approvedAt ??= Date.now();
-      }
       editorLimit(value); value.version++; value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
     });
     return json(snapshot(store, repo, id!));
@@ -318,7 +364,7 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
       const turn = value.acceptedTurns.find(turn => turn.key === key);
       if (turn) {
         const receipt: Omit<WorkspaceTurnReceipt, 'hash'> & { hash?: string } = { ...turn };
-        delete receipt.hash;
+        delete receipt.hash; delete receipt.sourceContext;
         return json({ accepted: true, receipt });
       }
       if (!value.rejectedTurns.includes(key)) {
@@ -351,11 +397,12 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
       const prior = record(store, repo, id).acceptedTurns.find(turn => turn.key === receipt!.key);
       if (prior) {
         if (prior.hash !== receipt.hash) throw new HttpError(409, 'Idempotency-Key already belongs to a different Send');
-        return json(native(store, repo, id) || detached(record(store, repo, id)));
+        return json({ ...(native(store, repo, id) || detached(record(store, repo, id))), acceptedTurnKey: prior.key });
       }
       request = receipt.request; accepted.set(operationKey, { key: receipt.key, hash: receipt.hash });
     }
-    const draft = native(store, repo, id);
+    let draft = native(store, repo, id);
+    if (!draft && receipt) { await connect(store, repo, id); draft = native(store, repo, id); }
     if (!draft) {
       if (segments.length === 6 && ['GET', 'DELETE'].includes(request.method)) {
         if (request.method === 'DELETE') await assertWorkspaceOwners(store);
@@ -366,6 +413,8 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
     }
     if (record(store, repo, id).archived && request.method === 'POST' && segments[6] !== 'cancel') throw new HttpError(409, 'Unarchive this workspace before changing its native session');
     const draftSegments = ['api', 'repos', repo.id, 'drafts', draft.id, ...segments.slice(6)];
-    return await handleDraftRequest(store, repo, request, draftSegments, true);
+    const response = await handleDraftRequest(store, repo, request, draftSegments, true);
+    const acknowledged = receipt && record(store, repo, id).acceptedTurns.find(turn => turn.key === receipt.key);
+    return acknowledged ? json({ ...await response.json() as DraftSnapshot, acceptedTurnKey: acknowledged.key }, response.status) : response;
   } finally { accepted.delete(operationKey); operations.delete(operationKey); }
 }

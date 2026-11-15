@@ -34,13 +34,14 @@ export interface BatchOperation {
   id: string; repoId: string; repoPath: string; workspaceId: string; reviewId: string; reviewVersion: number;
   proposalSetId?: string;
   workspaceVersion: number; mode: Mode; expires: number; acknowledgeStalePlan: boolean;
+  creationHold?: boolean;
   state: 'prepared' | 'publishing' | 'complete' | 'blocked';
   phase?: 'staging' | 'publishing' | 'reconciling';
   error?: string;
   invalidated?: boolean; compacted?: boolean;
   rootIdentity?: { dev: number; ino: number; birthtimeMs: number };
   payloadHash: string; sourcePlanRevisionId: string | null; externalRevisions: Record<string, string>;
-  tickets: { key: string; id: string; markdown: string; dependencies: string[]; revision?: string; stage?: string; dev?: number; ino?: number; birthtimeMs?: number }[];
+  tickets: { key: string; id: string; markdown: string; dependencies: string[]; files?: { name: string; data: string }[]; revision?: string; stage?: string; dev?: number; ino?: number; birthtimeMs?: number }[];
 }
 export interface WorkspaceTurnReceipt {
   key: string;
@@ -60,6 +61,7 @@ export interface WorkspaceTurnReceipt {
   status: 'accepted' | 'complete' | 'failed';
   proposalSetId?: string;
   error?: string;
+  sourceContext?: { plan: PlanRevision | null; research: ResearchResult[]; preparedMessage: string; preparedImages: { type: 'image'; mimeType: string; data: string }[]; uploads: { name: string; data: string }[]; exploration?: string[] };
   legacyContextUnavailable?: true;
 }
 
@@ -70,11 +72,29 @@ export interface PlanRevision {
   createdAt: number;
   approvedAt?: number;
 }
+export interface ResponseOperation {
+  responseIndex: number;
+  state: 'generating' | 'publishing' | 'complete' | 'clarification' | 'interrupted' | 'blocked';
+  error?: string;
+  questions?: string[];
+  publicationId?: string;
+  sourceHash?: string;
+  generation?: { model: { provider: string; id: string }; thinking: string };
+  tickets: { key: string; id: string; title?: string }[];
+}
+export interface ResponseGenerationModels {
+  models: DraftSnapshot['models'];
+  model: string;
+  thinkingLevels: string[];
+  saved: { model: DraftSnapshot['model']; thinking: string };
+  requiresImages: boolean;
+}
 export interface AgentWorkspace {
   id: string;
   repoId: string;
   title: string;
   createdAt: number;
+  titleSource?: 'automatic' | 'manual';
   updatedAt: number;
   archived: boolean;
   version: number;
@@ -91,10 +111,11 @@ export interface AgentWorkspace {
   extraction: { key: string; status: 'pending' | 'valid' | 'failed'; error?: string; proposalSetId?: string } | null;
 }
 export type AgentWorkspaceSummary = Pick<AgentWorkspace, 'id' | 'repoId' | 'title' | 'createdAt' | 'updatedAt' | 'archived' | 'version'>;
-export interface AgentWorkspaceSnapshot { workspace: AgentWorkspace; draft: DraftSnapshot | null; batchOperations?: { confirmation: string; publicationId: string; workspaceId: string; reviewId: string; reviewVersion: number; proposalSetId: string | null; sourcePlanRevisionId: string | null; state: BatchOperation['state']; mode: Mode; expires: number; error?: string; tickets: Pick<BatchOperation['tickets'][number], 'key' | 'id' | 'markdown' | 'dependencies' | 'revision'>[] }[] }
+export interface AgentWorkspaceSnapshot { workspace: AgentWorkspace; draft: DraftSnapshot | null; eligibleResponseIndices?: number[]; responseOperations?: ResponseOperation[]; batchOperations?: { confirmation: string; publicationId: string; workspaceId: string; reviewId: string; reviewVersion: number; proposalSetId: string | null; sourcePlanRevisionId: string | null; state: BatchOperation['state']; mode: Mode; expires: number; error?: string; tickets: Pick<BatchOperation['tickets'][number], 'key' | 'id' | 'markdown' | 'dependencies' | 'revision'>[] }[] }
 export interface AgentWorkspaceRecord extends AgentWorkspace {
   repoPath: string;
   acceptedTurns: WorkspaceTurnReceipt[];
   researchResults: ResearchResult[];
+  responseOperations?: ResponseOperation[];
   rejectedTurns: string[];
 }

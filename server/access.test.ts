@@ -24,7 +24,7 @@ test('tailnet access is opt-in, exact-host, HTTPS-only and ignores forwarded hos
   }
   expect((await request('/api/health', { headers: { Host: 'evil.invalid' } })).status).toBe(403);
   expect((await api(new Request('http://evil.invalid/api/health', { headers: { 'X-Forwarded-Host': 'dashboard.example.ts.net', 'X-Forwarded-Proto': 'https' } }))).status).toBe(403);
-  for (const value of ['http://backlog.example.com', `${origin}:8443`, `${origin}/path`, `${origin}?query=1`, `${origin}#fragment`, 'https://user@backlog.example.com']) {
+  for (const value of ['http://backlog.example.com', `${origin}/path`, `${origin}?query=1`, `${origin}#fragment`, 'https://user@backlog.example.com']) {
     expect(() => parseRemoteOrigin(value)).toThrow();
   }
 });
@@ -33,6 +33,14 @@ test('existing ts.net origins remain explicitly selectable', async () => {
   const tailnet = createApi(store, runtime, 'https://dashboard.example.ts.net');
   expect((await tailnet(new Request('https://dashboard.example.ts.net/api/health'))).status).toBe(200);
   expect((await tailnet(new Request(`${origin}/api/health`))).status).toBe(403);
+});
+
+test('tailnet access permits only the configured HTTPS port', async () => {
+  const portOrigin = 'https://dashboard.example.ts.net:8443';
+  const tailnet = createApi(store, runtime, portOrigin);
+  expect((await tailnet(new Request(`${portOrigin}/api/health`))).status).toBe(200);
+  expect((await tailnet(new Request('https://dashboard.example.ts.net/api/health'))).status).toBe(403);
+  expect((await tailnet(new Request('https://dashboard.example.ts.net:9443/api/health'))).status).toBe(403);
 });
 
 test('tailnet login keeps secure cookies, authentication, same-origin and CSRF enforcement', async () => {

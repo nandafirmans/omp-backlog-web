@@ -174,6 +174,12 @@ export async function completions(root: string, git: boolean, privateDir: string
   return kind === 'skill' ? skillCompletions(root, query.toLowerCase(), privateDir, home) : fileCompletions(root, git, query.toLowerCase(), privateDir);
 }
 
+export async function readDraftSkills(root: string, privateDir: string): Promise<Map<string, Uint8Array>> {
+  const bodies = new Map<string, Uint8Array>();
+  await skillCompletions(root, '', privateDir, homedir(), bodies);
+  return bodies;
+}
+
 /** Completion discovery is not authorization: every actual context read is checked again. */
 async function readDraftFile(root: string, name: string, privateDir: string, limit: number): Promise<Uint8Array> {
   const canonical = await realpath(root);

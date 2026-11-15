@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { pendingAgentTurn, pendingTurnBody } from './pendingAgentTurn';
+import { acceptedComposerText } from './agentWorkspaceState';
 
 async function fields(body: FormData) {
   return Promise.all(Array.from(body, async ([name, value]) => typeof value === 'string' ? [name, value] : [name, value.name, value.type, Array.from(new Uint8Array(await value.arrayBuffer()))]));
@@ -28,3 +29,23 @@ test('intentionally initiating a modified payload cannot reuse an earlier turn i
   expect(pendingTurnBody(original).get('prompt')).toBe('First objective');
   expect(pendingTurnBody(changed).get('prompt')).toBe('Modified objective');
 });
+
+test('clarification recovery retains the reply separately from its pinned questions and source', () => {
+  const reply = 'Both limits.\nKeep the existing categories.';
+  const submitted = `Source response:\nBuild an expense tracker.\n\nQuestions:\n- Which limits?\n\nMy answers:\n${reply}`;
+  const body = new FormData();
+  body.set('prompt', submitted);
+  body.set('intent', 'discussion');
+  const turn = pendingAgentTurn('workspace', body);
+  turn.composerText = reply;
+  turn.replyResponseIndex = 3;
+  const recovered = structuredClone(turn);
+  expect(pendingTurnBody(recovered).get('prompt')).toBe(submitted);
+  expect(pendingTurnBody(recovered).has('composerText')).toBe(false);
+  expect(recovered.replyResponseIndex).toBe(3);
+  expect(pendingTurnBody(recovered).has('replyResponseIndex')).toBe(false);
+  expect(acceptedComposerText(reply, recovered.composerText!, true)).toBe('');
+  expect(acceptedComposerText('Newer answer', recovered.composerText!, true)).toBe('Newer answer');
+  expect(acceptedComposerText(reply, recovered.composerText!, false)).toBe(reply);
+});
+

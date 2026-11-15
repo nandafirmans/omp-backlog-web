@@ -2,6 +2,8 @@ export interface PendingAgentTurn {
   workspaceId: string;
   key: string;
   createdAt: number;
+  composerText?: string;
+  replyResponseIndex?: number;
   entries: { name: string; value: string | Blob; filename?: string }[];
 }
 

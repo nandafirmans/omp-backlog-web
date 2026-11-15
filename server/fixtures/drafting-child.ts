@@ -1,7 +1,7 @@
 // Protocol fixture only: no provider, filesystem tools, credentials or network.
 import { createInterface } from 'node:readline';
 import { readFile } from 'node:fs/promises';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 if (process.argv.includes('--version')) {
@@ -13,16 +13,21 @@ const log = (value: unknown) => { if (logIndex >= 0) appendFileSync(process.argv
 log({ event: 'spawn', pid: process.pid, cwd: process.cwd() });
 const startupUnsafe = process.argv.includes('unsafe');
 const send = (value: unknown) => console.log(JSON.stringify(value));
-const required = ['--mode', '--no-ui', '--no-tools', '--no-extensions', '--no-skills', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir'];
+const required = ['--mode', '--no-ui', '--no-tools', '--no-extensions', '--no-rules', '--no-lsp', '--no-pty', '--no-title', '--no-prewalk', '--session-dir'];
 if (required.some(flag => !process.argv.includes(flag)) || process.env.NODE_OPTIONS || process.env.BUN_OPTIONS || process.env.PI_CONFIG_FILES) process.exit(12);
 const config = JSON.parse(await readFile(join(process.env.PI_CODING_AGENT_DIR!, 'config.yml'), 'utf8'));
 if (config.retry.enabled !== false || config.providers.cacheWarming !== 'off' || config.providers.openaiWebsockets !== 'off' || config.goal.enabled !== false || config.magicKeywords.enabled !== false || config.marketplace.autoUpdate !== 'off') process.exit(13);
+const commands = config.skills.enabled ? readdirSync(config.skills.customDirectories[0]).map(name => {
+  const text = readFileSync(join(config.skills.customDirectories[0], name, 'SKILL.md'), 'utf8');
+  return { name: `skill:${name}`, source: 'skill', description: text.match(/^description:\s*(.*)$/m)?.[1] || '' };
+}) : [];
 if (!process.cwd().startsWith(join(process.env.HOME!, '..')) || process.env.HOME === process.env.FIXTURE_REAL_HOME) process.exit(14);
 const models = [
   { provider: 'fixture', id: 'vision', name: 'Fixture vision', input: ['text', 'image'] },
   { provider: 'fixture', id: 'text', name: 'Fixture text', input: ['text'] },
 ];
-let model = process.argv.includes('unselected') ? { ...models[0], id: 'unavailable-default' } : models[0]; let thinking = 'medium'; let streaming = false; let turns = 0; let tokenTotal = 10;
+let model = process.argv.includes('unselected') ? { ...models[0], id: 'unavailable-default' } : models[0]; let thinking = 'medium'; let streaming = false; let turns = 0; let tokenTotal = 10; let tools: { name: string }[] = [];
+let pendingResearch: { id: string; messageId: string } | undefined;
 send({ type: 'ready', protocolVersion: 1, supportedProtocolVersions: process.argv.includes('incompatible-protocol') ? [1] : [1, 2], maxFrameBytes: 1024 * 1024, maxReassembledFrameBytes: 1024 * 1024 });
 const input = createInterface({ input: process.stdin });
 input.on('line', line => {
@@ -35,25 +40,45 @@ input.on('line', line => {
     case 'negotiate_protocol': response({ protocolVersion: 2 }); break;
     case 'get_available_models': response({ models }); break;
     case 'get_available_thinking_levels': response({ levels: model.id === 'vision' ? ['off', 'medium'] : ['off'] }); break;
-    case 'get_state': response({ model, thinkingLevel: thinking, dumpTools: startupUnsafe ? [{ name: 'write' }] : [], goal: null, isSettled: !streaming, hasPendingAsyncWork: false }); break;
+    case 'get_available_commands': response({ commands }); break;
+    case 'get_state': response({ model, thinkingLevel: thinking, dumpTools: startupUnsafe ? [{ name: 'write' }] : tools, goal: null, isSettled: !streaming, hasPendingAsyncWork: false }); break;
     case 'get_session_stats': response({ tokens: { total: tokenTotal } }); break;
     case 'set_model': model = models.find(item => item.id === frame.modelId && item.provider === frame.provider)!; thinking = model.id === 'text' ? 'off' : 'medium'; response(model); break;
     case 'set_thinking_level': thinking = model.id === 'text' ? 'off' : frame.level; response(); break;
-    case 'set_auto_retry': case 'set_cache_warming': case 'set_host_tools': case 'set_event_filter': response(); break;
+    case 'set_host_tools': tools = frame.tools; response({ toolNames: tools.map(tool => tool.name) }); break;
+    case 'set_auto_retry': case 'set_cache_warming': case 'set_event_filter': response(); break;
     case 'abort': streaming = false; response(); break;
+    case 'host_tool_result': {
+      if (pendingResearch) {
+        send({ type: 'message_update', messageId: pendingResearch.messageId, assistantMessageEvent: { type: 'text_delta', delta: JSON.stringify(frame.result) } });
+        streaming = false;
+        send({ type: 'prompt_result', id: pendingResearch.id, status: 'completed', sessionSettled: true });
+        pendingResearch = undefined;
+      }
+      break;
+    }
     case 'prompt': {
       turns++; streaming = true; response();
       const prompt = String(frame.message);
       const userMessage = JSON.parse(/User message \(JSON string\):\n([^\n]*)/.exec(prompt)![1]!) as string;
-      log({ event: 'prompt', message: prompt });
+      log({ event: 'prompt', message: prompt, images: frame.images?.length ?? 0 });
       const messageId = `msg-${turns}`;
       const delta = (text: string) => send({ type: 'message_update', messageId, assistantMessageEvent: { type: 'text_delta', delta: text } });
-      if (userMessage.includes('FIXTURE:EXTRACTION:') || process.argv.includes('extraction-valid') && prompt.includes('Host extraction contract:\n')) {
-        const contract = prompt.split('Host extraction contract:\n')[1] || '';
+      if (userMessage.includes('FIXTURE:RESEARCH')) {
+        pendingResearch = { id: frame.id, messageId };
+        send({ type: 'host_tool_call', id: 'research-1', toolCallId: 'tool-1', toolName: 'project_read', arguments: { paths: ['source.txt'] } });
+        break;
+      }
+      if (userMessage.includes('Host extraction contract:\n') && userMessage.includes('FIXTURE:RESPONSE:QUESTIONS')) {
+        delta(JSON.stringify({ questions: ['What outcome should the ticket cover?'] })); streaming = false;
+        send({ type: 'prompt_result', id: frame.id, status: 'completed', sessionSettled: true }); break;
+      }
+      if (userMessage.includes('FIXTURE:EXTRACTION:') || process.argv.includes('extraction-valid') && (prompt.includes('Host extraction contract:\n') || userMessage.includes('Host extraction contract:\n'))) {
+        const contract = (userMessage.includes('Host extraction contract:\n') ? userMessage : prompt).split('Host extraction contract:\n')[1] || '';
         const sourceWorkspaceId = JSON.parse(/"sourceWorkspaceId":("(?:[^"\\]|\\.)*")/.exec(contract)![1]!);
         const sourcePlanRevisionId = JSON.parse(/"sourcePlanRevisionId":(null|"(?:[^"\\]|\\.)*")/.exec(contract)![1]!);
         const strategy = JSON.parse(/"strategy":("(?:[^"\\]|\\.)*")/.exec(contract)![1]!);
-        const count = strategy === 'multiple' || strategy === 'auto' && userMessage.includes('FIXTURE:EXTRACTION:MULTIPLE') ? 2 : 1;
+        const count = strategy === 'multiple' || strategy === 'auto' && (userMessage.includes('FIXTURE:EXTRACTION:MULTIPLE') || userMessage.includes('FIXTURE:RESPONSE:MULTIPLE')) ? 2 : 1;
         const proposals = Array.from({ length: count }, (_, index) => ({ key: `task-${index ? 'second' : 'first'}`, title: `Proposal ${index + 1}`, description: 'Why: Address the request.\nScope: The described behavior.\nOut-of-scope: Publication and implementation.', acceptanceCriteria: ['Observable result is documented'], verification: ['Run the focused fixture'], dependsOn: index ? ['task-first'] : [], sourceReferences: [] }));
         let output = JSON.stringify({ strategy, sourceWorkspaceId, sourcePlanRevisionId, rationale: 'Chosen decomposition fits the requested scope.', proposals, openQuestions: [] });
         if (userMessage.includes('FIXTURE:EXTRACTION:INVALID') || prompt.includes('FIXTURE:INVALID_EXTRACTION')) output = '{"proposals":[]}';

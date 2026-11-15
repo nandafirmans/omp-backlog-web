@@ -10,9 +10,8 @@ import { completions } from './completions';
 import { requestOrigin, parseRemoteOrigin } from './access';
 import { proofDownload } from './evidence';
 import { inspectWorkspaceHandoff } from './runtime';
-import { discoverExecutionModels, handleDraftRequest } from './drafting';
-import { handleAssistedCreation } from './assisted-creation';
-import { assertWorkspaceOwners, handleAgentWorkspaceRequest } from './agent-workspaces';
+import { discoverExecutionModels } from './drafting';
+import { handleAgentWorkspaceRequest } from './agent-workspaces';
 import { ticketPublications } from './batch-publication';
 import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
@@ -200,17 +199,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           await permittedPath(store, repo.path);
           return await handleAgentWorkspaceRequest(store, repo, request, segments);
         }
-        if (segments[3] === 'drafts') {
-          await permittedPath(store, repo.path);
-          if (segments.length === 4 && request.method === 'POST') await assertWorkspaceOwners(store);
-          return await handleDraftRequest(store, repo, request, segments);
-        }
-        if (segments.length === 4 && (segments[3] === 'assisted-prepare' || segments[3] === 'assisted-create') && request.method === 'POST') {
-          await permittedPath(store, repo.path);
-          const response = await handleAssistedCreation(store, repo, request, segments[3]);
-          if (segments[3] === 'assisted-create' && response.ok) runtime.wake();
-          return response;
-        }
+        if (['drafts', 'assisted-prepare', 'assisted-create'].includes(segments[3])) throw new HttpError(410, 'The legacy drafting and publication workflow was removed. Open Create with agent and use Create tickets beneath a completed response.');
         if (segments[3] === 'completions' && segments.length === 4 && request.method === 'GET') {
           const path = await permittedPath(store, repo.path);
           return json(await completions(path, repo.git, store.dataDir, url.searchParams.get('kind'), url.searchParams.get('q') || ''));
@@ -320,6 +309,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           }
           store.save('runs', run);
         } else if (action !== 'reorder') throw new HttpError(400, 'Unknown ticket action');
+        if (action === 'approve' || action === 'retry') delete ticket.creationHold;
         if (typeof input.order === 'number') ticket.order = input.order;
         store.save('tickets', ticket); runtime.wake(); return json(ticket);
       }
