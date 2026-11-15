@@ -103,7 +103,7 @@ export async function inspectWorkspaceHandoff(repo: Repo, runId: string | null =
 }
 
 export function eligible(store: Store, repo: Repo, ticket: Ticket) {
-  if (batchInactive(store, repo.path, ticket.id)) return false;
+  if (ticket.creationHold || batchInactive(store, repo.path, ticket.id)) return false;
   if (repo.mode === 'paused' || repo.handoff || ticket.removed || ticket.error || ticket.criteria.length === 0) return false;
   if (ticket.status !== 'ready' && ticket.status !== 'draft') return false;
   if (repo.mode === 'approved' && ticket.approvedRevision !== ticket.revision) return false;

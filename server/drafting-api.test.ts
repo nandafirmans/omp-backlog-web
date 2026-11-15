@@ -1,5 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -7,7 +7,6 @@ import { createApi } from './api';
 import { closeStore, createStore, database, digest } from './store';
 import { closeDrafts } from './drafting';
 import type { Repo, Runtime } from './contracts';
-import type { AssistedConfirmation } from './drafting-contracts';
 import type { AgentWorkspaceSnapshot } from './agent-workspace-contracts';
 
 const root = await mkdtemp(join(tmpdir(), 'backlog-drafting-api-'));
@@ -24,13 +23,6 @@ const origin = 'http://127.0.0.1:4310';
 const cookie = randomBytes(32).toString('hex');
 const csrf = randomBytes(32).toString('hex');
 database(store).query('INSERT INTO sessions VALUES(?,?,1,?)').run(digest(cookie), csrf, Date.now() + 60_000);
-const markdown = '---\nid: T001\ntitle: Synthetic drafting route proof\ndepends_on: []\n---\n\nPrepare a synthetic ticket only.\n\nDone when:\n- Reviewed bytes are preserved.\n';
-function multipart(confirmation?: string) {
-  const data = new FormData();
-  data.set('markdown', markdown);
-  if (confirmation) data.set('confirmation', confirmation);
-  return data;
-}
 function request(path: string, init: RequestInit = {}, authenticated = true) {
   const headers = new Headers(init.headers);
   if (authenticated) headers.set('Cookie', `omp_session=${cookie}`);
@@ -51,28 +43,18 @@ test('drafting and assisted publication cannot bypass owner authentication or CS
   expect(store.list('runs')).toEqual([]);
 });
 
-test('assisted prepare does not wake execution; stale mode confirmation cannot publish', async () => {
-  const prepared = await request('assisted-prepare', { method: 'POST', body: multipart() });
-  expect(prepared.status).toBe(200);
-  const confirmation = await prepared.json() as AssistedConfirmation;
-  expect(confirmation.mode).toBe('automatic');
+test('retired creation routes cannot publish, spawn or wake execution even in Automatic mode', async () => {
+  for (const path of ['drafts', 'drafts/unknown/turn', 'assisted-prepare', 'assisted-create']) {
+    const response = await request(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    expect(response.status).toBe(410);
+    expect((await response.json() as { error: string }).error).toContain('Create tickets');
+  }
   expect(store.list('tickets')).toEqual([]);
-  expect(wakes).toBe(0);
-  store.save('repos', { ...repo, mode: 'paused' });
-  const rejected = await request('assisted-create', { method: 'POST', body: multipart(confirmation.confirmation) });
-  expect(rejected.status).toBe(409);
-  expect(store.list('tickets')).toEqual([]);
-  expect(wakes).toBe(0);
-  const reviewed = await request('assisted-prepare', { method: 'POST', body: multipart() });
-  const next = await reviewed.json() as AssistedConfirmation;
-  const published = await request('assisted-create', { method: 'POST', body: multipart(next.confirmation) });
-  expect(published.status).toBe(201);
-  expect(store.list('tickets').map(ticket => ticket.id)).toEqual(['T001']);
   expect(store.list('runs')).toEqual([]);
-  expect(wakes).toBe(1);
+  expect(wakes).toBe(0);
 });
 
-test('persistent planning API scopes edits and approvals without granting execution authority', async () => {
+test('conversation saves remain scoped without granting execution authority', async () => {
   const before = store.list('tickets').map(ticket => ticket.id);
   const startsBefore = wakes;
   const post = (value: unknown, method = 'POST'): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
@@ -84,23 +66,16 @@ test('persistent planning API scopes edits and approvals without granting execut
   const saved = await request(path, post({
     version: initial.workspace.version,
     prompt: 'Explore CSV quoting before extracting a ticket',
-    ticketMarkdown: markdown,
-    planMarkdown: '# CSV export\n\nPreserve filtered rows and quote embedded delimiters.',
   }, 'PATCH'));
   expect(saved.status).toBe(200);
   const edited = await saved.json() as AgentWorkspaceSnapshot;
-  const approved = await request(path, post({
-    version: edited.workspace.version,
-    approvePlanRevisionId: edited.workspace.currentPlanRevisionId,
-  }, 'PATCH'));
-  expect(approved.status).toBe(200);
-  const revision = await approved.json() as AgentWorkspaceSnapshot;
-  expect(revision.workspace.planRevisions[0].approvedAt).toBeGreaterThan(0);
+  const rejected = await request(path, post({ version: edited.workspace.version, approvePlanRevisionId: 'old-plan' }, 'PATCH'));
+  expect(rejected.status).toBe(410);
   const stale = await request(path, post({ version: initial.workspace.version, prompt: 'Overwrite from stale tab' }, 'PATCH'));
   expect(stale.status).toBe(409);
   const restored = await (await request(path)).json() as AgentWorkspaceSnapshot;
   expect(restored.workspace.prompt).toBe('Explore CSV quoting before extracting a ticket');
-  expect(restored.workspace.ticketMarkdown).toBe(markdown);
+  expect(restored.workspace.ticketMarkdown).toBe('');
   expect(restored.draft).toBeNull();
   const other = { ...repo, id: 'other-project', name: 'Other project' };
   store.save('repos', other);
@@ -117,15 +92,3 @@ test('persistent planning API scopes edits and approvals without granting execut
   expect(wakes).toBe(startsBefore);
 });
 
-test('legacy draft creation cannot bypass uncertain persisted workspace process ownership', async () => {
-  const directory = join(store.dataDir, 'agent-workspace-owners');
-  await mkdir(directory, { recursive: true });
-  const lease = join(directory, 'uncertain-api-fixture.json');
-  await writeFile(lease, '{"pending":true}');
-  try {
-    const response = await request('drafts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    expect(response.status).toBe(503);
-    expect((await response.json() as { error: string }).error).toContain('prior native workspace child');
-    expect(store.list('runs')).toEqual([]);
-  } finally { await rm(lease); }
-});

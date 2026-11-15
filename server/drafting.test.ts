@@ -2,14 +2,14 @@ import { expect, test } from 'bun:test';
 import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { Repo } from './contracts';
+import type { Repo, Store } from './contracts';
 import type { DraftPreparation, DraftSnapshot } from './drafting-contracts';
-import { closeDrafts, discoverExecutionModels, handleDraftRequest } from './drafting';
+import { closeDrafts, createWorkspaceDraft, discoverExecutionModels, generateIsolatedDraft, handleDraftRequest } from './drafting';
 import { resolveDraftReference } from './completions';
 import { closeStore, createStore } from './store';
 import { HttpError } from './tickets';
 
-async function fixture(run: (context: { repo: Repo; call(path?: string, method?: string, value?: unknown): Promise<Response>; root: string; executable: string }) => Promise<void>, mode = '') {
+async function fixture(run: (context: { repo: Repo; store: Store; call(path?: string, method?: string, value?: unknown): Promise<Response>; root: string; executable: string }) => Promise<void>, mode = '') {
   const root = await mkdtemp(join(tmpdir(), 'omp-drafting-test-'));
   const store = createStore(join(root, 'private'));
   const previous = { agent: process.env.PI_CODING_AGENT_DIR, profile: process.env.OMP_PROFILE, node: process.env.NODE_OPTIONS, bun: process.env.BUN_OPTIONS, config: process.env.PI_CONFIG_FILES };
@@ -29,7 +29,7 @@ async function fixture(run: (context: { repo: Repo; call(path?: string, method?:
       try { return await handleDraftRequest(store, repo, request, new URL(url).pathname.split('/').filter(Boolean)); }
       catch (error) { if (error instanceof HttpError) return Response.json({ error: error.message }, { status: error.status }); throw error; }
     };
-    await run({ repo, call, root, executable });
+    await run({ repo, store, call, root, executable });
     expect(store.list('tickets')).toEqual([]); expect(store.list('runs')).toEqual([]);
     expect(store.get('repos', repo.id)?.mode).toBe('automatic');
   } finally {
@@ -270,3 +270,58 @@ test('legacy quick-ticket defaults to ticket drafting without requiring a worksp
     expect(events.filter(event => event.command === 'prompt')).toHaveLength(1);
   });
 }, 10000);
+
+test('workspace dispatches a discovered native skill with image and exact selected model', async () => {
+  await fixture(async ({ repo, store, root }) => {
+    await mkdir(join(repo.path, '.omp/skills/review'), { recursive: true });
+    await writeFile(join(repo.path, '.omp/skills/review/SKILL.md'), '---\nname: review\ndescription: Review safely\n---\nReview without changes.');
+    const complete = Promise.withResolvers<void>();
+    const snapshot = await createWorkspaceDraft(store, repo, {
+      messages: [], model: null, thinking: '',
+      context: () => ({ message: '{}', context: { key: 'workspace', label: 'Workspace', status: 'ready', detail: '' } }),
+      validateTurn: () => {}, acceptTurn: () => {}, changed: value => { if (value.messages.some(message => message.role === 'assistant' && message.status === 'complete')) complete.resolve(); }, spawned: async () => {}, stopped: async () => {},
+    });
+    expect(snapshot.commands?.map(command => command.name)).toContain('skill:review');
+    const route = async (action: string, value: FormData | object) => {
+      const request = new Request('http://localhost', { method: 'POST', ...(value instanceof FormData ? { body: value } : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) }) });
+      return handleDraftRequest(store, repo, request, ['api', 'repos', repo.id, 'drafts', snapshot.id, action], true);
+    };
+    await route('model', { provider: 'fixture', modelId: 'text' });
+    await route('model', { provider: 'fixture', modelId: 'vision' });
+    expect((await route('turn', form('/skill:review inspect this', [png()]))).status).toBe(200);
+    expect(snapshot.status).toBe('busy');
+    const log = await readFile(join(root, 'child.jsonl'), 'utf8');
+    expect(log).toContain('set_model');
+    expect(snapshot.messages[0].text).toContain('/skill:review');
+    await complete.promise;
+    const sent = await readFile(join(root, 'child.jsonl'), 'utf8');
+    expect(sent).toContain('/skill:review ');
+    expect(sent).toContain('"images":1');
+  });
+});
+
+test('workspace research callback reads only host-authorized project text', async () => {
+  await fixture(async ({ repo, store }) => {
+    await writeFile(join(repo.path, 'source.txt'), 'bounded project evidence');
+    const complete = Promise.withResolvers<void>();
+    const snapshot = await createWorkspaceDraft(store, repo, {
+      messages: [], model: null, thinking: '',
+      context: () => ({ message: '{}', context: { key: 'workspace', label: 'Workspace', status: 'ready', detail: '' } }),
+      validateTurn: () => {}, acceptTurn: () => {}, changed: value => { if (value.messages.some(message => message.role === 'assistant' && message.status === 'complete')) complete.resolve(); },
+      spawned: async () => {}, stopped: async () => {},
+    });
+    const request = new Request('http://localhost', { method: 'POST', body: form('FIXTURE:RESEARCH') });
+    expect((await handleDraftRequest(store, repo, request, ['api', 'repos', repo.id, 'drafts', snapshot.id, 'turn'], true)).status).toBe(200);
+    expect(snapshot.status).toBe('busy');
+    await complete.promise;
+    expect(snapshot.messages[1].text).toContain('bounded project evidence');
+    expect(snapshot.activity?.[0]).toMatchObject({ type: 'research', status: 'complete' });
+  });
+});
+
+test('isolated generation uses a fresh native conversation and exact selection', async () => {
+  await fixture(async ({ repo, store }) => {
+    const answer = await generateIsolatedDraft(store, repo, { message: 'Frozen source only', model: { provider: 'fixture', id: 'text' }, thinking: 'off', spawned: async () => {}, stopped: async () => {} });
+    expect(answer).toContain('Partial turn 1.');
+  });
+});
