@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Checkbox, Drawer, Grid, Input, Modal, Spin, Tag } from 'antd';
-import { ArrowDownIcon } from '@phosphor-icons/react';
+import { Button, Checkbox, Drawer, Grid, Input, Modal, Popover, Spin, Tag, Tooltip } from 'antd';
+import { ArrowDownIcon, ArrowUpIcon, CaretDownIcon, StackIcon } from '@phosphor-icons/react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
@@ -41,6 +41,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const [showArchived, setShowArchived] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [composerPanel, setComposerPanel] = useState<'model' | 'context' | 'closed'>();
   const screens = Grid.useBreakpoint();
   const [excluded, setExcluded] = useState<string[]>([]);
   const intent = 'discussion';
@@ -67,7 +68,6 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const alive = useRef(true);
   const locked = useRef(false);
   const session = useRef('');
-  const contextInspector = useRef<HTMLDetailsElement>(null);
   const root = `/api/repos/${encodeURIComponent(repoId)}/agent-workspaces`;
   const selectionKey = `omp-agent-workspace:${repoId}`;
   const path = workspace ? `${root}/${encodeURIComponent(workspace.id)}` : '';
@@ -81,6 +81,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const composerText = clarification ? replies[clarification.responseIndex] ?? '' : prompt;
   const input = JSON.stringify([composerText, intent, excluded, files.map(file => [file.name, file.file.size, file.file.lastModified]), snapshot?.model, snapshot?.thinking, workspace?.version]);
   const preparation = prepared?.input === input ? prepared.value : undefined;
+  const contextOpen = composerPanel === 'context' || (!composerPanel && !!(error || snapshot?.error || preparation?.ready === false));
   const contexts = preparation?.contexts ?? Array.from(new Map<string, Pick<DraftContext, 'key' | 'label' | 'detail'>>([
     ...files.map(file => [`upload:${file.name}`, { key: `upload:${file.name}`, label: file.name, detail: 'Check context to validate these bytes for the effective model.' }] as const),
     ...(prepared?.value.contexts ?? []).map(context => [context.key, context] as const),
@@ -95,12 +96,6 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     savedTitle.current = next;
     setTitle(current => current === previous ? next : current);
   }, [workspace?.title]);
-  useEffect(() => {
-    if ((error || snapshot?.error || preparation?.ready === false) && contextInspector.current) {
-      contextInspector.current.open = true;
-      contextInspector.current.closest('details.agent-composer-context')?.setAttribute('open', '');
-    }
-  }, [error, snapshot?.error, preparation?.ready]);
 
   function remember(value: AgentWorkspace) {
     setWorkspaces(current => [value, ...current.filter(item => item.id !== value.id)]);
@@ -231,6 +226,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   async function run(name: string, work: () => Promise<void>) {
     if (locked.current || disabled) return;
     locked.current = true; setOperation(name); setError('');
+    setComposerPanel(current => current === 'closed' ? undefined : current);
     try { await work(); }
     catch (cause) { if (alive.current) setError(failure(cause)); }
     finally { locked.current = false; if (alive.current) setOperation(''); }
@@ -424,8 +420,8 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const composer = workspace && <div className="agent-composer" onFocus={() => { if (!connected && !unavailable && !pending) void run('Loading chat capabilities…', async () => { await connect(); }); }}>
           <MarkdownEditor label={clarifying ? 'Reply' : 'Message'} value={composerText} onChange={text => clarification ? setReplies(current => ({ ...current, [clarification.responseIndex]: text })) : setPrompt(text)} repoId={repoId} api={api} commands={snapshot?.commands ?? []} disabled={disabled || workspace.archived} onUpload={onUpload} onSubmit={() => send(clarification)}>
           {!!files.length && <p className="agent-composer-hint">Attached · {files.map(file => file.file.name).join(', ')} · Staged until sent</p>}
-          <div className="agent-composer-controls">
-            <details className="agent-composer-advanced" onToggle={event => { if (event.currentTarget.open && !connected && !unavailable) void run('Loading model settings…', async () => { await connect(); }); }}><summary>{snapshot?.model ? `${snapshot.model.id} · ${snapshot.thinking || "default"}` : "Model settings"}</summary>
+          <div className="agent-composer-controls" onKeyDown={event => { if (event.key === 'Escape' && (composerPanel === 'model' || contextOpen)) { const panel = contextOpen ? 'context' : 'model'; setComposerPanel('closed'); event.currentTarget.querySelector<HTMLButtonElement>(`[data-composer-panel="${panel}"]`)?.focus(); } }}>
+            <Popover trigger="click" placement="top" title="Model settings" open={composerPanel === 'model'} onOpenChange={open => { setComposerPanel(open ? 'model' : undefined); if (open && !connected && !unavailable) void run('Loading model settings…', async () => { await connect(); }); }} content={<div className="agent-composer-popover">
               {snapshot ? <ModelPicker modelAriaLabel="Drafting model" thinkingAriaLabel="Drafting thinking level"
                 disabled={unavailable || !connected} modelDisabled={!snapshot.models.length} thinkingDisabled={!snapshot.thinkingLevels.length}
                 modelPlaceholder="Choose a drafting model" model={snapshot.model ? `${snapshot.model.provider}/${snapshot.model.id}` : undefined} thinking={snapshot.thinking || undefined}
@@ -435,16 +431,18 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
                 onThinkingChange={thinking => selectModel({ thinking })} /> : workspace.model && <p className="muted">Saved: {workspace.model.provider} / {workspace.model.id} · {workspace.thinking}</p>}
               {clarifying && <p className="muted">Model changes apply to chat and this reply, not the original generation.</p>}
               {connected && <Button disabled={disabled || !!operation} onClick={() => void run("Disconnecting from OMP…", async () => { await stopSession(); const value = await api<AgentWorkspaceSnapshot>(path); setSnapshot(value.draft); setWorkspace(current => current ? { ...current, messages: value.workspace.messages } : current); setPrepared(undefined); })}>Disconnect</Button>}
-            </details>
-          <details className="agent-composer-context"><summary>Context &amp; research{preparation?.ready === false ? ' · Needs attention' : ''}</summary>
+            </div>}>
+              <Button type="text" className="agent-composer-model" data-composer-panel="model" aria-label="Model settings" aria-expanded={composerPanel === 'model'} title={snapshot?.model ? `${snapshot.model.id} · ${snapshot.thinking || 'default'}` : 'Model settings'}><span>{snapshot?.model?.id ?? 'Model'}</span><CaretDownIcon size={12} aria-hidden="true" /></Button>
+            </Popover>
+          <Popover trigger="click" placement="top" title="Context & research" open={contextOpen} onOpenChange={open => setComposerPanel(open ? 'context' : 'closed')} content={<div className="agent-composer-popover">
           <details className="agent-research-tools"><summary>Repository research</summary>
             <p>Retrieve exact repository files read-only when you need source evidence.</p>
             <label>Paths<Input.TextArea aria-label="Research paths" value={researchPaths} onChange={event => setResearchPaths(event.target.value)} autoSize={{ minRows: 2, maxRows: 6 }} disabled={unavailable || !!pending} /></label>
             <Button disabled={unavailable || !!pending || !researchPaths.trim()} onClick={research}>Retrieve files</Button>
             {!!workspace.researchReferences.length && <ul className="agent-research-references">{workspace.researchReferences.map(reference => <li key={reference.id}><details><summary>{reference.title} · {reference.status}</summary><p>{reference.summary}</p><code>{reference.location}</code></details></li>)}</ul>}
           </details>
-        <details ref={contextInspector} className="agent-context" aria-label="Prepared model context">
-          <summary>Model context · {preparation ? preparation.ready ? 'Ready' : 'Blocked' : 'Checks on send'}</summary>
+        <section className="agent-context" aria-label="Prepared model context">
+          <h3>Model context · {preparation ? preparation.ready ? 'Ready' : 'Blocked' : 'Checks on send'}</h3>
           <div className="agent-context-body">
             <div className="agent-context-heading"><p className="muted">Preparation reports supplied bytes, not proof of understanding. Reference-only files remain staged for the ticket but are not sent to the model.</p><Button disabled={unavailable || !connected} onClick={() => void run('Preparing selected context…', async () => { await prepare(); })}>Check context</Button></div>
             {contexts.length ? <ul>{contexts.map(context => <li key={context.key}>
@@ -452,9 +450,11 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
               {/^(?:file|skill|upload):/.test(context.key) && <Checkbox disabled={unavailable} checked={excluded.includes(context.key)} onChange={event => setExcluded(current => event.target.checked ? [...current, context.key] : current.filter(key => key !== context.key))}>Reference only (exclude bytes)</Checkbox>}
             </li>)}</ul> : <p className="muted">File and /skill: mentions are resolved securely by the host when checking or sending.</p>}
           </div>
-        </details>
-          </details>
-            <Button type="primary" disabled={unavailable || !!pending || !pendingReady || !prompt.trim() || preparation?.ready === false} onClick={() => send(clarification)}>{clarifying ? 'Send reply' : 'Send'}</Button>
+        </section>
+          </div>}>
+            <Tooltip title={preparation?.ready === false ? 'Context needs attention' : 'Context & research'}><Button type="text" data-composer-panel="context" aria-label={preparation?.ready === false ? 'Context needs attention' : 'Context & research'} aria-expanded={contextOpen} danger={preparation?.ready === false} icon={<StackIcon size={16} aria-hidden="true" />} /></Tooltip>
+          </Popover>
+            <Tooltip title={clarifying ? 'Send reply' : 'Send'}><Button type="primary" aria-label={clarifying ? 'Send reply' : 'Send'} icon={<ArrowUpIcon size={18} aria-hidden="true" />} disabled={unavailable || !!pending || !pendingReady || !composerText.trim() || preparation?.ready === false} onClick={() => send(clarification)} /></Tooltip>
           </div>
         {busy && <p className="agent-turn-status" role="status">{operation || 'Discussion turn in progress. Partial output remains available.'}</p>}
           </MarkdownEditor>

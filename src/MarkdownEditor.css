@@ -48,6 +48,9 @@
 .markdown-editor-error { color: var(--danger); }
 .markdown-editor-readonly .markdown-editor-mode { color: var(--muted); }
 .markdown-editor-controls { display: grid; gap: 8px; padding: 8px 12px 12px; border-top: 1px solid var(--line); background: var(--surface); min-width: 0; }
+.markdown-editor-options { width: min(280px, calc(100vw - 56px)); font: 13px/1.7 var(--font-mono); }
+.markdown-editor-options .markdown-editor-keymap { justify-content: flex-start; }
+.markdown-editor-options p { margin: 12px 0 0; color: var(--muted); }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) .markdown-editor {

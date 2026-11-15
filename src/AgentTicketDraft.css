@@ -66,22 +66,25 @@
 .agent-composer .markdown-editor .cm-editor,
 .agent-composer .markdown-editor .cm-content { min-height: 48px; }
 .agent-composer .markdown-editor .cm-content { padding-block: 8px; }
+.agent-composer .markdown-editor .cm-activeLine { background: transparent; }
 .agent-composer .cm-gutters { display: none; }
 .agent-composer .markdown-editor .cm-scroller { min-height: 48px; max-height: min(12dvh, 80px); }
-.agent-composer .markdown-editor-toolbar { background: transparent; border-bottom: 0; padding-block: 4px; }
+.agent-composer .markdown-editor-toolbar { align-items: flex-end; gap: 8px; background: transparent; border-bottom: 0; padding: 4px 8px 8px; }
+.agent-composer .markdown-editor-keymap { flex: none; gap: 0; }
 .agent-composer .markdown-editor-footer { background: transparent; border-top: 0; padding-block: 4px; font-size: 12px; }
-.agent-composer .markdown-editor-controls { border-top: 0; background: transparent; padding-top: 4px; padding-bottom: 8px; }
-.agent-composer-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-width: 0; }
-.agent-composer-controls > .ant-btn-primary { margin-left: auto; }
-.agent-composer-advanced { min-width: 0; flex: 1 1 220px; }
-.agent-composer-advanced > summary { color: var(--muted); overflow-wrap: anywhere; }
-.agent-composer-advanced[open] { flex-basis: 100%; display: grid; gap: 12px; padding-bottom: 8px; }
+.agent-composer .markdown-editor-controls { flex: 1; border-top: 0; background: transparent; padding: 0; }
+.agent-composer-controls { display: flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; }
+.agent-composer-controls > .ant-btn { flex-shrink: 0; }
+.agent-composer-controls > .agent-composer-model { flex: 0 1 auto; min-width: 0; max-width: 300px; }
+.agent-composer-model > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-composer-popover { display: grid; gap: 12px; width: min(460px, calc(100vw - 56px)); max-height: min(520px, 65dvh); overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.agent-composer-popover p { margin: 0; font-size: 13px; line-height: 1.7; }
+.agent-composer-popover > .ant-btn { justify-self: start; }
+.agent-composer-popover summary { cursor: pointer; font: 13px/1.7 var(--font-mono); }
+.agent-composer-popover summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .agent-turn-status, .agent-composer-hint { color: var(--muted); margin: 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
-.agent-composer-context { min-width: 0; flex: 0 1 auto; }
-.agent-composer-context > summary { color: var(--muted); }
-.agent-composer-context[open] { flex-basis: 100%; border-top: 1px solid var(--line); padding-top: 8px; max-height: 32dvh; overflow: auto; }
 .agent-context { min-width: 0; border-top: 1px solid var(--line); margin-top: 8px; }
-.agent-context > summary { padding-block: 9px; color: var(--muted); }
+.agent-context > h3 { margin: 12px 0; font: 600 13px/1.7 var(--font-mono); }
 .agent-context-body { padding-bottom: 12px; }
 .agent-context-heading { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 10px 16px; }
 .agent-context-heading p { flex: 1 1 280px; margin: 0; font-size: 13px; line-height: 1.7; }
@@ -115,7 +118,7 @@
   .agent-generation-source > summary, .agent-generation-options > summary { min-height: 44px; align-content: center; }
   .agent-generation .agent-composer summary { min-height: 44px; align-content: center; }
   .agent-composer { padding-top: 8px; }
-  .agent-composer-advanced { flex-basis: auto; }
+  .agent-composer-popover summary { min-height: 44px; align-content: center; }
 }
 @media (max-height: 650px) {
   .agent-creation-page.editor-panel { min-height: 540px; }
