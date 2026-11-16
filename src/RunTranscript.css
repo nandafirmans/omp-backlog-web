@@ -11,20 +11,20 @@
 .run-transcript-message + *, .run-transcript-tool + * { border-top: 1px solid var(--line); }
 .run-transcript-message > header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; font: 13px/1.7 var(--font-mono); color: var(--muted); }
 .run-transcript-message-agent > header strong { color: var(--accent); }
-.run-transcript-message-user { background: var(--surface-inset); border-inline-start: 2px solid var(--accent); }
+.run-transcript-message-user { background: var(--surface-inset); }
 .run-transcript-message-system { background: color-mix(in srgb, var(--surface-inset) 50%, var(--surface-elevated)); }
 .run-transcript-plain { margin: 0; white-space: pre-wrap; font-size: 14px; }
 .run-transcript-status.ant-tag { margin: 0; background: var(--surface-inset); border-color: var(--line); color: var(--muted); }
 .run-transcript-status-running.ant-tag { color: var(--accent); border-color: var(--accent); }
 .run-transcript-status-error.ant-tag { color: var(--danger); border-color: var(--danger); }
-.run-transcript-error { border-inline-start: 2px solid var(--danger); }
-.run-transcript-markdown { font-size: 15px; line-height: 1.8; min-width: 0; }
+.run-transcript-error { background: color-mix(in srgb, var(--danger) 8%, var(--surface-inset)); }
+.run-transcript-markdown { font-size: 15px; line-height: 1.75; min-width: 0; }
 .run-transcript-markdown > :first-child { margin-top: 0; }
 .run-transcript-markdown > :last-child { margin-bottom: 0; }
 .run-transcript-markdown h1, .run-transcript-markdown h2 { font-size: 18px; line-height: 1.5; margin-block: 18px 10px; }
 .run-transcript-markdown h3, .run-transcript-markdown h4, .run-transcript-markdown h5, .run-transcript-markdown h6 { font-size: 16px; line-height: 1.6; margin-block: 16px 8px; }
 .run-transcript-markdown p { margin-block: 10px; }
-.run-transcript-markdown blockquote { margin-inline: 0; padding-left: 16px; border-left: 2px solid var(--accent); color: var(--muted); }
+.run-transcript-markdown blockquote { margin-inline: 0; padding-left: 16px; border-left: 2px solid var(--line); color: var(--muted); }
 .run-transcript-markdown :not(pre) > code { padding: 2px 4px; background: var(--surface-inset); font-size: .9em; }
 .run-transcript-markdown pre { max-width: 100%; max-height: 360px; margin-block: 12px; font-size: 13px; white-space: pre; }
 .run-transcript-markdown .markdown-table { margin-block: 12px; }
