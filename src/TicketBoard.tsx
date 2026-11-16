@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
-import { Button, Checkbox, Dropdown, Input, Modal, Popover, Segmented, Tag } from 'antd';
-import { ColumnsIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, SlidersHorizontalIcon } from '@phosphor-icons/react';
+import { Button, Checkbox, Dropdown, Input, Modal, Popover, Segmented, Tag, Tooltip } from 'antd';
+import { CircleIcon, ColumnsIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, QuestionIcon, SealCheckIcon, SlidersHorizontalIcon, TreeStructureIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useNavigate } from 'react-router';
 import type { Repo, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
@@ -41,7 +41,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
   const navigate = useNavigate();
   const [modal, modalContext] = Modal.useModal();
   const [layout, setLayout] = useState(() => localStorage.getItem('omp-ticket-layout') === 'list' ? 'list' : 'board');
-  const [showEmpty, setShowEmpty] = useState(() => localStorage.getItem('omp-ticket-empty') === 'true');
+  const [showEmpty, setShowEmpty] = useState(() => localStorage.getItem('omp-ticket-empty-columns') !== 'false');
   const [hidden, setHidden] = useState(() => (localStorage.getItem('omp-ticket-hidden') ?? '').split(',').filter(value => statuses.includes(value as Ticket['status'])));
   const [search, setSearch] = useState('');
   const [attentionFilter, setAttentionFilter] = useState<Ticket['status'] | null>(null);
@@ -59,7 +59,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
   useEffect(() => { latest.current = { tickets, snapshot }; }, [tickets, snapshot]);
   useEffect(() => {
     localStorage.setItem('omp-ticket-layout', layout);
-    localStorage.setItem('omp-ticket-empty', String(showEmpty));
+    localStorage.setItem('omp-ticket-empty-columns', String(showEmpty));
     localStorage.setItem('omp-ticket-hidden', hidden.join(','));
   }, [layout, showEmpty, hidden]);
   useEffect(() => {
@@ -95,7 +95,8 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
   const assistanceIds = new Set(tickets.filter(ticket => snapshot.runs.find(run => run.id === ticket.runId)?.lifecycle?.phase === 'assistance').map(ticket => ticket.id));
   const matching = tickets.filter(ticket => (!assistanceOnly || assistanceIds.has(ticket.id)) && `${ticket.id} ${ticket.title}`.toLowerCase().includes(search.trim().toLowerCase()));
   const columns = boardGroups.map(group => ({ ...group, tickets: matching.filter(ticket => group.statuses.includes(ticket.status) && (assistanceOnly || !hidden.includes(ticket.status))) }));
-  const visibleColumns = matching.length === 0 && (search.trim() || assistanceOnly) ? [] : columns.filter(group => (assistanceOnly || group.statuses.some(status => !hidden.includes(status))) && (showEmpty || group.tickets.length > 0 || !!dragging && !!transitionFor(dragging, group.id)));
+  const showEmptyColumns = showEmpty && layout === 'board';
+  const visibleColumns = matching.length === 0 && (search.trim() || assistanceOnly) ? [] : columns.filter(group => (assistanceOnly || group.statuses.some(status => !hidden.includes(status))) && (showEmptyColumns || group.tickets.length > 0 || !!dragging && !!transitionFor(dragging, group.id)));
   const hiddenCount = assistanceOnly ? 0 : matching.filter(ticket => hidden.includes(ticket.status)).length;
   const emptyCount = columns.filter(group => group.tickets.length === 0 && group.statuses.some(status => !hidden.includes(status))).length;
   const claimedRuns = snapshot.runs.filter(run => ['running', 'stopping', 'paused'].includes(run.status));
@@ -216,17 +217,17 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
     {modalContext}
     <span id="board-move-help" hidden>{moveHelp}</span>
     <div className="board-toolbar">
-      <Segmented aria-label="Ticket layout" value={layout} onChange={value => { clearDrag(); setLayout(value); }} options={[{ value: 'board', label: <span className="view-label"><ColumnsIcon size={16} aria-hidden="true" />Board</span> }, { value: 'list', label: <span className="view-label"><ListBulletsIcon size={16} aria-hidden="true" />List</span> }]} />
+      <Segmented aria-label="Ticket layout" value={layout} onChange={value => { clearDrag(); setLayout(value); }} options={[{ value: 'board', label: <Tooltip title="Board"><span className="view-label" aria-label="Board"><ColumnsIcon size={16} aria-hidden="true" /></span></Tooltip> }, { value: 'list', label: <Tooltip title="List"><span className="view-label" aria-label="List"><ListBulletsIcon size={16} aria-hidden="true" /></span></Tooltip> }]} />
       <Input className="ticket-search" aria-label="Search tickets" placeholder="Search by title or ID…" prefix={<MagnifyingGlassIcon size={16} aria-hidden="true" />} value={search} allowClear onChange={event => setSearch(event.target.value)} />
-      <Button aria-pressed={assistanceOnly} type={assistanceOnly ? 'primary' : 'default'} onClick={() => { clearDrag(); setAssistanceOnly(value => !value); setAttentionFilter(null); }}>Needs assistance · {assistanceIds.size}</Button>
+      <Tooltip title="Needs assistance"><Button aria-label={`Needs assistance · ${assistanceIds.size}`} aria-pressed={assistanceOnly} type={assistanceOnly ? 'primary' : 'default'} icon={<WarningCircleIcon size={16} aria-hidden="true" />} onClick={() => { clearDrag(); setAssistanceOnly(value => !value); setAttentionFilter(null); }}>{assistanceIds.size}</Button></Tooltip>
       <Popover trigger="click" placement="bottom" content={<p className="board-help-content">{moveHelp}</p>}>
-        <Button aria-describedby="board-move-help">Move help</Button>
+        <Tooltip title="Move help"><Button aria-label="Move help" aria-describedby="board-move-help" icon={<QuestionIcon size={16} aria-hidden="true" />} /></Tooltip>
       </Popover>
       <Popover trigger="click" placement="bottomRight" title="Display" content={<div className="board-display">
         <Checkbox checked={showEmpty} onChange={event => setShowEmpty(event.target.checked)}>Show empty columns</Checkbox>
         <div className="display-statuses"><strong>Visible ticket statuses</strong>{statuses.map(status => <Checkbox key={status} checked={!hidden.includes(status)} onChange={event => setHidden(previous => event.target.checked ? previous.filter(value => value !== status) : [...previous, status])}><span className={`status-label status-dot-${status}`}><span aria-hidden="true" />{label(status)}</span><span className="display-count">{matching.filter(ticket => ticket.status === status).length}</span></Checkbox>)}</div>
         <Button type="link" onClick={() => { setShowEmpty(false); setHidden([]); setAttentionFilter(null); setAssistanceOnly(false); }}>Reset display</Button>
-      </div>}><Button className="display-button" icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />}>Display{hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}</Button></Popover>
+      </div>}><Tooltip title="Display"><Button className="display-button" aria-label={`Display${hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}`} icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />}>{hiddenCount > 0 ? hiddenCount : null}</Button></Tooltip></Popover>
     </div>
     {dragging && <p className="board-drag-hint" role="status">Drop between cards in a highlighted column. Hold near an edge to scroll. Ready and Done require confirmation.</p>}
     <p className="board-announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
@@ -238,8 +239,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
           <div className="kanban-heading"><h2 id={`column-${column.id}`}>{column.label}</h2><span className="kanban-count">{column.tickets.length}</span></div>
           {column.id === 'active' && <p className="board-group-note">Agent-managed · paused work still holds the slot</p>}
           {column.id === 'attention' && <div className="board-status-filters" aria-label="Filter attention statuses">{column.statuses.map(status => <button type="button" key={status} aria-pressed={attentionFilter === status} onClick={() => setAttentionFilter(previous => previous === status ? null : status)}>{label(status)} <span>{column.tickets.filter(ticket => ticket.status === status).length}</span></button>)}</div>}
-          {layout === 'list' && shownTickets.length > 0 && <div className="board-list-header" aria-hidden="true"><span>ID</span><span>Title</span><span>Status</span><span>Next action</span><span>Actions</span></div>}
-          <ol className="ticket-list">{shownTickets.map((value, index) => {
+                    <ol className="ticket-list">{shownTickets.map((value, index) => {
             const run = snapshot.runs.find(run => run.id === value.runId);
             const movable = canMoveTicket(value) && !lifecycleOwnsCompletion(run) && !disabled;
             const previous = shownTickets[index - 1];
@@ -249,26 +249,23 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
             const details = `/projects/${encode(repo.id)}/tickets/${encode(value.id)}`;
             return <li key={value.id} data-ticket-id={value.id} className={`${dragging?.id === value.id ? 'is-dragging ' : ''}${over?.group === column.id && over.before === value.id ? 'drop-before' : ''}`}>
               <article className={`ticket-card board-ticket ${selectedId === value.id ? 'selected' : ''}`} aria-label={`${value.id}: ${value.title}, ${label(value.status)}`} draggable={movable && layout === 'board'} onDragStart={event => { if (!movable || (event.target as HTMLElement).closest('a, .board-card-actions')) { event.preventDefault(); return; } dragSource.current = value; setDragging(value); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', value.id); event.dataTransfer.setDragImage(event.currentTarget, 24, 24); }} onDragEnd={clearDrag}>
-                <div className="board-card-top"><button type="button" className="board-drag-handle" disabled={!movable} aria-label={`Drag ${value.id}; use Actions for keyboard or touch moves`} aria-describedby="board-move-help" title={movable ? 'Drag to move; use Actions without dragging' : 'Unavailable while active, invalid, or saving'}><DotsSixVerticalIcon size={18} aria-hidden="true" /></button><span className="ticket-meta">{value.id}</span><Tag className={`badge status-${value.status}`}>{label(value.status)}</Tag></div>
-                <Link draggable={false} className="board-ticket-title" aria-current={selectedId === value.id ? 'page' : undefined} onClick={event => onOpen(event.currentTarget)} to={details}><strong>{value.title || value.id}</strong></Link>
-                <div className="board-ticket-details">
-                  {run?.lifecycle && <Tag className={run.lifecycle.phase === 'assistance' ? 'attention' : ''}>{lifecycleLabels[run.lifecycle.phase]}</Tag>}
-                  {value.removed && <small>Ticket file removed</small>}
-                  {value.dependencies.length > 0 && <small>Depends on {value.dependencies.join(', ')}</small>}
-                  {reason && <span className="ticket-error" title={reason}>{reason}</span>}
-                  {value.status === 'interrupted' && <small className="warning-text">Partial changes may remain. Review before retrying.</small>}
-                  {value.approvedRevision === value.revision && <span className="permission-note">✓ Revision approved</span>}
-                  {run?.lifecycle && <Link draggable={false} to={`/runs/${encode(run.id)}`} onClick={event => onOpen(event.currentTarget)}>Review lifecycle evidence</Link>}
-                </div>
-                <div className="board-card-actions">
-                  <Link to={run?.dialog ? `/runs/${encode(run.id)}` : details} onClick={event => onOpen(event.currentTarget)}>{run?.dialog ? 'Answer needed' : value.status === 'interrupted' ? 'Review recovery' : value.status === 'blocked' ? 'View blocker' : value.status === 'failed' ? 'View error' : value.status === 'needs_review' ? 'Review evidence' : 'Open ticket'}</Link>
-                  <Dropdown trigger={['click']} menu={{ items: [
+                <div className="board-card-top"><button type="button" className="board-drag-handle" disabled={!movable} aria-label={`Drag ${value.id}; use Actions for keyboard or touch moves`} aria-describedby="board-move-help" title={movable ? 'Drag to move; use Actions without dragging' : 'Unavailable while active, invalid, or saving'}><DotsSixVerticalIcon size={18} aria-hidden="true" /></button><span className="ticket-meta">{value.id}</span><Tag className={`badge status-${value.status}`}><CircleIcon size={8} weight="fill" aria-hidden="true" />{label(value.status)}</Tag><Dropdown trigger={['click']} menu={{ items: [
                     { key: 'ready', label: value.status === 'needs_review' ? 'Request changes → Ready' : 'Move to Ready…', disabled: disabled || lifecycleOwnsCompletion(run) || !transitionFor(value, 'ready'), onClick: () => void move(value, 'ready') },
                     { key: 'done', label: 'Accept evidence → Done…', disabled: disabled || lifecycleOwnsCompletion(run) || !transitionFor(value, 'done'), onClick: () => void move(value, 'done') },
                     { type: 'divider' },
                     { key: 'up', label: 'Move up in column', disabled: !movable || !previous, onClick: () => void move(value, column.id, previous?.id) },
                     { key: 'down', label: 'Move down in column', disabled: !movable || !next, onClick: () => void move(value, column.id, afterNext?.id) },
-                  ] }}><Button ref={element => { if (element) controls.current.set(value.id, element); else controls.current.delete(value.id); }} type="text" aria-label={`Actions for ${value.id}`} disabled={disabled} icon={<DotsThreeIcon size={20} aria-hidden="true" />} /></Dropdown>
+                  ] }}><Button ref={element => { if (element) controls.current.set(value.id, element); else controls.current.delete(value.id); }} type="text" aria-label={`Actions for ${value.id}`} disabled={disabled} icon={<DotsThreeIcon size={20} aria-hidden="true" />} /></Dropdown></div>
+                <Link draggable={false} className="board-ticket-title" aria-current={selectedId === value.id ? 'page' : undefined} onClick={event => onOpen(event.currentTarget)} to={details}><strong>{value.title || value.id}</strong></Link>
+                <div className="board-ticket-details">
+                  {run?.lifecycle && <Tag className={run.lifecycle.phase === 'assistance' ? 'attention' : ''}>{lifecycleLabels[run.lifecycle.phase]}</Tag>}
+                  {value.removed && <small>Ticket file removed</small>}
+                  {value.dependencies.length > 0 && <small className="meta-item"><TreeStructureIcon size={14} aria-hidden="true" />{value.dependencies.join(', ')}</small>}
+                  {reason && <span className="ticket-error" title={reason}>{reason}</span>}
+                  {value.status === 'interrupted' && <small className="warning-text">Partial changes may remain. Review before retrying.</small>}
+                  {value.approvedRevision === value.revision && <span className="permission-note meta-item"><SealCheckIcon size={14} aria-hidden="true" />Approved</span>}
+                  {run?.lifecycle && <Link draggable={false} to={`/runs/${encode(run.id)}`} onClick={event => onOpen(event.currentTarget)}>Review lifecycle evidence</Link>}
+                  {(run?.dialog || ['interrupted', 'blocked', 'failed', 'needs_review'].includes(value.status)) && <Link to={run?.dialog ? `/runs/${encode(run.id)}` : details} onClick={event => onOpen(event.currentTarget)}>{run?.dialog ? 'Answer needed' : value.status === 'interrupted' ? 'Review recovery' : value.status === 'blocked' ? 'View blocker' : value.status === 'failed' ? 'View error' : value.status === 'needs_review' ? 'Review evidence' : 'Open ticket'}</Link>}
                 </div>
               </article>
             </li>;
@@ -279,6 +276,6 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
       })}
       {visibleColumns.length === 0 && <div className="board-empty"><FolderIcon size={32} weight="duotone" aria-hidden="true" /><h2>{tickets.length === 0 ? 'A clear board. A place to start.' : matching.length === 0 ? assistanceOnly ? 'No matching tickets need assistance' : 'No matching tickets' : 'All matching tickets are hidden'}</h2><p>{tickets.length === 0 ? 'Create a draft, describe the change, and define what done looks like.' : matching.length === 0 ? 'Clear the assistance filter or try another title or ticket ID.' : 'Open Display to reveal their statuses.'}</p>{tickets.length === 0 ? <Link to={`/projects/${encode(repo.id)}/tickets/new`}>Create your first ticket</Link> : <Button onClick={() => { setSearch(''); setHidden([]); setAttentionFilter(null); setAssistanceOnly(false); }}>Show all tickets</Button>}</div>}
     </div>
-    <footer className="board-footer"><span>{matching.length} of {tickets.length} tickets{assistanceOnly && ' · Needs assistance only'}{hiddenCount > 0 && <span className="warning-text"> · {hiddenCount} hidden by Display</span>}{!showEmpty && emptyCount > 0 && ` · ${emptyCount} empty columns hidden`}{attentionFilter && <> · Attention filtered: {label(attentionFilter)} <button className="board-clear-filter" type="button" onClick={() => setAttentionFilter(null)}>Clear</button></>}</span><span>{confirming ? 'Confirming move · no changes until Yes' : `${projectRuns.length ? projectRuns.map(run => `${run.ticketId} (${run.status})`).join(', ') : 'No active project run'} · ${claimedRuns.length}/${snapshot.settings.maxConcurrentTickets} global slots occupied (including paused/stopping)`}</span></footer>
+    <footer className="board-footer"><span>{matching.length} of {tickets.length} tickets{assistanceOnly && ' · Needs assistance only'}{hiddenCount > 0 && <span className="warning-text"> · {hiddenCount} hidden by Display</span>}{!showEmptyColumns && emptyCount > 0 && ` · ${emptyCount} empty columns hidden`}{attentionFilter && <> · Attention filtered: {label(attentionFilter)} <button className="board-clear-filter" type="button" onClick={() => setAttentionFilter(null)}>Clear</button></>}</span><span>{confirming ? 'Confirming move · no changes until Yes' : `${projectRuns.length ? projectRuns.map(run => `${run.ticketId} (${run.status})`).join(', ') : 'No active project run'} · ${claimedRuns.length}/${snapshot.settings.maxConcurrentTickets} global slots occupied (including paused/stopping)`}</span></footer>
   </section>;
 }
