@@ -290,7 +290,10 @@ export function createCompleteTicket(store: Store, repo: Repo, markdown: string,
         const info = await lstat(directory);
         const current = await readTicket(repo, payload.id);
         if (current.revision !== publication.revision || current.revision !== payload.revision || !publication.directory || info.dev !== publication.directory.dev || info.ino !== publication.directory.ino) throw new Error('Changed publication');
-      } catch {
+      } catch (error) {
+        // Missing or changed tickets conflict; real filesystem failures (EACCES, EIO, ...) must surface as themselves.
+        const code = error instanceof Error && 'code' in error ? error.code : undefined;
+        if (code && code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
         throw new HttpError(409, 'Previously created ticket changed or was removed; this confirmation cannot create or overwrite it again');
       }
       checkMode();

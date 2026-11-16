@@ -22,6 +22,8 @@ import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-i
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
 interface Owner { username: string; hash: string }
 const SESSION_AGE = 12 * 60 * 60 * 1000;
+// Anonymous sessions only carry a pre-login CSRF token; cap them so unauthenticated polling cannot grow the database.
+const MAX_ANONYMOUS_SESSIONS = 1000;
 function json(body: unknown, status = 200, headers?: HeadersInit): Response {
   const responseHeaders = new Headers(headers);
   responseHeaders.set('Content-Type', 'application/json; charset=utf-8');
@@ -83,24 +85,22 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       let session = rawCookie && /^[a-f0-9]{64}$/.test(rawCookie) ? db.query('SELECT * FROM sessions WHERE id=? AND expires>?').get(digest(rawCookie), Date.now()) as Session | null : null;
       if (url.pathname === '/api/session' && request.method === 'GET') {
         let cookie: string | undefined;
-        if (!session) { const raw = token(); session = { id: digest(raw), csrf: token(), authenticated: 0, expires: Date.now() + SESSION_AGE }; db.query('INSERT INTO sessions VALUES(?,?,?,?)').run(session.id, session.csrf, 0, session.expires); cookie = `omp_session=${raw}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_AGE / 1000}${secureCookie}`; }
+        if (!session) { const raw = token(); session = { id: digest(raw), csrf: token(), authenticated: 0, expires: Date.now() + SESSION_AGE }; db.query('INSERT INTO sessions VALUES(?,?,?,?)').run(session.id, session.csrf, 0, session.expires); db.query('DELETE FROM sessions WHERE authenticated=0 AND id NOT IN (SELECT id FROM sessions WHERE authenticated=0 ORDER BY expires DESC LIMIT ?)').run(MAX_ANONYMOUS_SESSIONS); cookie = `omp_session=${raw}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_AGE / 1000}${secureCookie}`; }
         return json({ authenticated: Boolean(session.authenticated), configured: Boolean(db.query('SELECT id FROM owner WHERE id=1').get()), csrf: session.csrf }, 200, cookie ? { 'Set-Cookie': cookie } : undefined);
       }
       if (url.pathname === '/api/login' && request.method === 'POST') {
         const input = await body(request);
         const username = string(input.username, 'username', 100);
         const password = string(input.password, 'password', 1024);
-        const throttle = db.query('SELECT failures,until_at FROM throttle WHERE id=1').get() as { failures: number; until_at: number } | null;
-        if (throttle && throttle.until_at > Date.now()) return json({ error: 'Too many attempts. Wait before trying again.' }, 429, { 'Retry-After': String(Math.ceil((throttle.until_at - Date.now()) / 1000)) });
         const owner = db.query('SELECT username,hash FROM owner WHERE id=1').get() as Owner | null;
         if (!owner) throw new HttpError(503, 'Owner is not configured. Run bun server/setup.ts in a terminal.');
+        const throttle = db.query('SELECT until_at FROM throttle WHERE id=1').get() as { until_at: number } | null;
+        if (throttle && throttle.until_at > Date.now()) return json({ error: 'Too many attempts. Wait before trying again.' }, 429, { 'Retry-After': String(Math.ceil((throttle.until_at - Date.now()) / 1000)) });
+        // Count the attempt before the slow hash check so parallel guesses cannot share one failure slot.
+        const { failures } = db.query('INSERT INTO throttle VALUES(1,1,0) ON CONFLICT(id) DO UPDATE SET failures=failures+1 RETURNING failures').get() as { failures: number };
+        if (failures >= 5) db.query('UPDATE throttle SET until_at=? WHERE id=1').run(Date.now() + Math.min(15 * 60 * 1000, 1000 * 2 ** Math.min(failures - 5, 10)));
         const valid = await Bun.password.verify(password, owner.hash);
-        if (!equal(username, owner.username) || !valid) {
-          const failures = (throttle?.failures || 0) + 1;
-          const delay = failures < 5 ? 0 : Math.min(15 * 60 * 1000, 1000 * 2 ** Math.min(failures - 5, 10));
-          db.query('INSERT INTO throttle VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET failures=excluded.failures,until_at=excluded.until_at').run(failures, Date.now() + delay);
-          throw new HttpError(401, 'Incorrect username or password');
-        }
+        if (!equal(username, owner.username) || !valid) throw new HttpError(401, 'Incorrect username or password');
         db.query('DELETE FROM throttle').run();
         if (session) db.query('DELETE FROM sessions WHERE id=?').run(session.id);
         const raw = token(); const csrf = token();
@@ -145,9 +145,11 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
       if (url.pathname === '/api/repos' && request.method === 'POST') {
         const input = await body(request);
         let path = await permittedPath(store, string(input.path, 'path'));
-        const gitResult = Bun.spawn(['git', '-C', path, 'rev-parse', '--show-toplevel'], { stdout: 'pipe', stderr: 'ignore' });
+        const gitResult = Bun.spawn(['git', '-C', path, 'rev-parse', '--show-toplevel'], { stdin: 'ignore', stdout: 'pipe', stderr: 'ignore', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, timeout: 10_000 });
         const output = (await new Response(gitResult.stdout).text()).trim();
         const git = await gitResult.exited === 0;
+        // A killed probe is unknown, not "not a Git repository"; never register it with the wrong mode.
+        if (gitResult.signalCode) throw new HttpError(504, 'Git inspection timed out; check the directory and try again');
         if (git) path = await permittedPath(store, output);
         if (store.list('repos').some(repo => repo.path === path)) throw new HttpError(409, 'This canonical repository is already registered');
         const repo: Repo = { id: randomUUID(), name: basename(path), path, git, mode: 'paused', lastStarted: 0 };

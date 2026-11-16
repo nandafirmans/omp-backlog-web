@@ -69,3 +69,27 @@ test('tailnet login keeps secure cookies, authentication, same-origin and CSRF e
   expect(logout.headers.get('set-cookie')).toContain('; Secure');
   expect((await request('/api/state', { headers: { Cookie: cookie } })).status).toBe(401);
 });
+
+test('parallel failed logins each count toward the throttle', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'omp-backlog-throttle-'));
+  const local = createStore(directory);
+  try {
+    database(local).query('INSERT INTO owner (id, username, hash) VALUES (1, ?, ?)').run('owner', await Bun.password.hash(crypto.randomUUID(), { algorithm: 'argon2id' }));
+    const localApi = createApi(local, runtime);
+    const attempt = () => localApi(new Request('http://127.0.0.1:4310/api/login', { method: 'POST', headers: { Origin: 'http://127.0.0.1:4310', 'Content-Type': 'application/json' }, body: JSON.stringify({ username: 'owner', password: 'wrong' }) }));
+    const statuses = (await Promise.all(Array.from({ length: 10 }, attempt))).map(response => response.status);
+    expect(statuses.filter(status => status === 401)).toHaveLength(5);
+    expect(statuses.filter(status => status === 429)).toHaveLength(5);
+    expect(database(local).query('SELECT failures FROM throttle WHERE id=1').get()).toEqual({ failures: 5 });
+  } finally { closeStore(local); await rm(directory, { recursive: true, force: true }); }
+});
+
+test('anonymous session creation is capped', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'omp-backlog-sessions-'));
+  const local = createStore(directory);
+  try {
+    const localApi = createApi(local, runtime);
+    for (let index = 0; index < 1005; index++) await localApi(new Request('http://127.0.0.1:4310/api/session'));
+    expect(database(local).query('SELECT count(*) AS count FROM sessions WHERE authenticated=0').get()).toEqual({ count: 1000 });
+  } finally { closeStore(local); await rm(directory, { recursive: true, force: true }); }
+});
