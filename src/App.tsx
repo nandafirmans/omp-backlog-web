@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Alert, Breadcrumb, Button, ConfigProvider, Dropdown, Grid, Input, Skeleton, Tag, theme } from 'antd';
-import { GearSixIcon, CheckIcon, DesktopIcon, SignOutIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { PaletteIcon, SlidersIcon, GearSixIcon, CheckIcon, DesktopIcon, SignOutIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useLocation, useParams } from 'react-router';
 import type { Snapshot } from '../server/contracts';
 import plan from '../PLAN.md?raw';
@@ -182,7 +182,7 @@ export default function App() {
         fontWeightStrong: 700,
         motion: false,
       },
-      components: { Button: { fontWeight: 400, primaryColor: dark ? palette.surface : palette.elevated, defaultShadow: 'none', primaryShadow: 'none' } },
+      components: { Tooltip: { colorBgSpotlight: palette.raised, colorTextLightSolid: palette.text }, Button: { fontWeight: 400, primaryColor: dark ? palette.surface : palette.elevated, defaultShadow: 'none', primaryShadow: 'none' } },
     }}>
       <div className="workspace">
         <a className="skip-link" href="#content">Skip to content</a>
@@ -206,10 +206,10 @@ export default function App() {
           </header>
           <main id="content" tabIndex={-1} className={session?.authenticated ? (pathname === '/' || pathname === '/projects/new' ? 'home-main' : pathname.endsWith('/tickets/new/agent') ? 'drafting-main' : pathname.startsWith('/projects/') ? 'workspace-main' : undefined) : undefined}>
             {error && <Alert type="error" title={error} closable={{ onClose: () => setError('') }} role="alert" />}
-            {session?.authenticated && view === 'settings' && <><h1>Settings</h1><p className="lead">Browser appearance and defaults for new ticket runs.</p><nav className="settings-navigation" aria-label="Settings sections"><a href="#appearance-heading">Appearance</a><a href="#execution-settings">Execution</a></nav></>}
+            {session?.authenticated && view === 'settings' && <><h1>Settings</h1><nav className="settings-navigation" aria-label="Settings sections"><a href="#appearance-heading"><PaletteIcon size={16} aria-hidden="true" />Appearance</a><a href="#execution-settings"><SlidersIcon size={16} aria-hidden="true" />Execution</a></nav></>}
             {session?.authenticated && view === 'settings' && <section className="panel appearance-settings" aria-labelledby="appearance-heading">
-              <h2 id="appearance-heading">Appearance</h2>
-              <p className="muted">Color theme for this browser. Changes apply immediately; System follows your device.</p>
+              <h2 id="appearance-heading" className="icon-heading"><PaletteIcon size={16} aria-hidden="true" />Appearance</h2>
+              <p className="muted">Theme for this browser. Applies immediately.</p>
               <Dropdown trigger={['click']} menu={{
                 selectable: true,
                 selectedKeys: [colorMode],

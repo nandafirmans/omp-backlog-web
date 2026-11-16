@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Drawer, Grid, Input, Modal, Popover, Spin, Tag, Tooltip } from 'antd';
-import { ArrowDownIcon, ArrowUpIcon, CaretDownIcon, StackIcon } from '@phosphor-icons/react';
+import { ArrowDownIcon, ArrowUpIcon, CaretDownIcon, StackIcon, TicketIcon, CopyIcon, GearIcon, PlusIcon, SidebarSimpleIcon, ArrowClockwiseIcon } from '@phosphor-icons/react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
 import type { AgentWorkspace, AgentWorkspaceSnapshot, AgentWorkspaceSummary, ResponseGenerationModels, ResponseOperation } from '../server/agent-workspace-contracts';
 import type { DraftContext, DraftPreparation, DraftSnapshot } from '../server/drafting-contracts';
 import type { UploadAttachments } from './attachments';
+import ChatCodeBlock from './ChatCodeBlock';
 import MarkdownEditor from './MarkdownEditor';
 import type { RequestApi } from './Workspace';
 import { acceptedComposerText, mergeWorkspaceRuntime } from './agentWorkspaceState';
@@ -28,6 +29,28 @@ interface Props {
 
 const json = (body: unknown, method = 'POST'): RequestInit => ({ method, body: JSON.stringify(body) });
 const failure = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
+const clarificationPrefix = 'Clarification for ticket creation from assistant response';
+const clarificationSuffix = '\n\nApply my answers (';
+
+/** Shows only the user's own answer for wrapped clarification replies (multipart bodies store CRLF). */
+function displayText(role: string, text: string) {
+  if (role !== 'user' || !text.startsWith(clarificationPrefix)) return text;
+  const normalized = text.replaceAll('\r\n', '\n');
+  const marker = '\n\nMy answers:\n';
+  const start = normalized.lastIndexOf(marker);
+  if (start < 0) return text;
+  const answer = normalized.slice(start + marker.length);
+  const end = answer.indexOf(clarificationSuffix);
+  return end < 0 ? answer : answer.slice(0, end);
+}
+
+/** Memoized so typing in the composer does not re-parse every message. */
+const MessageMarkdown = memo(function MessageMarkdown({ text, attachmentBase }: { text: string; attachmentBase?: string }) {
+  return attachmentBase === undefined
+    ? <Markdown remarkPlugins={[remarkGfm]} skipHtml components={{ img: ({ alt }) => <span>Image: {alt || 'attachment'}</span> }}>{text}</Markdown>
+    : <Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => url.startsWith('attachments/') ? `${attachmentBase}/${url.slice('attachments/'.length)}` : defaultUrlTransform(url)} components={{ pre: ChatCodeBlock, img: ({ src, alt }) => <a href={typeof src === 'string' ? src : undefined}>Image: {alt || 'attachment'}</a> }}>{text}</Markdown>;
+});
+
 const emptyMessages: DraftSnapshot['messages'] = [];
 
 export default function AgentTicketDraft({ repoId, api, files, onUpload, onClearFiles, onBeforeWorkspaceChange, onDirtyChange, onBusyChange, disabled = false }: Props) {
@@ -35,12 +58,16 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const [workspace, setWorkspace] = useState<AgentWorkspace>();
   const [snapshot, setSnapshot] = useState<DraftSnapshot | null>(null);
   const [prompt, setPrompt] = useState('');
+  const [copiedIndex, setCopiedIndex] = useState<number>();
   const [replies, setReplies] = useState<Record<number, string>>({});
   const [title, setTitle] = useState('');
   const savedTitle = useRef('');
   const [showArchived, setShowArchived] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('omp-chat-sidebar') === 'collapsed'; } catch { return false; }
+  });
   const [composerPanel, setComposerPanel] = useState<'model' | 'context' | 'closed'>();
   const screens = Grid.useBreakpoint();
   const [excluded, setExcluded] = useState<string[]>([]);
@@ -345,11 +372,11 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     }
   }
 
-  function send(clarification?: ResponseOperation) {
-    const text = clarification ? replies[clarification.responseIndex] ?? '' : prompt;
+  function send(clarification?: ResponseOperation, retryText?: string) {
+    const text = retryText ?? (clarification ? replies[clarification.responseIndex] ?? '' : prompt);
     if (unavailable || pending || !pendingReady || !text.trim()) return;
     const submittedPrompt = clarification
-      ? `Clarification for ticket creation from assistant response ${clarification.responseIndex + 1}:\n\nSource response:\n${messages[clarification.responseIndex].text}\n\nQuestions:\n${(clarification.questions ?? []).map(question => `- ${question}`).join('\n')}\n\nMy answers:\n${text}`
+      ? `Clarification for ticket creation from assistant response ${clarification.responseIndex + 1}:\n\nSource response:\n${messages[clarification.responseIndex].text}\n\nQuestions:\n${(clarification.questions ?? []).map(question => `- ${question}`).join('\n')}\n\nMy answers:\n${text}\n\nApply my answers (if I defer to your recommendation, adopt your recommended option for each question). Reply with the updated summary plan with every question resolved, ready for ticket creation. Do not repeat the questions.`
       : text;
     void run('Preparing message…', async () => {
       if (!connected) await connect();
@@ -368,6 +395,16 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
       setOperation('Starting discussion turn…');
       await submitTurn(turn);
     });
+  }
+
+  async function copyResponse(index: number) {
+    try {
+      await navigator.clipboard.writeText(messages[index].text);
+      setCopiedIndex(index);
+      window.setTimeout(() => setCopiedIndex(current => current === index ? undefined : current), 1500);
+    } catch (cause) {
+      setError(`Could not copy response: ${failure(cause)}`);
+    }
   }
 
   function research() {
@@ -421,6 +458,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
           <MarkdownEditor label={clarifying ? 'Reply' : 'Message'} value={composerText} onChange={text => clarification ? setReplies(current => ({ ...current, [clarification.responseIndex]: text })) : setPrompt(text)} repoId={repoId} api={api} commands={snapshot?.commands ?? []} disabled={disabled || workspace.archived} onUpload={onUpload} onSubmit={() => send(clarification)}>
           {!!files.length && <p className="agent-composer-hint">Attached · {files.map(file => file.file.name).join(', ')} · Staged until sent</p>}
           <div className="agent-composer-controls" onKeyDown={event => { if (event.key === 'Escape' && (composerPanel === 'model' || contextOpen)) { const panel = contextOpen ? 'context' : 'model'; setComposerPanel('closed'); event.currentTarget.querySelector<HTMLButtonElement>(`[data-composer-panel="${panel}"]`)?.focus(); } }}>
+            {!clarifying && <>
             <Popover trigger="click" placement="top" title="Model settings" open={composerPanel === 'model'} onOpenChange={open => { setComposerPanel(open ? 'model' : undefined); if (open && !connected && !unavailable) void run('Loading model settings…', async () => { await connect(); }); }} content={<div className="agent-composer-popover">
               {snapshot ? <ModelPicker modelAriaLabel="Drafting model" thinkingAriaLabel="Drafting thinking level"
                 disabled={unavailable || !connected} modelDisabled={!snapshot.models.length} thinkingDisabled={!snapshot.thinkingLevels.length}
@@ -454,13 +492,20 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
           </div>}>
             <Tooltip title={preparation?.ready === false ? 'Context needs attention' : 'Context & research'}><Button type="text" data-composer-panel="context" aria-label={preparation?.ready === false ? 'Context needs attention' : 'Context & research'} aria-expanded={contextOpen} danger={preparation?.ready === false} icon={<StackIcon size={16} aria-hidden="true" />} /></Tooltip>
           </Popover>
+            </>}
             <Tooltip title={clarifying ? 'Send reply' : 'Send'}><Button type="primary" aria-label={clarifying ? 'Send reply' : 'Send'} icon={<ArrowUpIcon size={18} aria-hidden="true" />} disabled={unavailable || !!pending || !pendingReady || !composerText.trim() || preparation?.ready === false} onClick={() => send(clarification)} /></Tooltip>
           </div>
         {busy && <p className="agent-turn-status" role="status">{operation || 'Discussion turn in progress. Partial output remains available.'}</p>}
           </MarkdownEditor>
         </div>;
+  function toggleSidebar() {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    try { localStorage.setItem('omp-chat-sidebar', next ? 'collapsed' : 'expanded'); } catch { /* preference is optional */ }
+  }
+
   const history = <div className="agent-history">
-    <Button disabled={busy || disabled} onClick={() => openWorkspace()}>New chat</Button>
+    <Button block icon={<PlusIcon size={16} aria-hidden="true" />} disabled={busy || disabled} onClick={() => openWorkspace()}>New chat</Button>
     <nav className="agent-history-list" aria-label="Saved conversations">
       {workspaces.filter(item => showArchived || !item.archived || item.id === workspace?.id).map(item =>
         <Button key={item.id} type="text" className="agent-history-item" aria-current={item.id === workspace?.id ? 'true' : undefined} disabled={busy || disabled} onClick={() => openWorkspace(item.id)}>
@@ -468,14 +513,23 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
         </Button>)}
       {!workspaces.length && <p className="muted">{operation ? 'Loading conversations…' : 'No saved conversations.'}</p>}
     </nav>
-    <Button onClick={() => { setHistoryOpen(false); setSettingsOpen(true); }}>Chat settings</Button>
+    <Button block type="text" icon={<GearIcon size={16} aria-hidden="true" />} onClick={() => { setHistoryOpen(false); setSettingsOpen(true); }}>Chat settings</Button>
   </div>;
 
-  return <section className="agent-workspace" aria-label="Persistent agent workspace">
+  return <section className={`agent-workspace${sidebarCollapsed && screens.md !== false ? ' agent-workspace-collapsed' : ''}`} aria-label="Persistent agent workspace">
     {modalContext}
     {screens.md === false
       ? <Drawer title="Conversations" placement="left" open={historyOpen} onClose={() => setHistoryOpen(false)} size={280}>{history}</Drawer>
-      : <aside className="agent-history-sidebar" aria-label="Conversations"><h2>Conversations</h2>{history}</aside>}
+      : sidebarCollapsed
+        ? <aside className="agent-history-sidebar agent-history-collapsed" aria-label="Conversations">
+            <Tooltip title="Show conversations" placement="right"><Button type="text" aria-label="Show conversations" aria-expanded={false} icon={<SidebarSimpleIcon size={18} aria-hidden="true" />} onClick={toggleSidebar} /></Tooltip>
+            <Tooltip title="New chat" placement="right"><Button type="text" aria-label="New chat" icon={<PlusIcon size={18} aria-hidden="true" />} disabled={busy || disabled} onClick={() => openWorkspace()} /></Tooltip>
+            <Tooltip title="Chat settings" placement="right"><Button className="agent-history-rail-end" type="text" aria-label="Chat settings" icon={<GearIcon size={18} aria-hidden="true" />} onClick={() => setSettingsOpen(true)} /></Tooltip>
+          </aside>
+        : <aside className="agent-history-sidebar" aria-label="Conversations">
+            <div className="agent-history-header"><h2>Conversations</h2><Tooltip title="Hide conversations"><Button type="text" aria-label="Hide conversations" aria-expanded icon={<SidebarSimpleIcon size={18} aria-hidden="true" />} onClick={toggleSidebar} /></Tooltip></div>
+            {history}
+          </aside>}
     <div className="agent-chat-main">
     {screens.md === false && <div className="agent-workspace-toolbar"><Button onClick={() => setHistoryOpen(true)} aria-expanded={historyOpen}>Conversations</Button></div>}
       <Modal title="Chat settings" open={settingsOpen} onCancel={() => setSettingsOpen(false)} footer={null}>
@@ -513,14 +567,20 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
             const result = responseOperations.find(operation => operation.responseIndex === index);
             const inspection = result?.publicationId ? inspections[result.publicationId] : undefined;
             const eligible = eligibleResponseIndices.includes(index);
-            return <article key={index} className={`agent-message agent-message-${item.role}`}><header><strong>{item.role === 'user' ? 'You' : 'OMP agent'}</strong>{item.status && <Tag>{item.status}</Tag>}{item.model && <small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small>}</header><div className="agent-message-content" tabIndex={0}><Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={url => url.startsWith('attachments/') ? `${path}/attachments/${index}/${url.slice('attachments/'.length)}` : defaultUrlTransform(url)} components={{ img: ({ src, alt }) => <a href={typeof src === 'string' ? src : undefined}>Image: {alt || 'attachment'}</a> }}>{item.text || (snapshot?.status === 'busy' ? 'Waiting for agent output…' : '(No text returned)')}</Markdown></div>
-              {(eligible || result) && <div className="agent-response-actions">
-                {!result && <Button disabled={unavailable} onClick={() => createTickets(index)}>Create tickets</Button>}
-                {result && <Button disabled={disabled || !!operation} onClick={() => openTicketResponse(index)}>Tickets · {result.state === 'generating' ? 'Generating…' : result.state === 'publishing' ? 'Saving…' : result.state === 'complete' ? 'Saved' : 'Needs attention'}</Button>}
+            const retryText = index === messages.length - 1 && messages[index - 1]?.role === 'user' ? messages[index - 1].text : undefined;
+            return <article key={index} className={`agent-message agent-message-${item.role}`}>{item.role !== 'user' && item.model && <header><small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small></header>}<div className="agent-message-content" tabIndex={0}><MessageMarkdown text={displayText(item.role, item.text) || (snapshot?.status === 'busy' ? 'Waiting for agent output…' : '(No text returned)')} attachmentBase={`${path}/attachments/${index}`} /></div>
+              {item.role === 'assistant' && !!item.text.trim() && <div className="agent-response-actions">
+                {!result && <Tooltip title="Create tickets"><Button type="text" aria-label="Create tickets" icon={<TicketIcon size={18} aria-hidden="true" />} disabled={unavailable} onClick={() => createTickets(index)} /></Tooltip>}
+                {result && (() => {
+                  const label = `Tickets · ${result.state === 'generating' ? 'Generating…' : result.state === 'publishing' ? 'Saving…' : result.state === 'complete' ? 'Saved' : 'Needs attention'}`;
+                  return <Tooltip title={label}><Button type="text" aria-label={label} icon={<TicketIcon size={18} weight="fill" aria-hidden="true" />} loading={result.state === 'generating' || result.state === 'publishing'} danger={result.state !== 'generating' && result.state !== 'publishing' && result.state !== 'complete'} disabled={disabled || !!operation} onClick={() => openTicketResponse(index)} /></Tooltip>;
+                })()}
+                <Tooltip title={copiedIndex === index ? 'Copied' : 'Copy'}><Button type="text" aria-label="Copy response" icon={<CopyIcon size={18} aria-hidden="true" />} onClick={() => void copyResponse(index)} /></Tooltip>
+                {retryText !== undefined && <Tooltip title="Retry"><Button type="text" aria-label="Retry last message" icon={<ArrowClockwiseIcon size={18} aria-hidden="true" />} disabled={unavailable || !!pending || !pendingReady} onClick={() => send(undefined, retryText)} /></Tooltip>}
                 <Modal className="agent-generation-modal" title="Ticket creation" destroyOnHidden open={ticketResponse === index} onCancel={() => setTicketResponse(undefined)} footer={<Button onClick={() => setTicketResponse(undefined)}>Back to chat</Button>} width={1040} style={{ top: 24 }} styles={{ body: { maxHeight: 'calc(100dvh - 180px)', overflowY: 'auto' } }}>
                   <div className="agent-generation">
                   <p className="muted">From this assistant response. Closing this window does not cancel generation.</p>
-                  <details className="agent-generation-source"><summary>Source response</summary><div className="agent-message-content"><Markdown remarkPlugins={[remarkGfm]} skipHtml components={{ img: ({ alt }) => <span>Image: {alt || 'attachment'}</span> }}>{item.text}</Markdown></div></details>
+                  <details className="agent-generation-source"><summary>Source response</summary><div className="agent-message-content"><MessageMarkdown text={item.text} /></div></details>
                   <div role="status" aria-live="polite" className="agent-generation-status">
                     {(!result && !!operation || result?.state === 'generating' || result?.state === 'publishing') && <Spin size="small" />}
                     <strong>{!result ? operation ? 'Starting ticket generation…' : 'Ticket status not confirmed' : result.state === 'generating' ? 'Generating tickets…' : result.state === 'publishing' ? 'Saving tickets…' : result.state === 'complete' ? 'Tickets saved' : result.state === 'clarification' ? 'Your input is needed' : result.state === 'blocked' ? 'Saving is blocked' : 'Generation interrupted'}</strong>
@@ -568,7 +628,12 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
           }) : <div className="agent-conversation-empty"><h2>What would you like to change?</h2><p>Discuss an idea, explore the repository or work through a plan.</p><p>Create tickets from a completed response when you are ready. Saved tickets stay held until you approve each revision.</p></div>}
         </div>
         <div className="agent-floating-status">
-          <Tag role="status" aria-live="polite" title={operation || snapshot?.status || 'Ready to chat'}>{operation ? 'Working' : snapshot?.status === 'busy' ? 'Responding' : snapshot?.status === 'failed' ? 'Failed' : snapshot?.status === 'stopped' ? 'Disconnected' : 'Ready'}</Tag>
+          {(() => {
+            const label = operation ? 'Working' : snapshot?.status === 'busy' ? 'Responding' : snapshot?.status === 'failed' ? 'Failed' : snapshot?.status === 'stopped' ? 'Disconnected' : 'Ready';
+            return label === 'Ready' || label === 'Working' || label === 'Responding'
+              ? <span className={`agent-status-dot agent-status-dot-${label === 'Ready' ? 'ready' : 'busy'}`} role="status" aria-live="polite" aria-label={label} title={label === 'Ready' ? 'Ready to chat' : operation || label} />
+              : <Tag role="status" aria-live="polite" title={operation || snapshot?.status}>{label}</Tag>;
+          })()}
           {snapshot?.status === "busy" && <Button disabled={disabled || !!operation} onClick={() => void run("Cancelling discussion turn…", async () => { setSnapshot(await api<DraftSnapshot>(`${path}/session/cancel`, json({}))); })}>Stop</Button>}
         </div>
         {!following && <div className="agent-floating-controls"><Button aria-label="Jump to latest" title="Jump to latest" icon={<ArrowDownIcon size={16} aria-hidden="true" />} onClick={() => { setFollowing(true); if (conversation.current) conversation.current.scrollTop = conversation.current.scrollHeight; }}>Latest</Button></div>}

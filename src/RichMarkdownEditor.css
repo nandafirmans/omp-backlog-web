@@ -144,7 +144,7 @@
 .rich-markdown-theme .rich-markdown-body h3 { font-size: 17px; }
 .rich-markdown-theme .rich-markdown-body :is(h4, h5, h6) { font-size: 14px; }
 .rich-markdown-theme .rich-markdown-body > :first-child { margin-top: 0; }
-.rich-markdown-theme .rich-markdown-body blockquote { padding-inline-start: 14px; border-inline-start: 2px solid var(--accent); color: var(--muted); }
+.rich-markdown-theme .rich-markdown-body blockquote { padding-inline-start: 14px; border-inline-start: 2px solid var(--line); color: var(--muted); }
 .rich-markdown-theme .rich-markdown-body a { color: var(--accent); text-decoration: underline; }
 .rich-markdown-theme .rich-markdown-body code { font-family: var(--font-mono); font-size: 13px; }
 .rich-markdown-theme .rich-markdown-body img { max-width: 100%; height: auto; border: 1px solid var(--line); }

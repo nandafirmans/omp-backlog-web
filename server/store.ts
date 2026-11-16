@@ -91,7 +91,7 @@ export function createStore(directory = process.env.OMP_BACKLOG_DATA || join(hom
       try { const value = db.transaction(fn)(); depth--; if (dirty) { dirty = false; target.dispatchEvent(new Event('change')); } return value; }
       catch (error) { depth--; dirty = false; throw error; }
     },
-    settings() { const row = db.query<{ value: string }, []>('SELECT value FROM config WHERE id=1').get(); if (!row) throw new Error('Settings are missing'); const settings = JSON.parse(row.value) as Settings; return { ...settings, engineeringMode: settings.engineeringMode ?? 'pstack', maxConcurrentTickets: settings.maxConcurrentTickets ?? 1 }; },
+    settings() { const row = db.query<{ value: string }, []>('SELECT value FROM config WHERE id=1').get(); if (!row) throw new Error('Settings are missing'); const settings = JSON.parse(row.value) as Settings; return { ...settings, engineeringMode: settings.engineeringMode ?? 'standard', maxConcurrentTickets: settings.maxConcurrentTickets ?? 1 }; },
     setSettings(value) { db.query('UPDATE config SET value=? WHERE id=1').run(JSON.stringify(value)); store.notify(); },
     notify() { if (depth) dirty = true; else target.dispatchEvent(new Event('change')); },
   };

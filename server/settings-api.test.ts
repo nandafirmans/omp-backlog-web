@@ -22,12 +22,12 @@ test('settings preserve legacy defaults and other values while validating thinki
     expect(fresh.engineeringMode).toBe('standard');
     const freshReload = createStore(store.dataDir);
     try { expect(freshReload.settings()).toEqual(fresh); } finally { closeStore(freshReload); }
-    const before = { ...fresh, engineeringMode: 'pstack' as const };
+    const before = { ...fresh };
     expect(before.thinking).toBeUndefined();
     expect(before.maxConcurrentTickets).toBe(1);
     const { maxConcurrentTickets: omittedCapacity, engineeringMode: omittedMode, ...legacy } = before;
     expect(omittedCapacity).toBe(1);
-    expect(omittedMode).toBe('pstack');
+    expect(omittedMode).toBe('standard');
     database(store).query('UPDATE config SET value=? WHERE id=1').run(JSON.stringify(legacy));
     expect(store.settings()).toEqual(before);
     const legacyReload = createStore(store.dataDir);
@@ -39,7 +39,7 @@ test('settings preserve legacy defaults and other values while validating thinki
       expect((await call('settings', 'PATCH', { engineeringMode, paused: true })).status).toBe(400);
       expect(store.settings()).toEqual(before);
     }
-    for (const engineeringMode of ['standard', 'pstack'] as const) {
+    for (const engineeringMode of ['pstack', 'standard'] as const) {
       const response = await call('settings', 'PATCH', { engineeringMode });
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({ ...before, engineeringMode });

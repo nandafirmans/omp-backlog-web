@@ -14,10 +14,10 @@ test('ticket model/budget overrides preserve defaults, explicit OMP default and 
   expect(parseExecutionOverrides({ tokenBudget: null })).toEqual({ tokenBudget: null });
   const settings = { executable: 'unused', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30, maxConcurrentTickets: 1, roots: [], paused: true };
   const ticket = { execution: undefined };
-  expect(resolveRunConfiguration(settings, ticket)).toEqual({ engineeringMode: 'pstack', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30 });
-  expect(resolveRunConfiguration(settings, { ...ticket, execution: { model: 'provider/ticket', tokenBudget: 2000 } })).toEqual({ engineeringMode: 'pstack', model: 'provider/ticket', thinking: '', tokenBudget: 2000, timeLimitMinutes: 30 });
+  expect(resolveRunConfiguration(settings, ticket)).toEqual({ engineeringMode: 'standard', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30 });
+  expect(resolveRunConfiguration(settings, { ...ticket, execution: { model: 'provider/ticket', tokenBudget: 2000 } })).toEqual({ engineeringMode: 'standard', model: 'provider/ticket', thinking: '', tokenBudget: 2000, timeLimitMinutes: 30 });
   expect(resolveRunConfiguration(settings, { ...ticket, execution: { model: '', thinking: 'off' } }).model).toBe('');
-  expect(resolveRunConfiguration(settings, { execution: { tokenBudget: null } })).toEqual({ engineeringMode: 'pstack', model: 'provider/global', thinking: 'high', tokenBudget: null, timeLimitMinutes: 30 });
+  expect(resolveRunConfiguration(settings, { execution: { tokenBudget: null } })).toEqual({ engineeringMode: 'standard', model: 'provider/global', thinking: 'high', tokenBudget: null, timeLimitMinutes: 30 });
   expect(resolveRunConfiguration(settings, { execution: {} }).tokenBudget).toBe(1000);
   expect(resolveRunConfiguration({ ...settings, tokenBudget: null }, { execution: {} }).tokenBudget).toBeNull();
   expect(resolveRunConfiguration({ ...settings, tokenBudget: null }, { execution: { tokenBudget: 500 } }).tokenBudget).toBe(500);
@@ -27,7 +27,7 @@ test('engineering mode validates exact overrides and snapshots ticket, global an
   for (const engineeringMode of ['', 'STANDARD', 'inherit', null, false, 1, {}, []]) expect(() => parseExecutionOverrides({ engineeringMode })).toThrow('Invalid engineering mode');
   expect(parseExecutionOverrides({})).toEqual({});
   const settings: Settings = { executable: 'unused', model: 'provider/global', thinking: 'high', tokenBudget: 1000, timeLimitMinutes: 30, maxConcurrentTickets: 1, roots: [], paused: true };
-  expect(resolveRunConfiguration(settings, {}).engineeringMode).toBe('pstack');
+  expect(resolveRunConfiguration(settings, {}).engineeringMode).toBe('standard');
   for (const engineeringMode of ['standard', 'pstack'] as const) {
     expect(parseExecutionOverrides({ engineeringMode })).toEqual({ engineeringMode });
     const global = { ...settings, engineeringMode };

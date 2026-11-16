@@ -15,8 +15,8 @@ interface Props {
   modelDisabled?: boolean;
   thinkingDisabled?: boolean;
   loading?: boolean;
-  modelLabel?: string;
-  thinkingLabel?: string;
+  modelLabel?: ReactNode;
+  thinkingLabel?: ReactNode;
   modelAriaLabel?: string;
   thinkingAriaLabel?: string;
   modelPlaceholder?: string;

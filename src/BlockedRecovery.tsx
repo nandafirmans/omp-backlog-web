@@ -1,3 +1,4 @@
+import { ArrowClockwiseIcon, ArrowCounterClockwiseIcon, FloppyDiskIcon } from '@phosphor-icons/react';
 import { useEffect, useState } from 'react';
 import { Button, Modal } from 'antd';
 import { Link } from 'react-router';
@@ -74,9 +75,9 @@ export default function BlockedRecovery({ repo, ticket, run, api, disabled, exec
     {stale && <p className="warning-text" role="alert">Requirements or saved recovery note changed. Your text is preserved; copy it before loading the current note and review current requirements.</p>}
     {error && <p className="error-banner" role="alert">{error} Your text is preserved. Load the current note to reconcile before retrying; an uncertain response may already have saved.</p>}
     <div className="toolbar">
-      <Button disabled={busy || stale || !!error || invalid || !!base.note && !dirty && base.note.revision === ticket.revision} onClick={() => void save()}>Save recovery note</Button>
-      <Button type="primary" disabled={busy || stale || !!error || dirty || invalid || !base.note || base.note.revision !== ticket.revision} onClick={() => void retry()}>Review fix &amp; retry</Button>
-      {(stale || error) && <Button disabled={disabled} onClick={async () => {
+      <Button icon={<FloppyDiskIcon size={16} aria-hidden="true" />} disabled={busy || stale || !!error || invalid || !!base.note && !dirty && base.note.revision === ticket.revision} onClick={() => void save()}>Save recovery note</Button>
+      <Button icon={<ArrowCounterClockwiseIcon size={16} aria-hidden="true" />} type="primary" disabled={busy || stale || !!error || dirty || invalid || !base.note || base.note.revision !== ticket.revision} onClick={() => void retry()}>Review fix &amp; retry</Button>
+      {(stale || error) && <Button icon={<ArrowClockwiseIcon size={16} aria-hidden="true" />} disabled={disabled} onClick={async () => {
         if (dirty && !await modal.confirm({ title: 'Replace unsaved recovery instructions?', content: 'Copy your instructions first if you need both versions.', okText: 'Load saved note', cancelText: 'Keep my text' })) return;
         await execute('Current recovery note loaded. Review the current requirements before retrying.', async () => {
           const state = await api<Snapshot>('/api/state');

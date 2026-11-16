@@ -105,7 +105,7 @@ Reference: [Synthetic records](attachments/records.json)
 
 ### Engineering mode
 
-**Settings → Engineering Mode** chooses Standard OMP or OMP + pstack. New configurations default to Standard OMP; older persisted configurations without this field retain pstack. Saved tickets offer **Inherit global**, **Standard OMP**, and **OMP + pstack** under **Next attempt · mode, model & budget**.
+**Settings → Engineering Mode** chooses Standard OMP or OMP + pstack. Standard OMP is the default, including older configurations without this field; pstack is opt-in. Runs recorded before the field existed still display as pstack. Saved tickets offer **Inherit global**, **Standard OMP**, and **OMP + pstack** under **Next attempt · mode, model & budget**.
 
 Standard OMP implements directly through native tools and goal continuation, retaining applicable project verification skills. It does not run pstack discovery, router activation or invocation observation. Explicit poteto-mode/pstack-pi references in requirements do not override Standard selection; a genuine mode conflict must be reported as blocked.
 
