@@ -29,7 +29,7 @@ export function parseExecutionOverrides(value: unknown): ExecutionOverrides {
 }
 
 export function resolveRunConfiguration(settings: Settings, ticket: Pick<Ticket, 'execution'>): RunConfiguration {
-  return { engineeringMode: ticket.execution?.engineeringMode ?? settings.engineeringMode ?? 'pstack', model: ticket.execution?.model ?? settings.model, thinking: ticket.execution?.thinking ?? (ticket.execution?.model === undefined ? settings.thinking ?? '' : ''), tokenBudget: ticket.execution?.tokenBudget === undefined ? settings.tokenBudget : ticket.execution.tokenBudget, timeLimitMinutes: settings.timeLimitMinutes };
+  return { engineeringMode: ticket.execution?.engineeringMode ?? settings.engineeringMode ?? 'standard', model: ticket.execution?.model ?? settings.model, thinking: ticket.execution?.thinking ?? (ticket.execution?.model === undefined ? settings.thinking ?? '' : ''), tokenBudget: ticket.execution?.tokenBudget === undefined ? settings.tokenBudget : ticket.execution.tokenBudget, timeLimitMinutes: settings.timeLimitMinutes };
 }
 
 /** Retain only bounded telemetry, never get_state's prompts, tools or provider/session objects. */
