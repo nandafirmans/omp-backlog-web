@@ -65,3 +65,13 @@ export function insertionOrder(tickets: Ticket[], moving: Ticket, groupId: strin
   if (!Number.isFinite(order) || (previous !== undefined && order <= previous) || (next !== undefined && order >= next)) return null;
   return order === moving.order ? null : order;
 }
+
+/** The ticket plus every ticket that directly or transitively depends on it; mirrors the server's confirmation check. */
+export function dependentClosure(tickets: Pick<Ticket, 'id' | 'dependencies'>[], id: string): string[] {
+  const ids = new Set([id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const ticket of tickets) if (!ids.has(ticket.id) && ticket.dependencies.some(dep => ids.has(dep))) { ids.add(ticket.id); grew = true; }
+  }
+  return [...ids];
+}

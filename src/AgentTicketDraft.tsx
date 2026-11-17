@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
-import { Button, Checkbox, Drawer, Grid, Input, Modal, Popover, Spin, Tag, Tooltip } from 'antd';
-import { ArrowDownIcon, ArrowUpIcon, CaretDownIcon, StackIcon, TicketIcon, CopyIcon, GearIcon, PlusIcon, SidebarSimpleIcon, ArrowClockwiseIcon } from '@phosphor-icons/react';
+import { Button, Checkbox, Drawer, Dropdown, Grid, Input, Modal, Popover, Spin, Tag, Tooltip } from 'antd';
+import { ArrowDownIcon, ArrowUpIcon, CaretDownIcon, StackIcon, TicketIcon, CopyIcon, GearIcon, PlusIcon, SidebarSimpleIcon, ArrowClockwiseIcon, TrashIcon, ArchiveIcon, DotsThreeIcon, PencilSimpleIcon } from '@phosphor-icons/react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
@@ -61,6 +61,8 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const [copiedIndex, setCopiedIndex] = useState<number>();
   const [replies, setReplies] = useState<Record<number, string>>({});
   const [title, setTitle] = useState('');
+  const [renaming, setRenaming] = useState<AgentWorkspaceSummary | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const savedTitle = useRef('');
   const [showArchived, setShowArchived] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -125,7 +127,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   }, [workspace?.title]);
 
   function remember(value: AgentWorkspace) {
-    setWorkspaces(current => [value, ...current.filter(item => item.id !== value.id)]);
+    setWorkspaces(current => [value, ...current.filter(item => item.id !== value.id)].sort((a, b) => b.updatedAt - a.updatedAt));
   }
 
   function adoptAcceptedDraft(turn: PendingAgentTurn, accepted: boolean, saved?: AgentWorkspace) {
@@ -415,17 +417,53 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     });
   }
 
-  function archive() {
-    void run(workspace?.archived ? 'Restoring workspace…' : 'Archiving workspace…', async () => {
-      if (!workspace) return;
-      const version = dirty ? (await saveEditors()).workspace.version : workspace.version;
-      if (!await modal.confirm({ title: workspace.archived ? 'Restore this workspace?' : 'Archive this workspace?', content: 'Saved conversation, plan revisions and ticket Markdown are retained. Archiving stops the connected process; nothing is deleted.', okText: workspace.archived ? 'Restore workspace' : 'Stop and archive', cancelText: 'Cancel' })) return;
-      await stopSession();
-      const value = await api<AgentWorkspaceSnapshot>(path, json({ version, archived: !workspace.archived }, 'PATCH'));
-      setWorkspace(value.workspace); remember(value.workspace); setSnapshot(value.draft);
+  function archive(target: AgentWorkspaceSummary | undefined = workspace) {
+    void run(target?.archived ? 'Restoring workspace…' : 'Archiving workspace…', async () => {
+      if (!target) return;
+      const current = target.id === workspace?.id;
+      const version = current && dirty ? (await saveEditors()).workspace.version : target.version;
+      if (!await modal.confirm({ title: target.archived ? 'Restore this workspace?' : 'Archive this workspace?', content: 'Saved conversation, plan revisions and ticket Markdown are retained. Archiving stops the connected process; nothing is deleted.', okText: target.archived ? 'Restore workspace' : 'Stop and archive', cancelText: 'Cancel' })) return;
+      if (current) await stopSession();
+      const value = await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(target.id)}`, json({ version, archived: !target.archived }, 'PATCH'));
+      remember(value.workspace);
+      if (current) { setWorkspace(value.workspace); setSnapshot(value.draft); }
     });
   }
 
+  function rename() {
+    const target = renaming;
+    const next = renameValue.trim();
+    if (!target || !next) return;
+    setRenaming(null);
+    if (next === target.title) return;
+    void run('Renaming chat…', async () => {
+      const current = target.id === workspace?.id;
+      const version = current && dirty ? (await saveEditors()).workspace.version : target.version;
+      const value = await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(target.id)}`, json({ version, title: next }, 'PATCH'));
+      remember(value.workspace);
+      if (current) { setWorkspace(value.workspace); setTitle(value.workspace.title); }
+    });
+  }
+
+  function remove(target: AgentWorkspaceSummary | undefined = workspace) {
+    void run('Deleting chat…', async () => {
+      if (!target) return;
+      if (!await modal.confirm({
+        title: <><TrashIcon size={16} aria-hidden="true" />Delete this chat?</>,
+        content: <p>"{target.title}" and its saved messages will be permanently deleted. Tickets already created from it are kept. This cannot be undone.</p>,
+        okText: 'Delete chat', cancelText: 'Cancel', okButtonProps: { danger: true }, focusable: { autoFocusButton: 'cancel' },
+      })) return;
+      const current = target.id === workspace?.id;
+      if (current) await stopSession();
+      await api(`${root}/${encodeURIComponent(target.id)}`, json({ version: target.version }, 'DELETE'));
+      const rest = workspaces.filter(item => item.id !== target.id);
+      setWorkspaces(rest);
+      if (!current) return;
+      const next = rest.find(item => !item.archived);
+      const value = next ? await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(next.id)}`) : await api<AgentWorkspaceSnapshot>(root, json({}));
+      if (alive.current) { load(value); setSettingsOpen(false); }
+    });
+  }
 
   function openTicketResponse(index: number) {
     setTicketResponse(index);
@@ -508,9 +546,17 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     <Button block icon={<PlusIcon size={16} aria-hidden="true" />} disabled={busy || disabled} onClick={() => openWorkspace()}>New chat</Button>
     <nav className="agent-history-list" aria-label="Saved conversations">
       {workspaces.filter(item => showArchived || !item.archived || item.id === workspace?.id).map(item =>
-        <Button key={item.id} type="text" className="agent-history-item" aria-current={item.id === workspace?.id ? 'true' : undefined} disabled={busy || disabled} onClick={() => openWorkspace(item.id)}>
-          {item.title}{item.archived ? ' · Archived' : ''}
-        </Button>)}
+        <div key={item.id} className="agent-history-row">
+          <Button type="text" className="agent-history-item" aria-current={item.id === workspace?.id ? 'true' : undefined} disabled={busy || disabled} onClick={() => openWorkspace(item.id)}>
+            {item.title}{item.archived ? ' · Archived' : ''}
+          </Button>
+          <Dropdown trigger={['click']} menu={{ items: [
+            { key: 'rename', label: 'Rename…', icon: <PencilSimpleIcon size={16} aria-hidden="true" />, onClick: () => { setRenameValue(item.title); setRenaming(item); } },
+            { key: 'archive', label: item.archived ? 'Restore' : 'Archive…', icon: <ArchiveIcon size={16} aria-hidden="true" />, onClick: () => archive(item) },
+            { type: 'divider' },
+            { key: 'delete', label: 'Delete…', icon: <TrashIcon size={16} aria-hidden="true" />, danger: true, onClick: () => remove(item) },
+          ] }}><Button type="text" className="agent-history-delete" aria-label={`Options for ${item.title}`} icon={<DotsThreeIcon size={18} weight="bold" aria-hidden="true" />} disabled={busy || disabled} /></Dropdown>
+        </div>)}
       {!workspaces.length && <p className="muted">{operation ? 'Loading conversations…' : 'No saved conversations.'}</p>}
     </nav>
     <Button block type="text" icon={<GearIcon size={16} aria-hidden="true" />} onClick={() => { setHistoryOpen(false); setSettingsOpen(true); }}>Chat settings</Button>
@@ -532,13 +578,14 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
           </aside>}
     <div className="agent-chat-main">
     {screens.md === false && <div className="agent-workspace-toolbar"><Button onClick={() => setHistoryOpen(true)} aria-expanded={historyOpen}>Conversations</Button></div>}
+      <Modal title="Rename chat" open={!!renaming} onCancel={() => setRenaming(null)} onOk={rename} okText="Rename" okButtonProps={{ disabled: !renameValue.trim() || new Blob([renameValue.trim()]).size > 200 }} destroyOnHidden>
+        <Input aria-label="Chat title" value={renameValue} autoFocus onChange={event => setRenameValue(event.target.value)} onPressEnter={rename} />
+      </Modal>
       <Modal title="Chat settings" open={settingsOpen} onCancel={() => setSettingsOpen(false)} footer={null}>
         <div className="agent-workspace-options">
         <p className="muted">Discuss your project. Create tickets from an assistant response when ready; saved tickets stay held until you explicitly approve them for execution.</p>
-        {workspace && <><label>Title<Input aria-label="Workspace title" value={title} disabled={unavailable} onChange={event => setTitle(event.target.value)} /></label><Button disabled={unavailable || !dirty} onClick={() => void run("Saving workspace editors…", async () => { await saveEditors(); })}>Save changes</Button></>}
         <Checkbox checked={showArchived} onChange={event => setShowArchived(event.target.checked)}>Show archived</Checkbox>
         <Button disabled={busy || disabled} onClick={() => void run("Refreshing workspace list…", async () => { setWorkspaces(await api<AgentWorkspaceSummary[]>(root)); })}>Refresh chats</Button>
-        {workspace && <Button disabled={busy || disabled} onClick={archive}>{workspace.archived ? "Restore chat" : "Archive chat…"}</Button>}
         <details className="agent-safety-help"><summary>Process &amp; context limits</summary><p>Sending connects automatically. Leaving stops the owned child; saved discussion remains. No turn is replayed automatically. The process is capability-restricted, not an OS sandbox.</p><p>Only bounded recent text and plan context are supplied to new turns. Staged files live only in this tab until sent; reload requires reattaching their bytes.</p></details>
         </div>
       </Modal>

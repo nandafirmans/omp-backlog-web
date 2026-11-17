@@ -71,3 +71,8 @@
   .ticket-list-view .board-ticket-details { grid-column: 1 / -1; grid-row: 3; }
   .ticket-list-view .board-card-top > .ant-dropdown-trigger { grid-column: 3; grid-row: 1; justify-self: end; }
 }
+.board-delete-list { margin: 12px 0 0; padding: 0; list-style: none; max-height: 40vh; overflow-y: auto; border: 1px solid var(--line); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+.board-delete-list li { display: grid; grid-template-columns: 56px minmax(0, 1fr); column-gap: 12px; margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--line); white-space: normal; }
+.board-delete-list li:last-child { border-bottom: 0; }
+.board-delete-list .ticket-meta { grid-row: 1 / span 2; font-weight: 600; }
+.board-delete-list small { color: var(--muted); }

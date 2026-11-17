@@ -330,6 +330,33 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
     delete receipt.hash; delete receipt.sourceContext;
     return json({ accepted: true, receipt });
   }
+  if (segments.length === 5 && request.method === 'DELETE') {
+    const input = await payload(request, ['version']);
+    if (!Number.isSafeInteger(input.version)) throw new HttpError(400, 'A workspace editor version is required');
+    const operationKey = keyFor(store, id!);
+    if (operations.has(operationKey)) throw new HttpError(409, 'Wait for the active workspace operation');
+    operations.add(operationKey);
+    try {
+      await assertWorkspaceOwners(store);
+      const value = record(store, repo, id!);
+      if (value.version !== input.version) throw new HttpError(409, 'Workspace changed in another editor; reload before deleting');
+      if (responseOperations(store, repo, id!).some(op => op.state === 'generating' || op.state === 'publishing')) throw new HttpError(409, 'Wait for ticket creation from this chat to finish before deleting it');
+      const batches = store.list('batchOperations').filter(op => op.workspaceId === id);
+      if (batches.some(op => op.state !== 'complete')) throw new HttpError(409, 'Resolve or recover the unfinished ticket publication before deleting this chat');
+      const draft = native(store, repo, id!);
+      if (draft?.status === 'busy') throw new HttpError(409, 'Stop the native turn explicitly before deleting');
+      if (draft) {
+        await handleDraftRequest(store, repo, new Request('http://local/', { method: 'DELETE' }), ['api', 'repos', repo.id, 'drafts', draft.id], true);
+        live.delete(operationKey);
+      }
+      store.transaction(() => {
+        for (const op of batches) database(store).query("DELETE FROM records WHERE kind='batchOperations' AND id=?").run(op.id);
+        database(store).query("DELETE FROM records WHERE kind='agentWorkspaces' AND id=?").run(id!);
+      });
+      store.notify();
+      return json({ deleted: id });
+    } finally { operations.delete(operationKey); }
+  }
   if (segments.length === 5 && request.method === 'PATCH') {
     const input = await payload(request, ['version', 'title', 'archived', 'prompt', 'ticketMarkdown', 'planMarkdown', 'approvePlanRevisionId']);
     if (['ticketMarkdown', 'planMarkdown', 'approvePlanRevisionId'].some(field => field in input)) throw new HttpError(410, 'Legacy plan and ticket editors were removed. Plans belong in chat; edit saved tickets in their ticket editor.');
