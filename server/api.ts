@@ -5,7 +5,7 @@ import { timingSafeEqual, randomUUID } from 'node:crypto';
 import type { Repo, Runtime, Settings, Store } from './contracts';
 import { THINKING_LEVELS } from './contracts';
 import { database, digest, subscribe, token, within } from './store';
-import { batchInactive, HttpError, MAX_ATTACHMENT, MAX_MARKDOWN, readSafe, reconcileTickets, ticketDirectory, uploadAttachment, validAttachmentName, writeTicket } from './tickets';
+import { batchInactive, HttpError, MAX_ATTACHMENT, MAX_MARKDOWN, readSafe, deleteTickets, reconcileTickets, ticketDirectory, uploadAttachment, validAttachmentName, writeTicket } from './tickets';
 import { completions } from './completions';
 import { requestOrigin, parseRemoteOrigin } from './access';
 import { proofDownload } from './evidence';
@@ -250,6 +250,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             if (!ticket || ticket.removed) throw new HttpError(404, 'Ticket not found');
             return json(ticketPublications(store, repo, id));
           }
+          if (segments.length === 5 && request.method === 'DELETE') { const input = await body(request); const ids = Array.isArray(input.ids) && input.ids.every(item => typeof item === 'string') ? input.ids as string[] : null; if (!ids) throw new HttpError(400, 'ids must list the confirmed tickets'); const deleted = await deleteTickets(store, repo, id, ids); runtime.wake(); return json({ deleted }); }
           if (segments.length === 5 && request.method === 'PUT') { const input = await body(request); const ticket = await writeTicket(store, repo, string(input.markdown, 'markdown', MAX_MARKDOWN), string(input.revision, 'revision', 64), id); runtime.wake(); return json(ticket); }
           if (segments[5] === 'attachments' && segments.length === 6 && request.method === 'POST') {
             if (!request.headers.get('content-type')?.startsWith('multipart/form-data')) throw new HttpError(415, 'Use multipart form data');

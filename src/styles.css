@@ -239,6 +239,14 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .ant-modal .ant-modal-title { font-family: var(--font-mono); font-size: 14px; font-weight: 600; }
 .ant-modal .ant-modal-body { padding: 20px; }
 .ant-modal .ant-modal-footer { margin: 0; padding: 12px 20px; border-top: 1px solid var(--line); }
+/* Confirms share the modal shell: title becomes the header band, buttons the footer rule. */
+.ant-modal-confirm .ant-modal-confirm-body > .anticon, .ant-modal-confirm .ant-modal-confirm-body > .ant-modal-confirm-icon { display: none; }
+.ant-modal.ant-modal-confirm .ant-modal-container .ant-modal-body { padding: 20px; }
+.ant-modal-confirm .ant-modal-confirm-body-wrapper, .ant-modal-confirm .ant-modal-confirm-body { padding: 0; margin: 0; }
+.ant-modal.ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-paragraph { max-width: none; width: 100%; row-gap: 0; }
+.ant-modal-confirm .ant-modal-confirm-content { margin: 0; }
+.ant-modal-confirm .ant-modal-confirm-title { box-sizing: border-box; width: calc(100% + 40px); max-width: none; display: flex; align-items: center; gap: 8px; margin: -20px -20px 16px; padding: 12px 20px; background: var(--surface-elevated); border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 14px; font-weight: 600; line-height: 1.5; }
+.ant-modal-confirm .ant-modal-confirm-btns { margin: 20px -20px -20px; padding: 12px 20px; border-top: 1px solid var(--line); }
 .ticket-modal .ant-modal-body { padding: 0; }
 .ticket-modal .ant-modal-body { max-height: calc(100dvh - 160px); overflow-y: auto; }
 .ticket-modal .editor-panel { border: 0; background: transparent; padding: 20px; font-family: var(--font-sans); }
@@ -524,3 +532,6 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
 
 /* antd injects its own suffix colours at (0,2,0); match with higher specificity so every field icon is the same muted tone */
 :root .ant-select .ant-select-suffix, :root .ant-input-affix-wrapper .ant-input-suffix, :root .ant-input-number-affix-wrapper .ant-input-number-suffix { color: var(--muted); opacity: 1; }
+
+/* Toasts share the modal shell: square, bordered, no shadow; semantic icon colour carries the type. */
+.ant-message .ant-message-notice-content { border-radius: 0; border: 1px solid var(--line); background: var(--surface-elevated); color: var(--text); box-shadow: none; padding: 10px 16px; font-size: 13px; }

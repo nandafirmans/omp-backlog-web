@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { Button, Checkbox, Dropdown, Input, Modal, Popover, Segmented, Tag, Tooltip } from 'antd';
-import { CircleIcon, ColumnsIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, QuestionIcon, SealCheckIcon, SlidersHorizontalIcon, TreeStructureIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { CircleIcon, ColumnsIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, QuestionIcon, SealCheckIcon, SlidersHorizontalIcon, TrashIcon, TreeStructureIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useNavigate } from 'react-router';
 import type { Repo, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
-import { boardGroups, canMoveTicket, dropBefore, edgeScroll, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
+import { boardGroups, canMoveTicket, dependentClosure, dropBefore, edgeScroll, groupFor, insertionOrder, sameBoardRevision, transitionFor } from './ticketBoard.ts';
 import './TicketBoard.css';
 import { requestReviewFeedback } from './reviewFeedback';
 import { lifecycleLabels, lifecycleOwnsCompletion } from './lifecyclePresentation';
+
+const activeStatuses: Ticket['status'][] = ['running', 'stopping', 'paused'];
 
 interface Props {
   repo: Repo;
@@ -153,7 +155,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
         const confirmed = action === 'changes' ? !!(feedback = await requestReviewFeedback(modal, <p>{current.id} · {current.title}. {consequences.changes}</p>, () => focusCard(source.id))) : await modal.confirm({
           title: titles[action],
           width: 560,
-          autoFocusButton: 'cancel',
+          focusable: { autoFocusButton: 'cancel' },
           afterClose: () => focusCard(source.id),
           mask: { closable: false },
           okText: action === 'done' ? 'Yes, mark Done' : action === 'approve' ? 'Yes, approve revision' : 'Yes, retry reviewed ticket',
@@ -177,6 +179,41 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
         await api(`/api/tickets/${encode(repo.id)}/${encode(current.id)}/action`, { method: 'POST', body: JSON.stringify({ action, revision: current.revision, executionVersion: current.executionVersion ?? null, ...(order !== null ? { order } : {}), ...(feedback ? { feedback } : {}) }) });
       });
       if (!success) setAnnouncement(`${current.id} move was not confirmed saved. Review the error and current board before retrying.`);
+    } finally {
+      locked.current = false;
+      setConfirming(false);
+      focusCard(source.id);
+    }
+  }
+
+  async function remove(source: Ticket) {
+    if (disabled || locked.current) return;
+    const tickets = latest.current.tickets.filter(ticket => !ticket.removed);
+    const ids = dependentClosure(tickets, source.id);
+    const doomed = tickets.filter(ticket => ids.includes(ticket.id));
+    const owned = doomed.find(ticket => activeStatuses.includes(ticket.status));
+    if (owned) { setAnnouncement(`${owned.id} is ${label(owned.status)}. Stop it before deleting ${source.id}.`); focusCard(source.id); return; }
+    locked.current = true;
+    setConfirming(true);
+    try {
+      const confirmed = await modal.confirm({
+        title: <><TrashIcon size={16} aria-hidden="true" />{doomed.length > 1 ? `Delete ${source.id} and ${doomed.length - 1} dependent ticket${doomed.length > 2 ? 's' : ''}?` : `Delete ${source.id}?`}</>,
+        width: 560,
+        focusable: { autoFocusButton: 'cancel' },
+        afterClose: () => focusCard(source.id),
+        mask: { closable: false },
+        okText: doomed.length > 1 ? `Yes, delete ${doomed.length} tickets` : 'Yes, delete ticket',
+        okButtonProps: { danger: true },
+        cancelText: 'No, keep tickets',
+        content: <div className="board-confirmation">
+          <p>Removes each ticket folder and its attachments from the repository. Run history is kept. This cannot be undone here.</p>
+          <ol className="board-delete-list">{doomed.map(ticket => <li key={ticket.id}><span className="ticket-meta">{ticket.id}</span><span>{ticket.title}</span><small>{label(ticket.status)}{ticket.id === source.id ? '' : ` · depends on ${ticket.dependencies.filter(dep => ids.includes(dep)).join(', ')}`}</small></li>)}</ol>
+        </div>,
+      });
+      if (!confirmed) { setAnnouncement(`${source.id} unchanged; nothing deleted.`); return; }
+      await execute(`Deleted ${doomed.map(ticket => ticket.id).join(', ')}.`, async () => {
+        await api(`/api/repos/${encode(repo.id)}/tickets/${encode(source.id)}`, { method: 'DELETE', body: JSON.stringify({ ids }) });
+      });
     } finally {
       locked.current = false;
       setConfirming(false);
@@ -255,6 +292,8 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
                     { type: 'divider' },
                     { key: 'up', label: 'Move up in column', disabled: !movable || !previous, onClick: () => void move(value, column.id, previous?.id) },
                     { key: 'down', label: 'Move down in column', disabled: !movable || !next, onClick: () => void move(value, column.id, afterNext?.id) },
+                    { type: 'divider' },
+                    { key: 'delete', danger: true, label: 'Delete…', disabled: disabled || activeStatuses.includes(value.status), onClick: () => void remove(value) },
                   ] }}><Button ref={element => { if (element) controls.current.set(value.id, element); else controls.current.delete(value.id); }} type="text" aria-label={`Actions for ${value.id}`} disabled={disabled} icon={<DotsThreeIcon size={20} aria-hidden="true" />} /></Dropdown></div>
                 <Link draggable={false} className="board-ticket-title" aria-current={selectedId === value.id ? 'page' : undefined} onClick={event => onOpen(event.currentTarget)} to={details}><strong>{value.title || value.id}</strong></Link>
                 <div className="board-ticket-details">

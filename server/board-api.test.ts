@@ -54,3 +54,32 @@ test('board transitions save position together and reject invalid placement befo
     expect(store.list('runs')).toHaveLength(0);
   } finally { closeStore(store); }
 });
+
+test('deleting a ticket cascades to dependents only when the confirmed list matches', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'backlog-delete-test-'));
+  const store = createStore(join(root, 'private'));
+  try {
+    const workspace = join(root, 'repo');
+    await mkdir(workspace);
+    const repo = { id: 'repo', path: workspace, name: 'Delete fixture', git: false, mode: 'paused' as const, lastStarted: 0 };
+    store.save('repos', repo);
+    const make = (id: string, deps: string) => writeTicket(store, repo, `---\nid: ${id}\ntitle: Ticket ${id}\ndepends_on: [${deps}]\n---\n\nChange something observable.\n\nDone when:\n- It works.\n`);
+    await make('T001', ''); await make('T002', 'T001'); await make('T003', 'T002'); await make('T004', '');
+    const runtime: Runtime = { wake() {}, async reconcile() {}, async control() {}, async answer() {}, async close() {} };
+    const api = createApi(store, runtime);
+    const cookie = token(); const csrf = token();
+    database(store).query('INSERT INTO sessions VALUES(?,?,1,?)').run(digest(cookie), csrf, Date.now() + 60000);
+    const origin = 'http://localhost:4310';
+    const remove = (id: string, ids: string[]) => api(new Request(`${origin}/api/repos/repo/tickets/${id}`, {
+      method: 'DELETE', headers: { Origin: origin, 'Content-Type': 'application/json', Cookie: `omp_session=${cookie}`, 'X-CSRF-Token': csrf }, body: JSON.stringify({ ids }),
+    }));
+    expect((await remove('T001', ['T001'])).status).toBe(409);
+    store.save('tickets', { ...store.get('tickets', 'repo/T003')!, status: 'running' });
+    expect((await remove('T001', ['T001', 'T002', 'T003'])).status).toBe(409);
+    store.save('tickets', { ...store.get('tickets', 'repo/T003')!, status: 'draft' });
+    expect((await remove('T001', ['T001', 'T002', 'T003'])).status).toBe(200);
+    expect(store.list('tickets').map(ticket => ticket.id)).toEqual(['T004']);
+    expect(await Bun.file(join(workspace, '.omp-backlog', 'tickets', 'T001', 'ticket.md')).exists()).toBe(false);
+    expect(await Bun.file(join(workspace, '.omp-backlog', 'tickets', 'T004', 'ticket.md')).exists()).toBe(true);
+  } finally { closeStore(store); }
+});

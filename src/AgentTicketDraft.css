@@ -10,6 +10,13 @@
 .agent-history { display: flex; flex: 1; flex-direction: column; gap: 12px; min-height: 0; }
 .agent-history-list { display: flex; flex: 1; flex-direction: column; gap: 4px; min-height: 0; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .agent-history > .ant-btn-text { justify-content: flex-start; color: var(--muted); border-top: 1px solid var(--line); padding: 4px 11px 0; height: auto; min-height: 44px; }
+.agent-history-row { position: relative; display: flex; }
+.agent-history-row > .agent-history-item.ant-btn { flex: 1; min-width: 0; }
+.agent-history-delete.ant-btn { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); opacity: 0; }
+.agent-history-row:hover .agent-history-delete, .agent-history-delete:focus-visible, .agent-history-delete.ant-dropdown-open { opacity: 1; }
+.agent-history-row .agent-history-delete.ant-btn.ant-btn-text, .agent-history-row .agent-history-delete.ant-btn.ant-btn-text:hover { background: var(--surface-elevated); color: var(--text); }
+.agent-history-row .agent-history-delete.ant-btn.ant-btn-text:hover { background: var(--line); }
+@media (hover: none) { .agent-history-delete.ant-btn { opacity: 1; } }
 .agent-history-item.ant-btn { height: auto; min-height: 40px; padding: 8px 10px; justify-content: flex-start; text-align: left; white-space: normal; color: var(--muted); }
 .agent-history-item.ant-btn:hover:not(:disabled) { color: var(--text); }
 .agent-history-item.ant-btn > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; min-width: 0; font-size: 13px; line-height: 1.5; }
@@ -17,8 +24,9 @@
 .agent-chat-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .agent-workspace-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-bottom: 10px; flex: none; }
 .agent-workspace-options { display: grid; gap: 16px; }
-.agent-workspace-options > label { display: grid; gap: 6px; }
+.agent-workspace-options > label:not(.ant-checkbox-wrapper) { display: grid; gap: 6px; }
 .agent-workspace-options > .ant-btn { justify-self: start; }
+.agent-workspace-options > .ant-checkbox-wrapper { justify-self: start; align-items: center; }
 .agent-workspace-columns { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
 .agent-workspace-columns > * { min-width: 0; }
 .agent-ticket-draft { display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }

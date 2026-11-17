@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Button, Checkbox, Input, InputNumber, Modal, Segmented, Select, Tabs, Tag, Tooltip } from 'antd';
+import { Button, Checkbox, Input, InputNumber, message as toastApi, Modal, Segmented, Select, Tabs, Tag, Tooltip } from 'antd';
 import { ArrowClockwiseIcon, ArrowCounterClockwiseIcon, ArrowDownIcon, ArrowSquareOutIcon, ArrowUpIcon, BrainIcon, CaretRightIcon, ChatCircleDotsIcon, CheckCircleIcon, ClockCounterClockwiseIcon, CodeIcon, CoinsIcon, CopyIcon, CpuIcon, DownloadSimpleIcon, EyeIcon, FileTextIcon, FloppyDiskIcon, FolderIcon, FolderOpenIcon, FolderPlusIcon, FolderSimpleIcon, GaugeIcon, GearSixIcon, GitBranchIcon, HouseLineIcon, InfoIcon, LightningIcon, ListChecksIcon, PaperclipIcon, PauseIcon, PencilSimpleIcon, PlayIcon, PlusIcon, RobotIcon, SealCheckIcon, ShieldCheckIcon, SlidersIcon, StackIcon, TerminalWindowIcon, TicketIcon, TimerIcon, TreeStructureIcon, WarningCircleIcon, XIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLinkClickHandler, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
@@ -55,7 +55,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const creating = !!repoId && pathname.endsWith('/tickets/new');
   const assisting = !!repoId && pathname.endsWith('/tickets/new/agent');
   const [pending, setPending] = useState('');
-  const [notice, setNotice] = useState('');
+  const [toast, toastContext] = toastApi.useMessage({ duration: 4, maxCount: 3 });
   const [modal, modalContext] = Modal.useModal();
   const [completionOpen, setCompletionOpen] = useState(false);
   const returnFocus = useRef<HTMLAnchorElement | null>(null);
@@ -76,9 +76,9 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   }
 
   const execute: Execute = async (name, work) => {
-    setPending(name); setNotice(''); onError('');
-    try { await work(); await refresh(); setNotice(name); return true; }
-    catch (cause) { onError(message(cause)); return false; }
+    setPending(name); onError('');
+    try { await work(); await refresh(); void toast.success(name); return true; }
+    catch (cause) { void toast.error({ content: message(cause), duration: 8 }); return false; }
     finally { setPending(''); }
   };
 
@@ -96,9 +96,9 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   </div>;
 
   return <>
-    {modalContext}
+    {modalContext}{toastContext}
     {claimedRuns.map(run => <section key={run.id} className="active-run" aria-label={`Claimed run ${run.ticketId} in ${snapshot.repos.find(value => value.id === run.repoId)?.name ?? run.repoId}`}><div><Status value={run.status} /><strong>{snapshot.repos.find(value => value.id === run.repoId)?.name} / {run.ticketId}</strong>{run.dialog && <Tag className="attention">Answer needed</Tag>}</div><div className="toolbar"><Button onClick={() => setRunId(run.id)}>Open run</Button><RunControls run={run} api={api} execute={execute} busy={busy} /></div>{run.dialog && runId !== run.id && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}</section>)}
-    <p className="operation-status" role="status" aria-live="polite">{pending ? 'Working...' : notice}</p>
+    <p className="operation-status" role="status" aria-live="polite">{pending ? 'Working...' : ''}</p>
     {home || picking ? <section className="home-view" aria-labelledby="home-heading">
       <div className="section-heading"><div><h1 id="home-heading">Projects</h1></div><Button type="primary" icon={<PlusIcon size={16} aria-hidden="true" />} href="/projects/new" onClick={openProjectPicker}>Add project</Button></div>
       {home && scheduler}

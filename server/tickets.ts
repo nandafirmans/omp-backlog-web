@@ -198,6 +198,33 @@ export function batchReserved(store: Store, repo: Repo, id: string): boolean {
   database(store).query("UPDATE records SET value=json_set(value,'$.invalidated',json('true'),'$.compacted',json('true'),'$.tickets',json('[]')) WHERE kind='batchOperations' AND id IN (SELECT operation_id FROM batch_reservations WHERE repo_path=? AND ticket_id=? AND state='prepared' AND expires<=?)").run(repo.path, id, Date.now());
   return Boolean(database(store).query("SELECT 1 FROM batch_reservations WHERE repo_path=? AND ticket_id=? AND state != 'complete' AND (state != 'prepared' OR expires > ?) LIMIT 1").get(repo.path, id, Date.now()));
 }
+/** The ticket plus every ticket that directly or transitively depends on it. */
+export function dependentClosure(tickets: Pick<Ticket, 'id' | 'dependencies'>[], id: string): string[] {
+  const ids = new Set([id]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const ticket of tickets) if (!ids.has(ticket.id) && ticket.dependencies.some(dep => ids.has(dep))) { ids.add(ticket.id); grew = true; }
+  }
+  return [...ids];
+}
+/** Deletes a ticket and its dependents from disk. `expected` is the list the operator confirmed; any drift aborts. */
+export function deleteTickets(store: Store, repo: Repo, id: string, expected: string[]): Promise<string[]> {
+  return serializeWrite(store, async () => {
+    await reconcileTickets(store, true);
+    const tickets = store.list('tickets').filter(item => item.repoId === repo.id && !item.removed);
+    if (!tickets.some(item => item.id === id)) throw new HttpError(404, 'Ticket not found');
+    const ids = dependentClosure(tickets, id);
+    if (ids.length !== expected.length || ids.some(item => !expected.includes(item))) throw new HttpError(409, 'Dependent tickets changed. Review the list and confirm again.');
+    const owned = tickets.find(item => ids.includes(item.id) && ['running', 'stopping', 'paused'].includes(item.status));
+    if (owned) throw new HttpError(409, `${owned.id} is ${owned.status}; stop it before deleting`);
+    const reserved = ids.find(item => batchReserved(store, repo, item) || batchInactive(store, repo.path, item));
+    if (reserved) throw new HttpError(409, `${reserved} is reserved by an agent batch review`);
+    for (const item of ids) await rm(await ticketDirectory(repo, item), { recursive: true });
+    store.transaction(() => { for (const item of ids) database(store).query("DELETE FROM records WHERE kind='tickets' AND id=?").run(`${repo.id}/${item}`); });
+    store.notify();
+    return ids;
+  });
+}
 export function writeTicket(store: Store, repo: Repo, markdown: string, revision?: string, expectedId?: string): Promise<Ticket> {
   return serializeWrite(store, () => saveTicket(store, repo, markdown, revision, expectedId));
 }

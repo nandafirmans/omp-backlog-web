@@ -272,6 +272,19 @@ test('conversation edits and read-only historical records survive reopen without
   });
 });
 
+test('deleting a conversation requires the current version and removes only that conversation', async () => {
+  await fixture(async ({ call, repo, store }) => {
+    const first = await (await call('', 'POST', { title: 'Delete me' })).json() as AgentWorkspaceSnapshot;
+    const other = await (await call('', 'POST', { title: 'Keep me' })).json() as AgentWorkspaceSnapshot;
+    expect((await call(`/${first.workspace.id}`, 'DELETE', {})).status).toBe(400);
+    expect((await call(`/${first.workspace.id}`, 'DELETE', { version: first.workspace.version + 1 })).status).toBe(409);
+    expect((await call(`/${first.workspace.id}`, 'DELETE', { version: first.workspace.version }, undefined, { ...repo, id: 'other' })).status).toBe(404);
+    expect((await call(`/${first.workspace.id}`, 'DELETE', { version: first.workspace.version })).status).toBe(200);
+    expect((await call(`/${first.workspace.id}`)).status).toBe(404);
+    expect(store().get('agentWorkspaces', other.workspace.id)).toBeTruthy();
+  });
+});
+
 test('native reconnect restores exact model/thinking, retains discussion and sends only on explicit idempotent Send', async () => {
   await fixture(async ({ call, reopen, root, legacyTurn, store }) => {
     const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot; const id = created.workspace.id;
