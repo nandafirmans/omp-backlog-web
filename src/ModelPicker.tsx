@@ -17,6 +17,8 @@ interface Props {
   loading?: boolean;
   modelLabel?: ReactNode;
   thinkingLabel?: ReactNode;
+  modelIcon?: ReactNode;
+  thinkingIcon?: ReactNode;
   modelAriaLabel?: string;
   thinkingAriaLabel?: string;
   modelPlaceholder?: string;
@@ -25,10 +27,10 @@ interface Props {
   thinkingHelp?: ReactNode;
 }
 
-export default function ModelPicker({ modelOptions, thinkingOptions, model, thinking, onModelChange, onThinkingChange, disabled, modelDisabled, thinkingDisabled, loading, modelLabel = 'Model', thinkingLabel = 'Thinking', modelAriaLabel, thinkingAriaLabel, modelPlaceholder, thinkingPlaceholder, modelHelp, thinkingHelp }: Props) {
+export default function ModelPicker({ modelOptions, thinkingOptions, model, thinking, onModelChange, onThinkingChange, disabled, modelDisabled, thinkingDisabled, loading, modelLabel = 'Model', thinkingLabel = 'Thinking', modelIcon, thinkingIcon, modelAriaLabel, thinkingAriaLabel, modelPlaceholder, thinkingPlaceholder, modelHelp, thinkingHelp }: Props) {
   const id = useId();
   return <div className="model-picker">
-    <label htmlFor={`${id}-model`}>{modelLabel}<Select id={`${id}-model`} aria-label={modelAriaLabel} aria-describedby={modelHelp ? `${id}-model-help` : undefined} showSearch optionFilterProp="label" value={model} options={modelOptions} disabled={disabled || modelDisabled} loading={loading} placeholder={modelPlaceholder} onChange={onModelChange} />{modelHelp && <small id={`${id}-model-help`}>{modelHelp}</small>}</label>
-    <label htmlFor={`${id}-thinking`}>{thinkingLabel}<Select id={`${id}-thinking`} aria-label={thinkingAriaLabel} aria-describedby={thinkingHelp ? `${id}-thinking-help` : undefined} showSearch optionFilterProp="label" value={thinking} options={thinkingOptions} disabled={disabled || thinkingDisabled} loading={loading} placeholder={thinkingPlaceholder} onChange={onThinkingChange} />{thinkingHelp && <small id={`${id}-thinking-help`}>{thinkingHelp}</small>}</label>
+    <label htmlFor={`${id}-model`}>{modelLabel}<Select id={`${id}-model`} aria-label={modelAriaLabel} aria-describedby={modelHelp ? `${id}-model-help` : undefined} showSearch optionFilterProp="label" value={model} options={modelOptions} disabled={disabled || modelDisabled} loading={loading} suffixIcon={modelIcon} placeholder={modelPlaceholder} onChange={onModelChange} />{modelHelp && <small id={`${id}-model-help`}>{modelHelp}</small>}</label>
+    <label htmlFor={`${id}-thinking`}>{thinkingLabel}<Select id={`${id}-thinking`} aria-label={thinkingAriaLabel} aria-describedby={thinkingHelp ? `${id}-thinking-help` : undefined} showSearch optionFilterProp="label" value={thinking} options={thinkingOptions} disabled={disabled || thinkingDisabled} loading={loading} suffixIcon={thinkingIcon} placeholder={thinkingPlaceholder} onChange={onThinkingChange} />{thinkingHelp && <small id={`${id}-thinking-help`}>{thinkingHelp}</small>}</label>
   </div>;
 }

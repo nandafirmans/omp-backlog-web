@@ -521,3 +521,6 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
 }
+
+/* antd injects its own suffix colours at (0,2,0); match with higher specificity so every field icon is the same muted tone */
+:root .ant-select .ant-select-suffix, :root .ant-input-affix-wrapper .ant-input-suffix, :root .ant-input-number-affix-wrapper .ant-input-number-suffix { color: var(--muted); opacity: 1; }
