@@ -25,9 +25,10 @@ export default function RunUsage({ run }: { run: Run }) {
     </div>
     <div className="run-usage-grid">
       <div>
-        <h4><CoinsIcon size={16} aria-hidden="true" />Run consumption<Help label="About run consumption" text="Accounted input, output and repeated context/cache tokens. Compaction cannot refund them. Not provider billing or a spending limit." /></h4>
+        <h4><CoinsIcon size={16} aria-hidden="true" />Run consumption<Help label="About run consumption" text="Input, output and cache-write tokens, as OMP's goal budget counts them. Cache reads are re-sent context, shown separately and not counted. Compaction cannot refund usage. Not provider billing." /></h4>
         <p className="token-reading">{accountedTotal !== undefined ? `${number(accountedTotal)}${budget ? ` / ${number(budget)}` : ''} tokens` : 'Usage not reported'}{percent !== undefined && <span> · {percent.toFixed(1)}%</span>}</p>
         {percent !== undefined && <Progress percent={Math.min(100, percent)} showInfo={false} status={percent >= 100 ? 'exception' : 'normal'} strokeColor={percent >= 100 ? 'var(--danger)' : 'var(--accent)'} aria-label={`Cumulative token budget ${percent.toFixed(1)} percent used`} />}
+        {tokens?.cacheRead !== undefined && <p className="muted">+ {number(tokens.cacheRead)} cache-read tokens · not counted</p>}
         {run.lifecycle && <p className="muted">Author {authorTokens === undefined ? 'not reported' : number(authorTokens)} · Reviewers {reviewerTokens === undefined ? 'not reported' : number(reviewerTokens)}</p>}
         {budget === null && <p className="warning-text">No token limit. Time limit and review gates still apply.</p>}
         {tokens && <small>{active ? 'Sampled' : 'Final sample'} {new Date(tokens.sampled).toLocaleString()}</small>}

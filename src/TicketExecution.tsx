@@ -62,7 +62,7 @@ export default function TicketExecution({ ticket, settings, api, disabled, onDir
 
   return <section className="ticket-execution" aria-label="Ticket execution settings">
     {context}
-    <h3 className="ticket-execution-heading"><RocketLaunchIcon size={16} aria-hidden="true" />Next attempt<Tooltip title="Existing runs keep their mode and limits. Save first, then review & retry. Blocker recovery keeps its source run's mode. Budget counts input, output and cache tokens."><Button type="text" size="small" aria-label="About next-attempt settings" icon={<InfoIcon size={16} aria-hidden="true" />} /></Tooltip></h3>
+    <h3 className="ticket-execution-heading"><RocketLaunchIcon size={16} aria-hidden="true" />Next attempt<Tooltip title="Existing runs keep their mode and limits. Save first, then review & retry. Blocker recovery keeps its source run's mode. Budget counts input, output and cache writes; cache reads are excluded."><Button type="text" size="small" aria-label="About next-attempt settings" icon={<InfoIcon size={16} aria-hidden="true" />} /></Tooltip></h3>
     <p className="muted ticket-execution-intro">Applies to the next attempt only.</p>
     <div className="form-columns">
       <label><span>Engineering mode</span><Select suffixIcon={<GearSixIcon size={16} aria-hidden="true" />} aria-label="Ticket engineering mode" value={draft.engineeringMode ?? inherit} options={[{ value: inherit, label: `Inherit global · ${settings.engineeringMode === 'standard' ? 'Standard OMP' : 'OMP + pstack'}` }, { value: 'standard', label: 'Standard OMP' }, { value: 'pstack', label: 'OMP + pstack' }]} disabled={disabled} onChange={value => setDraft(draft => ({ ...draft, engineeringMode: value === 'standard' || value === 'pstack' ? value : undefined }))} /></label>

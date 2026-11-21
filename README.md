@@ -238,7 +238,7 @@ Hooks, signing, external diff drivers and clean filters are not executed. Git id
 
 Each run has a private requirements/attachment snapshot and a fresh OMP session. The scheduler advances between tickets; OMP goal mode continues within a ticket. No additional `/loop` is needed. Time and token limits prevent indefinite unattended continuation.
 
-Token accounting includes the OMP session's reported usage, including repeated context/cache tokens and resumed turns—not just newly generated output. Large global instruction sets can consume the default budget quickly. Set a deliberate budget in Settings, or explicitly choose **No cumulative token limit**. A configured cap still records Failed on exhaustion and requires review rather than silently increasing limits.
+Token accounting matches OMP's native goal budget: input, output and cache-write tokens, including resumed turns. Cache reads (context re-sent each turn) are shown separately and not counted. Large global instruction sets still add input on every uncached turn. Set a deliberate budget in Settings, or explicitly choose **No cumulative token limit**. A configured cap still records Failed on exhaustion and requires review rather than silently increasing limits; the run page offers **Retry with higher budget**, which saves a new ticket cap and queues a fresh attempt after confirmation.
 
 **Known token-accounting limitation.** OMP's reported totals can omit consumed tokens from discarded responses outside the active conversation. Backlog Web cannot enforce a token cap against usage the API does not report. Displayed consumption is therefore not a complete billing ledger.
 

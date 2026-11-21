@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { IndependentReview, Repo, Run, Store, Ticket } from './contracts';
 import { checkOmpMajor, installProfile, privateArgs } from './drafting';
-import { object, RpcProcess, type Frame } from './rpc';
+import { accountedTokens, object, RpcProcess, type Frame } from './rpc';
 import { assertCandidate, recipeIdentity } from './autonomy';
 import { redactTranscript } from './transcript';
 import { reconcileTickets } from './tickets';
@@ -63,7 +63,7 @@ export async function reviewCandidate(store: Store, repo: Repo, run: Run, ticket
   let sampledTokens = 0;
   const account = (stats: Record<string, unknown>) => {
     const tokens = object(stats.tokens);
-    const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+    const total = accountedTokens(tokens);
     if (!Object.keys(tokens).length || !Number.isFinite(total) || total < 0) throw new Error('Independent reviewer did not expose valid cumulative token accounting');
     sampledTokens = Math.max(sampledTokens, total);
     options.onTokens(sampledTokens);

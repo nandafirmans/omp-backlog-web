@@ -7,7 +7,7 @@ import type { AcceptedDraftTurn, DraftContext, DraftMessage, DraftPreparation, D
 import { completions, readDraftSkills, resolveDraftReference } from './completions';
 import { formatResearchContext, researchRepository } from './agent-research';
 import { setTimeout as delay } from 'node:timers/promises';
-import { object, RpcProcess, type Frame } from './rpc';
+import { accountedTokens, object, RpcProcess, type Frame } from './rpc';
 import { HttpError, MAX_ATTACHMENT, MAX_ATTACHMENTS_TOTAL, validAttachmentName } from './tickets';
 import { digest } from './store';
 
@@ -326,7 +326,7 @@ async function poll(draft: Draft): Promise<void> {
     const rpc = assertLive(draft);
     const stats = await rpc.command('get_session_stats', {}, 10000);
     const tokens = object(stats.tokens);
-    const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+    const total = accountedTokens(tokens);
     if (!Number.isFinite(total) || total < 0 || !Object.keys(tokens).length) throw new Error('Token accounting unavailable');
     if (total >= MAX_TOKENS) { fail(draft, 'Draft session token limit reached; partial output is retained. No budget increase or retry was performed.'); return; }
     const state = await rpc.command('get_state', {}, 10000);
