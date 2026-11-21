@@ -46,6 +46,6 @@ export default function RunUsage({ run }: { run: Run }) {
         </div>
       </div>
     </div>
-    {run.status === 'failed' && <p className="warning-text">Failed runs don't resume. <Link to={`/projects/${encodeURIComponent(run.repoId)}/tickets/${encodeURIComponent(run.ticketId)}`}>Set model/budget on the ticket</Link>, reconcile partial work, then review &amp; retry.</p>}
+    {run.status === 'failed' && !run.error?.startsWith('Execution token budget exhausted') && <p className="warning-text">Failed runs don't resume. Check partial work, then <Link to={`/projects/${encodeURIComponent(run.repoId)}/tickets/${encodeURIComponent(run.ticketId)}`}>review &amp; retry on the ticket</Link>.</p>}
   </section>;
 }
