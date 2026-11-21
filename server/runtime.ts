@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { Dialog, HostVerification, RecoveryHistory, Repo, Run, Runtime, Status, Store, Ticket } from './contracts';
 import { batchInactive, reconcileTickets, snapshotTicket } from './tickets';
-import { object, RpcProcess } from './rpc';
+import { accountedTokens, object, RpcProcess } from './rpc';
 import type { Frame } from './rpc';
 import { assertVerifiedCriteria, recordEvidence } from './evidence';
 import { redactTranscript, RunConversation, settleConversation, transcriptValue } from './transcript';
@@ -266,7 +266,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           if (execution.run.lifecycle && ['implementing', 'correcting', 'recovering', 'verifying'].includes(execution.run.lifecycle.phase)) {
           await execution.rpc.finalSessionStats().then(stats => {
               const tokens = object(stats.tokens);
-              const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+              const total = accountedTokens(tokens);
             if (Object.keys(tokens).length && Number.isFinite(total) && total >= 0) {
               execution.run.lifecycle!.authorTokens = Math.max(execution.run.lifecycle!.authorTokens, total);
               if (execution.run.progress) execution.run.progress.tokens = { total: execution.run.lifecycle!.authorTokens + (execution.run.lifecycle!.reviewerTokens ?? 0), sampled: Date.now(), basis: 'Cumulative OMP author session plus independent reviewer sessions' };
@@ -461,7 +461,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       const stats = await execution.rpc.command('get_session_stats');
       readRecovered(execution, 'get_session_stats');
       const tokens = object(stats.tokens);
-      const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+      const total = accountedTokens(tokens);
       if (!Object.keys(tokens).length || !Number.isFinite(total) || total < 0) throw new Error('Author did not expose valid cumulative token accounting');
       execution.run.lifecycle!.authorTokens = Math.max(execution.run.lifecycle!.authorTokens, total);
       const reserve = repairReserve(execution.run);
@@ -948,11 +948,11 @@ export async function createRuntime(store: Store): Promise<Runtime> {
           if (!owns(execution) || execution.stopping) return;
           if (run.lifecycle) guard(execution);
           const tokens = object(stats.tokens);
-          const total = typeof tokens.total === 'number' ? tokens.total : Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheRead ?? 0) + Number(tokens.cacheWrite ?? 0);
+          const total = accountedTokens(tokens);
           if (run.lifecycle && (!Object.keys(tokens).length || !Number.isFinite(total) || total < 0)) throw new Error('Author did not expose valid cumulative token accounting');
           if (execution.run.progress && Number.isFinite(total) && total >= 0 && Object.keys(tokens).length) {
             if (run.lifecycle) run.lifecycle.authorTokens = Math.max(run.lifecycle.authorTokens, total);
-            execution.run.progress.tokens = { total: run.lifecycle ? run.lifecycle.authorTokens + (run.lifecycle.reviewerTokens ?? 0) : total, sampled: Date.now(), basis: run.lifecycle ? 'Cumulative OMP author session plus independent reviewer sessions' : 'OMP get_session_stats session total (includes input/output/cache; not goal-only or a spending limit)' };
+            execution.run.progress.tokens = { total: run.lifecycle ? run.lifecycle.authorTokens + (run.lifecycle.reviewerTokens ?? 0) : total, sampled: Date.now(), basis: run.lifecycle ? 'Cumulative OMP author session plus independent reviewer sessions (input, output, cache writes)' : 'OMP get_session_stats input, output and cache writes (cache reads excluded, as in the native goal budget)', ...(typeof tokens.cacheRead === 'number' ? { cacheRead: tokens.cacheRead } : {}) };
             persist(execution);
             const reserve = repairReserve(run);
             if (reserve) throw new Error(reserve);

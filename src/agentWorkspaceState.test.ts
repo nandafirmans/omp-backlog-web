@@ -39,7 +39,7 @@ test('own model and research updates can advance version only when saved editors
 });
 
 test('automatic names update the title and version without adopting unrelated editor changes', () => {
-  const initial = { ...workspace, title: 'Untitled workspace' };
+  const initial = { ...workspace, title: 'New chat' };
   const incoming = { ...initial, title: 'Personal expense tracker', titleSource: 'automatic' as const, version: 4 };
   expect(mergeWorkspaceRuntime(initial, incoming)).toEqual(incoming);
   const concurrent = mergeWorkspaceRuntime(initial, { ...incoming, prompt: 'Other tab text' });
@@ -47,7 +47,7 @@ test('automatic names update the title and version without adopting unrelated ed
   expect(concurrent.prompt).toBe(initial.prompt);
   expect(concurrent.version).toBe(initial.version);
   const manual = { ...initial, titleSource: 'manual' as const };
-  expect(mergeWorkspaceRuntime(manual, incoming).title).toBe('Untitled workspace');
+  expect(mergeWorkspaceRuntime(manual, incoming).title).toBe('New chat');
 });
 
 test('only an accepted exact submitted draft clears the composer', () => {

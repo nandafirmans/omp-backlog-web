@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Alert, Breadcrumb, Button, ConfigProvider, Dropdown, Grid, Input, Skeleton, Tag, theme } from 'antd';
-import { PaletteIcon, SlidersIcon, GearSixIcon, CheckIcon, DesktopIcon, SignOutIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { PaletteIcon, GearSixIcon, CheckIcon, DesktopIcon, SignOutIcon, BroadcastIcon, WarningCircleIcon, BellIcon } from '@phosphor-icons/react';
 import { Link, useLocation, useParams } from 'react-router';
 import type { Snapshot } from '../server/contracts';
 import plan from '../PLAN.md?raw';
 import MarkdownPreview from './MarkdownPreview';
 import Workspace from './Workspace';
+import useRunAlerts from './useRunAlerts';
 import type { RequestApi } from './Workspace';
 import { isThemeMode, themeModes, themes } from './themes';
 import type { ThemeMode } from './themes';
@@ -22,6 +23,7 @@ export default function App() {
   const view = pathname === '/plan' ? 'plan' : pathname === '/settings' ? 'settings' : 'workspace';
   const [session, setSession] = useState<Session>();
   const [snapshot, setSnapshot] = useState<Snapshot>();
+  const alerts = useRunAlerts(session?.authenticated ? snapshot : undefined);
   const [connection, setConnection] = useState('Connecting');
   const [error, setError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
@@ -201,12 +203,13 @@ export default function App() {
                 }))} />)}
             <div className="toolbar navbar-tools">
               {session?.authenticated && <nav className="primary-navigation" aria-label="Workspace navigation"><Link to="/settings" aria-label="Settings" title="Settings" aria-current={view === 'settings' ? 'page' : undefined}><GearSixIcon size={18} aria-hidden="true" /></Link></nav>}
+              {session?.authenticated && alerts.enable && <Button aria-label="Notify me when a run needs me" title="Notify me when a run needs me" icon={<BellIcon size={18} aria-hidden="true" />} onClick={alerts.enable} />}
               {session?.authenticated && <><Tag icon={connection === 'Live' ? <BroadcastIcon size={15} aria-hidden="true" /> : <WarningCircleIcon size={15} aria-hidden="true" />} className={`connection ${connection === 'Live' ? 'connected' : 'unavailable'}`} role="status" aria-label={connection} title={connection} /><Button aria-label="Log out" title="Log out" icon={<SignOutIcon size={18} aria-hidden="true" />} onClick={() => void logout()} /></>}
             </div>
           </header>
           <main id="content" tabIndex={-1} className={session?.authenticated ? (pathname === '/' || pathname === '/projects/new' ? 'home-main' : pathname.endsWith('/tickets/new/agent') ? 'drafting-main' : pathname.startsWith('/projects/') ? 'workspace-main' : undefined) : undefined}>
             {error && <Alert type="error" title={error} closable={{ onClose: () => setError('') }} role="alert" />}
-            {session?.authenticated && view === 'settings' && <><h1>Settings</h1><nav className="settings-navigation" aria-label="Settings sections"><a href="#appearance-heading"><PaletteIcon size={16} aria-hidden="true" />Appearance</a><a href="#execution-settings"><SlidersIcon size={16} aria-hidden="true" />Execution</a></nav></>}
+            {session?.authenticated && view === 'settings' && <div className="section-heading"><h1>Settings</h1></div>}
             {session?.authenticated && view === 'settings' && <section className="panel appearance-settings" aria-labelledby="appearance-heading">
               <h2 id="appearance-heading" className="icon-heading"><PaletteIcon size={16} aria-hidden="true" />Appearance</h2>
               <p className="muted">Theme for this browser. Applies immediately.</p>

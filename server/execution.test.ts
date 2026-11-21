@@ -117,3 +117,10 @@ test('ticket execution saves are stale-safe and cannot approve, retry or change 
     expect(store.settings()).toEqual(defaults);
   } finally { closeStore(store); }
 });
+
+test('budget tokens match the native goal: cache reads are excluded', async () => {
+  const { accountedTokens } = await import('./rpc');
+  expect(accountedTokens({ input: 101, output: 17, reasoning: 0, cacheRead: 23, cacheWrite: 5, total: 146 })).toBe(123);
+  expect(accountedTokens({ total: 950 })).toBe(950);
+  expect(accountedTokens({})).toBe(0);
+});

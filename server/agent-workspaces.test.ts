@@ -345,7 +345,7 @@ test('accepted chat clears the persisted composer, while a rejected request keep
     await call(`/${id}/session/model`, 'POST', { provider: 'fixture', modelId: 'vision' });
     expect((await call(`/${id}/session/turn`, 'POST', form(message))).status).toBe(400);
     expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.prompt).toBe(savedMessage);
-    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.title).toBe('Untitled workspace');
+    expect((await (await call(`/${id}`)).json() as AgentWorkspaceSnapshot).workspace.title).toBe('New chat');
     const key = crypto.randomUUID();
     const response = await call(`/${id}/session/turn`, 'POST', form(message), key);
     expect(response.status).toBe(200);
@@ -375,6 +375,7 @@ test('existing untitled conversations get durable names without inference and ma
   await fixture(async ({ call, store, reopen, root }) => {
     const created = await (await call('', 'POST', {})).json() as AgentWorkspaceSnapshot;
     const value = store().get('agentWorkspaces', created.workspace.id)!;
+    value.title = 'Untitled workspace';
     value.messages = [{ role: 'user', text: '/skill:ponytail\n\n# **Personal expense tracker**\nUse React and TypeScript', status: 'complete' }];
     value.acceptedTurns = [{ key: 'old', hash: 'old', contextHash: 'old', contextVersion: 1, acceptedAt: 1, intent: 'discussion', sourceWorkspaceId: value.id, sourcePlanRevisionId: null, model: null, thinking: '', researchReferenceIds: [], userMessageIndex: 0, assistantMessageIndex: 1, status: 'failed' }];
     store().save('agentWorkspaces', value);

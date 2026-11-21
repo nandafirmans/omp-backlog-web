@@ -1069,7 +1069,7 @@ for (const limit of ['time', 'tokens'] as const) {
       if (limit === 'tokens') expect(log.some(event => event.command === 'get_session_stats')).toBe(true);
       if (limit === 'tokens') {
         expect(failed.progress?.tokens?.total).toBe(7);
-        expect(failed.progress?.tokens?.basis).toContain('session total');
+        expect(failed.progress?.tokens?.basis).toContain('cache reads excluded');
       }
       await harness.runtime!.reconcile();
       expect(harness.store.list('runs')).toHaveLength(1);

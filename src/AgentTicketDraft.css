@@ -17,7 +17,7 @@
 .agent-history-row .agent-history-delete.ant-btn.ant-btn-text, .agent-history-row .agent-history-delete.ant-btn.ant-btn-text:hover { background: var(--surface-elevated); color: var(--text); }
 .agent-history-row .agent-history-delete.ant-btn.ant-btn-text:hover { background: var(--line); }
 @media (hover: none) { .agent-history-delete.ant-btn { opacity: 1; } }
-.agent-history-item.ant-btn { height: auto; min-height: 40px; padding: 8px 10px; justify-content: flex-start; text-align: left; white-space: normal; color: var(--muted); }
+.agent-history-item.ant-btn { height: auto; min-height: 40px; padding: 8px 36px 8px 10px; justify-content: flex-start; text-align: left; white-space: normal; color: var(--muted); }
 .agent-history-item.ant-btn:hover:not(:disabled) { color: var(--text); }
 .agent-history-item.ant-btn > span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; min-width: 0; font-size: 13px; line-height: 1.5; }
 .agent-history-item[aria-current='true'] { background: var(--accent-soft); border-color: transparent; color: var(--text); font-weight: 600; }
@@ -33,11 +33,6 @@
 .agent-conversation-viewport { position: relative; display: flex; flex: 1; min-height: 220px; min-width: 0; }
 .agent-floating-status { position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); }
 .agent-floating-status .ant-tag { margin: 0; white-space: nowrap; }
-.agent-status-dot { width: 10px; height: 10px; margin: 6px; border-radius: 50%; }
-.agent-status-dot-ready { background: #2ea043; box-shadow: 0 0 6px #2ea04399; }
-.agent-status-dot-busy { background: var(--warning); box-shadow: 0 0 6px color-mix(in srgb, var(--warning) 60%, transparent); animation: agent-status-pulse 1.2s ease-in-out infinite; }
-@keyframes agent-status-pulse { 50% { opacity: 0.35; } }
-@media (prefers-reduced-motion: reduce) { .agent-status-dot-busy { animation: none; } }
 .agent-floating-controls { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); }
 .agent-safety-help { color: var(--muted); font-size: 13px; padding: 8px 0; }
 .agent-workspace summary, .agent-workspace-options summary { cursor: pointer; font: 13px/1.7 var(--font-mono); }

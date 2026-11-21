@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Drawer, Dropdown, Grid, Input, Modal, Popover, Spin, Tag, Tooltip } from 'antd';
-import { ArrowDownIcon, ArrowUpIcon, CaretDownIcon, StackIcon, TicketIcon, CopyIcon, GearIcon, PlusIcon, SidebarSimpleIcon, ArrowClockwiseIcon, TrashIcon, ArchiveIcon, DotsThreeIcon, PencilSimpleIcon } from '@phosphor-icons/react';
+import { ArrowDownIcon, ArrowUpIcon, CaretDownIcon, StackIcon, TicketIcon, CopyIcon, GearIcon, PlusIcon, SidebarSimpleIcon, ArrowClockwiseIcon, TrashIcon, ArchiveIcon, DotsThreeIcon, PencilSimpleIcon, StopIcon, XIcon } from '@phosphor-icons/react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Link } from 'react-router';
@@ -31,9 +31,11 @@ const json = (body: unknown, method = 'POST'): RequestInit => ({ method, body: J
 const failure = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
 const clarificationPrefix = 'Clarification for ticket creation from assistant response';
 const clarificationSuffix = '\n\nApply my answers (';
+const legacyExtractionPrefix = 'Generate scoped task proposals from our saved discussion';
 
 /** Shows only the user's own answer for wrapped clarification replies (multipart bodies store CRLF). */
 function displayText(role: string, text: string) {
+  if (role === 'user' && text.startsWith(legacyExtractionPrefix)) return '_Task proposal request (retired feature)_';
   if (role !== 'user' || !text.startsWith(clarificationPrefix)) return text;
   const normalized = text.replaceAll('\r\n', '\n');
   const marker = '\n\nMy answers:\n';
@@ -42,6 +44,13 @@ function displayText(role: string, text: string) {
   const answer = normalized.slice(start + marker.length);
   const end = answer.indexOf(clarificationSuffix);
   return end < 0 ? answer : answer.slice(0, end);
+}
+
+/** Legacy extraction turns saved raw JSON as the reply; show it as a code block instead of a prose wall. */
+function asReadable(role: string, text: string) {
+  const trimmed = text.trim();
+  if (role !== 'assistant' || !trimmed.startsWith('{')) return text;
+  try { return `\`\`\`json\n${JSON.stringify(JSON.parse(trimmed), null, 2)}\n\`\`\``; } catch { return text; }
 }
 
 /** Memoized so typing in the composer does not re-parse every message. */
@@ -78,9 +87,10 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   const [pending, setPending] = useState<PendingAgentTurn>();
   const [pendingReady, setPendingReady] = useState(false);
   const [pendingUnknown, setPendingUnknown] = useState(false);
+  const [pendingCheckFailed, setPendingCheckFailed] = useState(false);
   const openedWorkspace = useRef('');
   const [prepared, setPrepared] = useState<{ input: string; value: DraftPreparation }>();
-  const [operation, setOperation] = useState('Loading workspaces…');
+  const [operation, setOperation] = useState('Loading chats…');
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [error, setError] = useState('');
   const [modal, modalContext] = Modal.useModal();
@@ -152,14 +162,14 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     setGenerationModels(undefined); setGenerationModel(''); setGenerationThinking('');
     localStorage.setItem(selectionKey, value.workspace.id);
     openedWorkspace.current = value.workspace.id;
-    setPending(undefined); setPendingReady(false); setPendingUnknown(false);
+    setPending(undefined); setPendingReady(false); setPendingUnknown(false); setPendingCheckFailed(false);
     void readPendingTurn(value.workspace.id).then(turn => {
       if (!alive.current || openedWorkspace.current !== value.workspace.id) return;
       setPending(turn); setPendingReady(true);
       if (turn?.replyResponseIndex !== undefined && turn.composerText !== undefined) {
         setReplies({ [turn.replyResponseIndex]: turn.composerText });
       }
-    }).catch(cause => { if (alive.current) setError(failure(cause)); });
+    }).catch(cause => { if (alive.current) { setError(failure(cause)); setPendingCheckFailed(true); } });
     setBatchOperations(value.batchOperations ?? []);
     setResponseOperations(value.responseOperations ?? []);
     setEligibleResponseIndices(value.eligibleResponseIndices ?? []);
@@ -181,7 +191,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
       const linkedWorkspace = query.get('workspace');
       const selected = linkedWorkspace ?? localStorage.getItem(selectionKey);
       const first = values.find(value => value.id === selected) ?? (!linkedWorkspace ? values.find(value => !value.archived) : undefined);
-      if (linkedWorkspace && !first) setError('The linked workspace is unavailable.');
+      if (linkedWorkspace && !first) setError('The linked chat is unavailable.');
       if (first) {
         const value = await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(first.id)}`);
         if (!cancelled) {
@@ -262,7 +272,7 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   }
 
   async function saveEditors() {
-    if (!workspace) throw new Error('Open a workspace first.');
+    if (!workspace) throw new Error('Open a chat first.');
     const value = await api<AgentWorkspaceSnapshot>(path, json({ version: workspace.version, ...(title !== workspace.title ? { title } : {}), prompt }, 'PATCH'));
     if (!alive.current) return value;
     setWorkspace(value.workspace); remember(value.workspace); setSnapshot(value.draft);
@@ -291,7 +301,13 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   }
 
   function openWorkspace(id?: string) {
-    void run(id ? 'Opening workspace…' : 'Creating workspace…', async () => {
+    // The open chat is already blank: reuse it instead of piling up empty chats.
+    if (!id && workspace && !workspace.archived && !messages.length && !prompt.trim()) {
+      setHistoryOpen(false);
+      document.querySelector<HTMLElement>('.agent-composer .cm-content')?.focus();
+      return;
+    }
+    void run(id ? 'Opening chat…' : 'Creating chat…', async () => {
       if (!await protectSwitch()) return;
       await stopSession();
       const value = id ? await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(id)}`) : await api<AgentWorkspaceSnapshot>(root, json({}));
@@ -418,11 +434,11 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
   }
 
   function archive(target: AgentWorkspaceSummary | undefined = workspace) {
-    void run(target?.archived ? 'Restoring workspace…' : 'Archiving workspace…', async () => {
+    void run(target?.archived ? 'Restoring chat…' : 'Archiving chat…', async () => {
       if (!target) return;
       const current = target.id === workspace?.id;
       const version = current && dirty ? (await saveEditors()).workspace.version : target.version;
-      if (!await modal.confirm({ title: target.archived ? 'Restore this workspace?' : 'Archive this workspace?', content: 'Saved conversation, plan revisions and ticket Markdown are retained. Archiving stops the connected process; nothing is deleted.', okText: target.archived ? 'Restore workspace' : 'Stop and archive', cancelText: 'Cancel' })) return;
+      if (!await modal.confirm({ title: target.archived ? 'Restore this chat?' : 'Archive this chat?', content: 'Messages and tickets are kept. Archiving stops the connected process; nothing is deleted.', okText: target.archived ? 'Restore chat' : 'Stop and archive', cancelText: 'Cancel' })) return;
       if (current) await stopSession();
       const value = await api<AgentWorkspaceSnapshot>(`${root}/${encodeURIComponent(target.id)}`, json({ version, archived: !target.archived }, 'PATCH'));
       remember(value.workspace);
@@ -478,6 +494,17 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
     });
   }
 
+  async function confirmCreateTickets(index: number) {
+    if (!await modal.confirm({
+      title: <><TicketIcon size={16} aria-hidden="true" />Create tickets from this response?</>,
+      content: <p>The model drafts and saves tickets. Each stays held until you approve it.</p>,
+      okText: 'Create', cancelText: 'Cancel',
+      okButtonProps: { icon: <TicketIcon size={16} aria-hidden="true" /> },
+      cancelButtonProps: { icon: <XIcon size={16} aria-hidden="true" /> },
+    })) return;
+    createTickets(index);
+  }
+
   function createTickets(index: number, retry = false, selection?: ResponseOperation['generation']) {
     openTicketResponse(index);
     void run(retry ? 'Retrying ticket generation…' : 'Creating tickets…', async () => {
@@ -508,30 +535,32 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
               {clarifying && <p className="muted">Model changes apply to chat and this reply, not the original generation.</p>}
               {connected && <Button disabled={disabled || !!operation} onClick={() => void run("Disconnecting from OMP…", async () => { await stopSession(); const value = await api<AgentWorkspaceSnapshot>(path); setSnapshot(value.draft); setWorkspace(current => current ? { ...current, messages: value.workspace.messages } : current); setPrepared(undefined); })}>Disconnect</Button>}
             </div>}>
-              <Button type="text" className="agent-composer-model" data-composer-panel="model" aria-label="Model settings" aria-expanded={composerPanel === 'model'} title={snapshot?.model ? `${snapshot.model.id} · ${snapshot.thinking || 'default'}` : 'Model settings'}><span>{snapshot?.model?.id ?? 'Model'}</span><CaretDownIcon size={12} aria-hidden="true" /></Button>
+              <Button type="text" className="agent-composer-model" data-composer-panel="model" aria-label="Model settings" aria-expanded={composerPanel === 'model'} title={snapshot?.model ? `${snapshot.model.id} · ${snapshot.thinking || 'default'}` : 'Model settings'}><span>{snapshot?.model?.id ?? workspace.model?.id ?? 'Model'}</span><CaretDownIcon size={12} aria-hidden="true" /></Button>
             </Popover>
           <Popover trigger="click" placement="top" title="Context & research" open={contextOpen} onOpenChange={open => setComposerPanel(open ? 'context' : 'closed')} content={<div className="agent-composer-popover">
           <details className="agent-research-tools"><summary>Repository research</summary>
-            <p>Retrieve exact repository files read-only when you need source evidence.</p>
+            <p>Attach exact repository files to the chat. Read-only.</p>
             <label>Paths<Input.TextArea aria-label="Research paths" value={researchPaths} onChange={event => setResearchPaths(event.target.value)} autoSize={{ minRows: 2, maxRows: 6 }} disabled={unavailable || !!pending} /></label>
-            <Button disabled={unavailable || !!pending || !researchPaths.trim()} onClick={research}>Retrieve files</Button>
+            <Button icon={<ArrowDownIcon size={16} aria-hidden="true" />} disabled={unavailable || !!pending || !researchPaths.trim()} onClick={research}>Retrieve files</Button>
             {!!workspace.researchReferences.length && <ul className="agent-research-references">{workspace.researchReferences.map(reference => <li key={reference.id}><details><summary>{reference.title} · {reference.status}</summary><p>{reference.summary}</p><code>{reference.location}</code></details></li>)}</ul>}
           </details>
         <section className="agent-context" aria-label="Prepared model context">
-          <h3>Model context · {preparation ? preparation.ready ? 'Ready' : 'Blocked' : 'Checks on send'}</h3>
+          <h3>Sent with your message · {preparation ? preparation.ready ? 'Ready' : 'Needs attention' : 'Checked on send'}</h3>
           <div className="agent-context-body">
-            <div className="agent-context-heading"><p className="muted">Preparation reports supplied bytes, not proof of understanding. Reference-only files remain staged for the ticket but are not sent to the model.</p><Button disabled={unavailable || !connected} onClick={() => void run('Preparing selected context…', async () => { await prepare(); })}>Check context</Button></div>
+            <div className="agent-context-heading"><p className="muted">Files and skills you mention are sent to the model. Mark one Reference only to keep it with the ticket without sending it.</p><Button icon={<ArrowClockwiseIcon size={16} aria-hidden="true" />} disabled={unavailable || !connected} onClick={() => void run('Preparing selected context…', async () => { await prepare(); })}>Check context</Button></div>
             {contexts.length ? <ul>{contexts.map(context => <li key={context.key}>
               <div><strong>{context.label}</strong><Tag>{context.status}</Tag><p>{context.detail}</p></div>
-              {/^(?:file|skill|upload):/.test(context.key) && <Checkbox disabled={unavailable} checked={excluded.includes(context.key)} onChange={event => setExcluded(current => event.target.checked ? [...current, context.key] : current.filter(key => key !== context.key))}>Reference only (exclude bytes)</Checkbox>}
-            </li>)}</ul> : <p className="muted">File and /skill: mentions are resolved securely by the host when checking or sending.</p>}
+              {/^(?:file|skill|upload):/.test(context.key) && <Checkbox disabled={unavailable} checked={excluded.includes(context.key)} onChange={event => setExcluded(current => event.target.checked ? [...current, context.key] : current.filter(key => key !== context.key))}>Reference only</Checkbox>}
+            </li>)}</ul> : <p className="muted">Mention a file or /skill: in your message to add it here.</p>}
           </div>
         </section>
           </div>}>
             <Tooltip title={preparation?.ready === false ? 'Context needs attention' : 'Context & research'}><Button type="text" data-composer-panel="context" aria-label={preparation?.ready === false ? 'Context needs attention' : 'Context & research'} aria-expanded={contextOpen} danger={preparation?.ready === false} icon={<StackIcon size={16} aria-hidden="true" />} /></Tooltip>
           </Popover>
             </>}
-            <Tooltip title={clarifying ? 'Send reply' : 'Send'}><Button type="primary" aria-label={clarifying ? 'Send reply' : 'Send'} icon={<ArrowUpIcon size={18} aria-hidden="true" />} disabled={unavailable || !!pending || !pendingReady || !composerText.trim() || preparation?.ready === false} onClick={() => send(clarification)} /></Tooltip>
+            {snapshot?.status === 'busy' && !clarifying
+              ? <Tooltip title="Stop response"><Button aria-label="Stop response" icon={<StopIcon size={18} weight="fill" aria-hidden="true" />} disabled={disabled || !!operation} onClick={() => void run('Cancelling discussion turn…', async () => { setSnapshot(await api<DraftSnapshot>(`${path}/session/cancel`, json({}))); })} /></Tooltip>
+              : <Tooltip title={clarifying ? 'Send reply' : 'Send'}><Button type="primary" aria-label={clarifying ? 'Send reply' : 'Send'} icon={<ArrowUpIcon size={18} aria-hidden="true" />} disabled={unavailable || !!pending || !pendingReady || !composerText.trim() || preparation?.ready === false} onClick={() => send(clarification)} /></Tooltip>}
           </div>
         {busy && <p className="agent-turn-status" role="status">{operation || 'Discussion turn in progress. Partial output remains available.'}</p>}
           </MarkdownEditor>
@@ -581,17 +610,23 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
       <Modal title="Rename chat" open={!!renaming} onCancel={() => setRenaming(null)} onOk={rename} okText="Rename" okButtonProps={{ disabled: !renameValue.trim() || new Blob([renameValue.trim()]).size > 200 }} destroyOnHidden>
         <Input aria-label="Chat title" value={renameValue} autoFocus onChange={event => setRenameValue(event.target.value)} onPressEnter={rename} />
       </Modal>
-      <Modal title="Chat settings" open={settingsOpen} onCancel={() => setSettingsOpen(false)} footer={null}>
+      <Modal title="Chat settings" open={settingsOpen} onCancel={() => setSettingsOpen(false)} footer={null} width={720} styles={{ body: { maxHeight: 'calc(100dvh - 180px)', overflowY: 'auto' } }}>
         <div className="agent-workspace-options">
         <p className="muted">Discuss your project. Create tickets from an assistant response when ready; saved tickets stay held until you explicitly approve them for execution.</p>
         <Checkbox checked={showArchived} onChange={event => setShowArchived(event.target.checked)}>Show archived</Checkbox>
-        <Button disabled={busy || disabled} onClick={() => void run("Refreshing workspace list…", async () => { setWorkspaces(await api<AgentWorkspaceSummary[]>(root)); })}>Refresh chats</Button>
+        <Button disabled={busy || disabled} onClick={() => void run("Refreshing chat list…", async () => { setWorkspaces(await api<AgentWorkspaceSummary[]>(root)); })}>Refresh chats</Button>
+        {workspace && (workspace.planRevisions.length > 0 || workspace.proposalSets.length > 0 || workspace.ticketMarkdown) && <details className="agent-safety-help"><summary>Saved historical records</summary>
+        <p className="muted">Read-only records. Create new tickets from a completed chat response.</p>
+        {workspace.planRevisions.map((revision, index) => <details key={revision.id}><summary>Plan revision {index + 1} · {new Date(revision.createdAt).toLocaleString()}</summary><Markdown remarkPlugins={[remarkGfm]} skipHtml>{revision.markdown}</Markdown></details>)}
+        {workspace.proposalSets.map(set => <details key={set.id}><summary>{set.payload.proposals.length} saved proposals · {new Date(set.createdAt).toLocaleString()}</summary>{set.payload.proposals.map(proposal => <details key={proposal.key}><summary>{proposal.title}</summary><pre>{proposal.description}</pre></details>)}</details>)}
+        {workspace.ticketMarkdown && <details><summary>Saved ticket text</summary><pre>{workspace.ticketMarkdown}</pre></details>}
+        </details>}
         <details className="agent-safety-help"><summary>Process &amp; context limits</summary><p>Sending connects automatically. Leaving stops the owned child; saved discussion remains. No turn is replayed automatically. The process is capability-restricted, not an OS sandbox.</p><p>Only bounded recent text and plan context are supplied to new turns. Staged files live only in this tab until sent; reload requires reattaching their bytes.</p></details>
         </div>
       </Modal>
-    {workspace && (!pendingReady || pending) && <aside className="agent-pending-turn" aria-label="Pending Send recovery">
+    {workspace && (pending || (!pendingReady && pendingCheckFailed)) && <aside className="agent-pending-turn" aria-label="Pending Send recovery">
       <h3>Pending Send recovery</h3>
-      <p>{pending ? `Request ${pending.key} is preserved with its exact message, context selection and upload bytes. A lost response is not a failed model turn.` : 'Checking browser storage before another Send is allowed.'}</p>
+      <p>{pending ? `Request ${pending.key} is preserved with its exact message, context selection and upload bytes. A lost response is not a failed model turn.` : 'Saved Sends in this browser could not be read. Check again before sending.'}</p>
       {pending && <><details><summary>Submitted request</summary><pre>{String(pending.entries.find(entry => entry.name === 'prompt')?.value ?? '')}</pre><p>Started {new Date(pending.createdAt).toLocaleString()}. Composer edits do not change this saved request.</p></details><div className="toolbar">
         <Button disabled={disabled || !!operation} onClick={() => void run('Checking persisted turn…', async () => { await reconcilePending(pending); })}>Check pending Send</Button>
         <Button disabled={unavailable || !pendingUnknown} onClick={() => void run('Reconciling exact saved request…', async () => { if (!await reconcilePending(pending)) { if (!connected) await connect(); await submitTurn(pending); } })}>Retry exact saved request</Button>
@@ -602,10 +637,10 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
           await clearPendingTurn(pending); setPending(undefined); setPendingUnknown(false);
         })}>Discard unaccepted request</Button>
       </div><p className="muted">Retry first checks host state and reuses the original key and bytes. Discard records a host rejection before clearing browser storage, so a delayed request cannot start inference.</p></>}
-      {!pendingReady && <Button disabled={disabled || !!operation} onClick={() => void run('Checking pending storage…', async () => { const turn = await readPendingTurn(workspace.id); setPending(turn); setPendingReady(true); })}>Check pending storage</Button>}
+      {!pendingReady && <Button disabled={disabled || !!operation} onClick={() => void run('Checking pending storage…', async () => { const turn = await readPendingTurn(workspace.id); setPending(turn); setPendingReady(true); setPendingCheckFailed(false); })}>Check pending storage</Button>}
     </aside>}
-    {(error || snapshot?.error) && <div className="error-banner" role="alert">{error && <p>{error}</p>}{snapshot?.error && snapshot.error !== error && <p>{snapshot.error}</p>}<p>Available edits, files and conversation are preserved. No failed turn is replayed automatically.</p>{workspace && <Button disabled={busy || disabled} onClick={() => void run('Loading saved workspace…', async () => { if ((dirty || replyDirty) && !await modal.confirm({ title: 'Replace local editor changes?', content: 'Load the saved workspace without merging your local edits or unsent ticket replies. Copy them first if needed. Tab-local attachments remain.', okText: 'Load saved editors', cancelText: 'Keep edits', okButtonProps: { danger: true } })) { setError(error); return; } load(await api<AgentWorkspaceSnapshot>(path), false); })}>Load saved editors…</Button>}</div>}
-    {!workspace ? <div className="agent-conversation-empty">{operation ? <><h2>Opening chat</h2><p>Your saved conversation will appear here.</p></> : <><h2>Chat could not be loaded</h2><p>Retry loading the selected conversation.</p><Button disabled={disabled} onClick={() => { if (locked.current) return; locked.current = true; setError(''); setOperation('Loading workspaces…'); setLoadAttempt(current => current + 1); }}>Retry loading chat</Button></>}</div> : <div className="agent-workspace-columns agent-workspace-columns-discussion">
+    {(error || snapshot?.error) && <div className="error-banner" role="alert">{error && <p>{error}</p>}{snapshot?.error && snapshot.error !== error && <p>{snapshot.error}</p>}<p>Available edits, files and conversation are preserved. No failed turn is replayed automatically.</p>{workspace && <Button disabled={busy || disabled} onClick={() => void run('Loading saved chat…', async () => { if ((dirty || replyDirty) && !await modal.confirm({ title: 'Replace local editor changes?', content: 'Load the saved chat without merging your local edits or unsent ticket replies. Copy them first if needed. Tab-local attachments remain.', okText: 'Load saved editors', cancelText: 'Keep edits', okButtonProps: { danger: true } })) { setError(error); return; } load(await api<AgentWorkspaceSnapshot>(path), false); })}>Load saved editors…</Button>}</div>}
+    {!workspace ? <div className="agent-conversation-empty">{operation ? <><h2>Opening chat</h2><p>Your saved conversation will appear here.</p></> : <><h2>Chat could not be loaded</h2><p>Retry loading the selected conversation.</p><Button disabled={disabled} onClick={() => { if (locked.current) return; locked.current = true; setError(''); setOperation('Loading chats…'); setLoadAttempt(current => current + 1); }}>Retry loading chat</Button></>}</div> : <div className="agent-workspace-columns agent-workspace-columns-discussion">
       <section className="agent-ticket-draft" aria-label="Persistent discussion">
         {!!snapshot?.activity?.length && <details className="agent-safety-help"><summary>Activity · {snapshot.activity.length}</summary>{snapshot.activity.map((activity, index) => <p key={index}>{activity.type} · {activity.status} · {activity.detail}</p>)}</details>}
         <div className="agent-conversation-viewport">
@@ -614,10 +649,10 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
             const result = responseOperations.find(operation => operation.responseIndex === index);
             const inspection = result?.publicationId ? inspections[result.publicationId] : undefined;
             const eligible = eligibleResponseIndices.includes(index);
-            const retryText = index === messages.length - 1 && messages[index - 1]?.role === 'user' ? messages[index - 1].text : undefined;
-            return <article key={index} className={`agent-message agent-message-${item.role}`}>{item.role !== 'user' && item.model && <header><small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small></header>}<div className="agent-message-content" tabIndex={0}><MessageMarkdown text={displayText(item.role, item.text) || (snapshot?.status === 'busy' ? 'Waiting for agent output…' : '(No text returned)')} attachmentBase={`${path}/attachments/${index}`} /></div>
+            const retryText = index === messages.length - 1 && messages[index - 1]?.role === 'user' && !messages[index - 1].text.startsWith(legacyExtractionPrefix) ? messages[index - 1].text : undefined;
+            return <article key={index} className={`agent-message agent-message-${item.role}`}>{item.role !== 'user' && item.model && <header><small>{item.model}{item.thinking ? ` · ${item.thinking}` : ''}</small></header>}<div className="agent-message-content" tabIndex={0}><MessageMarkdown text={asReadable(item.role, displayText(item.role, item.text)) || (snapshot?.status === 'busy' ? 'Waiting for agent output…' : '(No text returned)')} attachmentBase={`${path}/attachments/${index}`} /></div>
               {item.role === 'assistant' && !!item.text.trim() && <div className="agent-response-actions">
-                {!result && <Tooltip title="Create tickets"><Button type="text" aria-label="Create tickets" icon={<TicketIcon size={18} aria-hidden="true" />} disabled={unavailable} onClick={() => createTickets(index)} /></Tooltip>}
+                {!result && eligible && <Tooltip title="Create tickets"><Button type="text" aria-label="Create tickets" icon={<TicketIcon size={18} aria-hidden="true" />} disabled={unavailable} onClick={() => void confirmCreateTickets(index)} /></Tooltip>}
                 {result && (() => {
                   const label = `Tickets · ${result.state === 'generating' ? 'Generating…' : result.state === 'publishing' ? 'Saving…' : result.state === 'complete' ? 'Saved' : 'Needs attention'}`;
                   return <Tooltip title={label}><Button type="text" aria-label={label} icon={<TicketIcon size={18} weight="fill" aria-hidden="true" />} loading={result.state === 'generating' || result.state === 'publishing'} danger={result.state !== 'generating' && result.state !== 'publishing' && result.state !== 'complete'} disabled={disabled || !!operation} onClick={() => openTicketResponse(index)} /></Tooltip>;
@@ -670,29 +705,16 @@ export default function AgentTicketDraft({ repoId, api, files, onUpload, onClear
                   </div>
                 </Modal>
               </div>}
-              {!eligible && !result && item.role === 'assistant' && item.status === 'complete' && !!item.text.trim() && <p className="muted">Ticket creation is unavailable for this saved response. Choose an available model or send a follow-up to produce a new completed response.</p>}
             </article>;
           }) : <div className="agent-conversation-empty"><h2>What would you like to change?</h2><p>Discuss an idea, explore the repository or work through a plan.</p><p>Create tickets from a completed response when you are ready. Saved tickets stay held until you approve each revision.</p></div>}
         </div>
-        <div className="agent-floating-status">
-          {(() => {
-            const label = operation ? 'Working' : snapshot?.status === 'busy' ? 'Responding' : snapshot?.status === 'failed' ? 'Failed' : snapshot?.status === 'stopped' ? 'Disconnected' : 'Ready';
-            return label === 'Ready' || label === 'Working' || label === 'Responding'
-              ? <span className={`agent-status-dot agent-status-dot-${label === 'Ready' ? 'ready' : 'busy'}`} role="status" aria-live="polite" aria-label={label} title={label === 'Ready' ? 'Ready to chat' : operation || label} />
-              : <Tag role="status" aria-live="polite" title={operation || snapshot?.status}>{label}</Tag>;
-          })()}
-          {snapshot?.status === "busy" && <Button disabled={disabled || !!operation} onClick={() => void run("Cancelling discussion turn…", async () => { setSnapshot(await api<DraftSnapshot>(`${path}/session/cancel`, json({}))); })}>Stop</Button>}
-        </div>
+        {!operation && (snapshot?.status === 'failed' || snapshot?.status === 'stopped') && <div className="agent-floating-status">
+          <Tag role="status" aria-live="polite">{snapshot.status === 'failed' ? 'Failed' : 'Disconnected'}</Tag>
+        </div>}
         {!following && <div className="agent-floating-controls"><Button aria-label="Jump to latest" title="Jump to latest" icon={<ArrowDownIcon size={16} aria-hidden="true" />} onClick={() => { setFollowing(true); if (conversation.current) conversation.current.scrollTop = conversation.current.scrollHeight; }}>Latest</Button></div>}
         </div>
         {!clarifying && composer}
       </section>
-      {(workspace.planRevisions.length > 0 || workspace.proposalSets.length > 0 || workspace.ticketMarkdown) && <details className="agent-safety-help"><summary>Saved historical records</summary>
-        <p className="muted">Read-only records. Create new tickets from a completed chat response.</p>
-        {workspace.planRevisions.map((revision, index) => <details key={revision.id}><summary>Plan revision {index + 1} · {new Date(revision.createdAt).toLocaleString()}</summary><Markdown remarkPlugins={[remarkGfm]} skipHtml>{revision.markdown}</Markdown></details>)}
-        {workspace.proposalSets.map(set => <details key={set.id}><summary>{set.payload.proposals.length} saved proposals · {new Date(set.createdAt).toLocaleString()}</summary>{set.payload.proposals.map(proposal => <details key={proposal.key}><summary>{proposal.title}</summary><pre>{proposal.description}</pre></details>)}</details>)}
-        {workspace.ticketMarkdown && <details><summary>Saved ticket text</summary><pre>{workspace.ticketMarkdown}</pre></details>}
-      </details>}
       {batchOperations.some(item => ['publishing', 'blocked'].includes(item.state) && !responseOperations.some(result => result.publicationId === item.publicationId)) && <details className="agent-safety-help"><summary>Interrupted saved publications</summary>
         <p>Only previously accepted publications can resume. New tickets use the response action.</p>
         {batchOperations.filter(item => ['publishing', 'blocked'].includes(item.state) && !responseOperations.some(result => result.publicationId === item.publicationId)).map(item => {

@@ -75,7 +75,7 @@ export function createStore(directory = process.env.OMP_BACKLOG_DATA || join(hom
     }
   })();
   db.exec("UPDATE records SET value=json_set(value,'$.invalidated',json('true'),'$.compacted',json('true'),'$.tickets',json('[]')) WHERE kind='batchOperations' AND json_extract(value,'$.state')='prepared' AND coalesce(json_extract(value,'$.compacted'),0)=0 AND (coalesce(json_extract(value,'$.invalidated'),0)=1 OR json_extract(value,'$.expires')<=unixepoch()*1000)");
-  const defaults: Settings = { executable: 'omp', engineeringMode: 'standard', model: '', roots: [join(homedir(), 'Development')], timeLimitMinutes: 30, tokenBudget: 100000, maxConcurrentTickets: 1, paused: false };
+  const defaults: Settings = { executable: 'omp', engineeringMode: 'standard', model: '', roots: [join(homedir(), 'Development')], timeLimitMinutes: 30, tokenBudget: 500000, maxConcurrentTickets: 1, paused: false };
   db.query('INSERT OR IGNORE INTO config(id,value) VALUES(1,?)').run(JSON.stringify(defaults));
   const target = new EventTarget();
   let depth = 0;

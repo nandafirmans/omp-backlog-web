@@ -19,6 +19,12 @@ export function object(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+/** Budget-counted tokens, matching OMP's native goal: input + output + cache writes. Cache reads (re-sent context) are excluded. Falls back to `total` without a breakdown. */
+export function accountedTokens(tokens: Record<string, unknown>): number {
+  if (['input', 'output', 'cacheWrite'].some(key => typeof tokens[key] === 'number')) return Number(tokens.input ?? 0) + Number(tokens.output ?? 0) + Number(tokens.cacheWrite ?? 0);
+  return typeof tokens.total === 'number' ? tokens.total : 0;
+}
+
 /** OMP v2 chunks are contiguous base64 segments, never inbound command chunks. */
 export class FrameDecoder {
   maxFrameBytes = PHYSICAL_LIMIT;

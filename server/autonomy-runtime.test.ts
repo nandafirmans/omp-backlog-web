@@ -95,8 +95,8 @@ test('autonomous author report alone never accepts; host recipe, independent ses
   });
 }, 30000);
 
-test('a different OMP major stops author admission before provider work or publication', async () => {
-  await fixture('unsupported-major', async h => {
+test('unrecognized OMP version output stops author admission before provider work or publication', async () => {
+  await fixture('unrecognized-version', async h => {
     const parent = await git(h.repo.path, 'rev-parse', 'HEAD');
     await h.start();
     const run = await terminal(h);

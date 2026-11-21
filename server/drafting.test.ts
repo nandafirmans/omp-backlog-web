@@ -95,11 +95,11 @@ test('execution model discovery has no invented default and rejects unsafe or st
   }, 'discovery-stall');
 }, 20000);
 
-test('execution discovery permits minor and patch upgrades but rejects a different or unknown major before RPC', async () => {
-  for (const release of ['18.18.1', '18.99.0']) await fixture(async ({ executable }) => {
+test('execution discovery permits any MAJOR.MINOR.PATCH release but rejects unrecognized version output before RPC', async () => {
+  for (const release of ['17.99.0', '18.18.1', '18.99.0', '19.0.0']) await fixture(async ({ executable }) => {
     expect((await discoverExecutionModels(executable, '')).model).toBe('fixture/vision');
   }, `release-${release}`);
-  for (const mode of ['release-17.99.0', 'release-19.0.0', 'malformed-version']) await fixture(async ({ root, executable }) => {
+  for (const mode of ['malformed-version']) await fixture(async ({ root, executable }) => {
     await expect(discoverExecutionModels(executable, '')).rejects.toMatchObject({ status: 503 });
     await expect(stat(join(root, 'child.jsonl'))).rejects.toMatchObject({ code: 'ENOENT' });
   }, mode);

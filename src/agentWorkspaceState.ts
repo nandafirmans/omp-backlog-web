@@ -7,7 +7,7 @@ export function acceptedComposerText(current: string, submitted: string, accepte
 
 
 export function mergeWorkspaceRuntime(current: AgentWorkspace, incoming: AgentWorkspace): AgentWorkspace {
-  if (current.title === 'Untitled workspace' && current.titleSource !== 'manual' && incoming.titleSource === 'automatic') {
+  if (current.title === 'New chat' && current.titleSource !== 'manual' && incoming.titleSource === 'automatic') {
     current = { ...current, title: incoming.title, titleSource: incoming.titleSource };
   }
   const sameEditors = current.title === incoming.title && current.prompt === incoming.prompt
