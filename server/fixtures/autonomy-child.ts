@@ -8,7 +8,7 @@ const args = process.argv.slice(2);
 const argument = (name: string) => args[args.indexOf(name) + 1]!;
 const configPath = argument('--fixture-config');
 const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; repairTokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean };
-if (args.includes('--version')) { console.log(config.scenario === 'unsupported-major' ? 'omp/19.0.0' : 'omp/18.18.1'); process.exit(0); }
+if (args.includes('--version')) { console.log(config.scenario === 'unrecognized-version' ? 'not-a-version' : 'omp/18.18.1'); process.exit(0); }
 const reviewer = args.includes('--no-tools');
 const standard = !reviewer && argument('--append-system-prompt').includes('Engineering mode: standard.');
 if (reviewer && args.includes('--append-system-prompt')) throw new Error('Restricted reviewer must not receive author engineering system instructions');
