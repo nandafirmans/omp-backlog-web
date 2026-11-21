@@ -18,6 +18,7 @@ import BlockedRecovery from './BlockedRecovery';
 import TicketExecution from './TicketExecution';
 import ModelPicker from './ModelPicker';
 import RunUsage from './RunUsage';
+import BudgetRetry, { budgetExhausted } from './BudgetRetry';
 import CompletionPolicy from './CompletionPolicy';
 import LifecycleProgress from './LifecycleProgress';
 import { lifecycleLabels, lifecycleOwnsCompletion } from './lifecyclePresentation';
@@ -513,7 +514,7 @@ interface ExecutionModels {
 function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; api: RequestApi; execute: Execute; busy: boolean }) {
   const [draft, setDraft] = useState(settings);
   const [base, setBase] = useState(settings);
-  const finiteTokenBudget = useRef(settings.tokenBudget ?? 100000);
+  const finiteTokenBudget = useRef(settings.tokenBudget ?? 500000);
   const [modal, modalContext] = Modal.useModal();
   const [roots, setRoots] = useState(settings.roots.join('\n'));
   const [discovery, setDiscovery] = useState<(ExecutionModels & { executable: string; requestedModel: string })>();
@@ -629,7 +630,7 @@ function SettingsPanel({ settings, api, execute, busy }: { settings: Settings; a
         <div className="toolbar"><Button icon={<ArrowCounterClockwiseIcon size={16} aria-hidden="true" />} htmlType="button" disabled={busy || !dirty && !stale} onClick={async () => {
           if (dirty && !await modal.confirm({ title: 'Replace unsaved execution settings?', okText: 'Load saved settings', cancelText: 'Keep editing' })) return;
           setBase(settings); setDraft(settings); setRoots(settings.roots.join('\n'));
-          finiteTokenBudget.current = settings.tokenBudget ?? 100000;
+          finiteTokenBudget.current = settings.tokenBudget ?? 500000;
           if (draft.executable !== settings.executable || draft.model !== settings.model) void discover(settings.executable, settings.model);
         }}>Load saved settings</Button><Button icon={<FloppyDiskIcon size={16} aria-hidden="true" />} type="primary" htmlType="submit" disabled={busy || !dirty || stale || thinkingNeedsDiscovery || timeInvalid || tokensInvalid || capacityInvalid}>Save settings</Button></div>
       </div>
@@ -655,7 +656,7 @@ function RunPanel({ run, ticket, repo, api, execute, busy, onClose }: { run: Run
     });
     return () => cancelAnimationFrame(frame);
   }, [view, focusRequest]);
-  return <section ref={section} className="panel run-panel" tabIndex={-1} aria-labelledby="run-heading"><div className="section-heading"><div><p className="run-reference">{repo?.name ?? run.repoId} / {run.ticketId}</p><h1 id="run-heading">Run details</h1></div><Button icon={<XIcon size={16} aria-hidden="true" />} onClick={onClose}>Close run</Button></div><div className="toolbar"><Status value={run.status} /><RunControls run={run} api={api} execute={execute} busy={busy} /></div>{run.status === 'stopping' && <p className="notice" role="status">Stopping... Waiting for the agent and its child work to actually stop. Completed actions are not rolled back.</p>}{old && <p className="warning-text">Requirements changed during or after this run. This evidence belongs to an older revision and cannot complete the current ticket.</p>}{run.error && <p role="alert" className="error-banner">{run.error}</p>}{run.blocker && <section className="blocker-box"><h3>Blocked · prerequisite needed</h3><p>{run.blocker}</p></section>}{run.dialog && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}
+  return <section ref={section} className="panel run-panel" tabIndex={-1} aria-labelledby="run-heading"><div className="section-heading"><div><p className="run-reference">{repo?.name ?? run.repoId} / {run.ticketId}</p><h1 id="run-heading">Run details</h1></div><Button icon={<XIcon size={16} aria-hidden="true" />} onClick={onClose}>Close run</Button></div><div className="toolbar"><Status value={run.status} /><RunControls run={run} api={api} execute={execute} busy={busy} /></div>{run.status === 'stopping' && <p className="notice" role="status">Stopping... Waiting for the agent and its child work to actually stop. Completed actions are not rolled back.</p>}{old && <p className="warning-text">Requirements changed during or after this run. This evidence belongs to an older revision and cannot complete the current ticket.</p>}{run.error && <p role="alert" className="error-banner">{run.error}</p>}{ticket && budgetExhausted(run) && <div className="toolbar"><BudgetRetry run={run} ticket={ticket} api={api} execute={execute} busy={busy} /></div>}{run.blocker && <section className="blocker-box"><h3>Blocked · prerequisite needed</h3><p>{run.blocker}</p></section>}{run.dialog && <DialogForm key={run.dialog.id} dialog={run.dialog} runId={run.id} repoId={run.repoId} api={api} execute={execute} busy={busy} />}
     {run.reviewFeedback && <section className="detail-section"><h3><ChatCircleDotsIcon size={16} aria-hidden="true" />Human change request<Tooltip title="Linked to this run and revision; supplied to the next authorized attempt."><Button type="text" size="small" aria-label="About change requests" icon={<InfoIcon size={16} aria-hidden="true" />} /></Tooltip></h3><pre tabIndex={0}>{run.reviewFeedback.message}</pre></section>}
     {run.blocker && <p><Link to={`/projects/${encode(run.repoId)}/tickets/${encode(run.ticketId)}`}>Review blocker recovery instructions on ticket</Link></p>}
     {run.recoveryNote && <section className="detail-section"><h3>Recovery note</h3><p>{run.recoveryNote.reviewed ? 'Operator reviewed for retry' : 'Saved only · not approved for execution'} · revision {run.recoveryNote.revision.slice(0, 10)}</p><pre className="recovery-text" tabIndex={0}>{run.recoveryNote.instructions}</pre></section>}

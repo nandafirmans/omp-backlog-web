@@ -546,3 +546,6 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
 
 /* Toasts share the modal shell: square, bordered, no shadow; semantic icon colour carries the type. */
 .ant-message .ant-message-notice-content { border-radius: 0; border: 1px solid var(--line); background: var(--surface-elevated); color: var(--text); box-shadow: none; padding: 10px 16px; font-size: 13px; }
+
+.budget-retry-field { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.budget-retry-field .ant-input-number { width: 100%; }
