@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Alert, Breadcrumb, Button, ConfigProvider, Dropdown, Grid, Input, Skeleton, Tag, theme } from 'antd';
-import { PaletteIcon, SlidersIcon, GearSixIcon, CheckIcon, DesktopIcon, SignOutIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { PaletteIcon, GearSixIcon, CheckIcon, DesktopIcon, SignOutIcon, BroadcastIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useLocation, useParams } from 'react-router';
 import type { Snapshot } from '../server/contracts';
 import plan from '../PLAN.md?raw';
@@ -206,7 +206,7 @@ export default function App() {
           </header>
           <main id="content" tabIndex={-1} className={session?.authenticated ? (pathname === '/' || pathname === '/projects/new' ? 'home-main' : pathname.endsWith('/tickets/new/agent') ? 'drafting-main' : pathname.startsWith('/projects/') ? 'workspace-main' : undefined) : undefined}>
             {error && <Alert type="error" title={error} closable={{ onClose: () => setError('') }} role="alert" />}
-            {session?.authenticated && view === 'settings' && <><h1>Settings</h1><nav className="settings-navigation" aria-label="Settings sections"><a href="#appearance-heading"><PaletteIcon size={16} aria-hidden="true" />Appearance</a><a href="#execution-settings"><SlidersIcon size={16} aria-hidden="true" />Execution</a></nav></>}
+            {session?.authenticated && view === 'settings' && <div className="section-heading"><h1>Settings</h1></div>}
             {session?.authenticated && view === 'settings' && <section className="panel appearance-settings" aria-labelledby="appearance-heading">
               <h2 id="appearance-heading" className="icon-heading"><PaletteIcon size={16} aria-hidden="true" />Appearance</h2>
               <p className="muted">Theme for this browser. Applies immediately.</p>

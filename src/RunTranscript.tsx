@@ -1,5 +1,6 @@
 import { memo, useCallback, useLayoutEffect, useRef, useState } from 'react';
-import { Button, Spin, Tag } from 'antd';
+import { Button, Spin, Tag, Tooltip } from 'antd';
+import { InfoIcon, TerminalWindowIcon } from '@phosphor-icons/react';
 import Markdown, { defaultUrlTransform } from 'react-markdown';
 import type { Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -87,8 +88,7 @@ export default function RunTranscript({ run }: { run: Pick<Run, 'id' | 'conversa
   }, []);
 
   return <section className="detail-section run-transcript" aria-labelledby="live-transcript-heading" data-run-id={run.id}>
-    <h3 id="live-transcript-heading">Live transcript</h3>
-    <p className="muted">Persisted output, including errors and partial work. Browser closure does not stop this process. This transcript is read-only. A completed tool call is not independent verification or acceptance.</p>
+    <h3 id="live-transcript-heading"><TerminalWindowIcon size={16} aria-hidden="true" />Live transcript<Tooltip title="Saved output, including errors and partial work. Read-only. Closing the browser does not stop the run. A completed tool call is not verification or acceptance."><Button type="text" size="small" aria-label="About the transcript" icon={<InfoIcon size={16} aria-hidden="true" />} /></Tooltip></h3>
     {!structured && <p className="run-transcript-legacy-note">Structured messages and tool details are unavailable for this older run. The recorded legacy log is shown below; missing details are not reconstructed.</p>}
     <div className="run-transcript-surface">
       <div className="run-transcript-toolbar">

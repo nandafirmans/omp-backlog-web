@@ -94,11 +94,7 @@ small { line-height: 1.7; }
 .theme-swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex: none; background: var(--accent); }
 .connection { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 4px 7px; font-size: 12px; background: transparent; border-color: transparent; }
 .connected { color: var(--accent); }
-.settings-navigation { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
-.settings-navigation a { display: inline-flex; align-items: center; gap: 8px; min-height: var(--control-height); padding: 4px 12px; border: 1px solid var(--line); text-decoration: none; font: 13px var(--font-mono); }
-.settings-navigation a:hover { background: var(--accent-soft); }
 .appearance-settings { margin-bottom: 28px; scroll-margin-top: 20px; }
-#execution-settings { scroll-margin-top: 20px; }
 .unavailable { color: var(--warning); }
 main { flex: 1; min-height: 0; min-width: 0; width: 100%; padding: 24px; overflow: auto; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 main > .ant-alert { margin-bottom: 20px; flex: none; }
@@ -246,7 +242,8 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .ant-modal.ant-modal-confirm .ant-modal-confirm-body .ant-modal-confirm-paragraph { max-width: none; width: 100%; row-gap: 0; }
 .ant-modal-confirm .ant-modal-confirm-content { margin: 0; }
 .ant-modal-confirm .ant-modal-confirm-title { box-sizing: border-box; width: calc(100% + 40px); max-width: none; display: flex; align-items: center; gap: 8px; margin: -20px -20px 16px; padding: 12px 20px; background: var(--surface-elevated); border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 14px; font-weight: 600; line-height: 1.5; }
-.ant-modal-confirm .ant-modal-confirm-btns { margin: 20px -20px -20px; padding: 12px 20px; border-top: 1px solid var(--line); }
+.ant-modal-confirm .ant-modal-confirm-btns { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 20px -20px -20px; padding: 12px 20px; border-top: 1px solid var(--line); }
+.ant-modal-confirm .ant-modal-confirm-btns > .ant-btn { margin: 0; }
 .ticket-modal .ant-modal-body { padding: 0; }
 .ticket-modal .ant-modal-body { max-height: calc(100dvh - 160px); overflow-y: auto; }
 .ticket-modal .editor-panel { border: 0; background: transparent; padding: 20px; font-family: var(--font-sans); }
@@ -310,8 +307,10 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .conflict-box p { margin-top: 0; }
 .error-banner { border-color: var(--danger); color: var(--danger); }
 .warning-text, .attention { color: var(--warning); font-size: 13px; }
-.active-run { padding: 16px; margin-top: 14px; border: 1px solid var(--accent); background: var(--accent-soft); display: flex; align-items: center; justify-content: space-between; gap: 18px; }
-.active-run > div:first-child { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: 14px; }
+.active-run { padding: 12px 16px; margin: 14px 0 20px; border: 1px solid var(--line); border-left: 3px solid var(--accent); background: var(--surface); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 18px; }
+.active-run > div:first-child { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; font-size: 14px; min-width: 0; }
+/* The agent's question sits under the run header, full width, instead of beside the actions. */
+.active-run > .agent-dialog { flex-basis: 100%; margin: 0; }
 .attachment-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 0; }
 .attachment-list a { flex: 1; font-size: 14px; min-width: 100px; overflow-wrap: anywhere; }
 .attachment-list small { color: var(--muted); font-size: 13px; }
@@ -355,6 +354,12 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .folder-list li.muted { padding: 15px; }
 .dialog-actions { display: flex; justify-content: end; gap: 10px; border-top: 1px solid var(--line); padding-top: 16px; }
 .run-panel { margin-top: 28px; scroll-margin-top: 24px; }
+/* The panel takes programmatic focus for screen readers; it is not a control, so no ring. */
+.run-panel:focus { outline: none; }
+.run-facts { margin: 16px 0 0; }
+.run-panel .detail-section { border-top: 0; padding-top: 0; }
+.run-panel .detail-section > h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.run-panel .detail-section > h3 .ant-btn { margin-left: -4px; color: var(--muted); }
 .run-context-links { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 16px; font-size: 13px; overflow-wrap: anywhere; }
 .run-summary-line { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-block: 12px 4px; font-size: 13px; color: var(--muted); }
 .run-summary-line .ant-btn-link { padding-inline: 0; }
@@ -401,15 +406,21 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .ticket-execution .ant-select, .ticket-execution .ant-input-number { width: 100%; min-width: 0; }
 .run-usage-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
 .run-usage-grid > div { min-width: 0; }
-.run-usage h4 { margin: 0 0 12px; }
-.run-usage-model, .token-reading { overflow-wrap: anywhere; }
+.run-usage h4 { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; font-size: 13px; }
+.run-usage h4 .ant-btn { margin-left: -4px; color: var(--muted); }
+.run-usage-facts { margin: 0 0 16px; }
+.run-usage-grid > div > p { margin: 0 0 8px; }
+.run-compaction { margin-top: 20px; }
+.token-reading { overflow-wrap: anywhere; }
 .token-reading { font-family: var(--font-mono); font-size: 14px; }
 .run-usage small { color: var(--muted); }
 @media (max-width: 767px) { .run-usage-grid { grid-template-columns: 1fr; gap: 20px; } }
-.agent-dialog { border: 1px solid var(--warning); padding: 20px; margin: 24px 0; background: var(--surface-elevated); }
-.agent-dialog h3 { font-size: 16px; }
-.agent-dialog form { display: grid; gap: 14px; margin: 18px 0; }
-.agent-dialog form .ant-btn { justify-self: start; }
+.agent-dialog { border: 1px solid var(--warning); padding: 16px; margin: 24px 0; background: var(--surface-elevated); }
+.agent-dialog h3 { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.agent-dialog-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.agent-dialog-footer p { margin: 0; }
+.agent-dialog form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 14px 0; max-width: 720px; }
+.agent-dialog form > label { flex: 1 1 280px; display: grid; gap: 6px; }
 .dialog-message { white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan-view { min-width: 0; }
 .plan-document { max-width: 82ch; margin: 24px auto 0; padding: 28px; border: 1px solid var(--line); background: var(--surface-elevated); font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }
@@ -481,7 +492,7 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
   .location-ancestor-link { display: flex; align-items: center; min-height: 44px; }
   .topbar { flex-wrap: nowrap; }
   .topbar > .brand, .topbar > .navbar-tools { flex-shrink: 0; }
-  .primary-navigation a, .settings-navigation a { min-width: 44px; min-height: 44px; }
+  .primary-navigation a { min-width: 44px; min-height: 44px; }
   .ant-switch::after { content: ''; position: absolute; width: max(100%, 44px); height: 44px; top: 50%; left: 50%; transform: translate(-50%, -50%); }
   .ant-drawer-close, .ant-modal-close { min-width: 44px; min-height: 44px; }
   .board-status-filters button, .board-clear-filter, .board-drag-handle, .board-ticket-details > a { min-height: 44px; }

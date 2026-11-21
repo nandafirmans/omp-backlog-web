@@ -23,6 +23,8 @@ interface TurnReceipt { request: Request; key: string; hash: string }
 function record(store: Store, repo: Repo, id: string): AgentWorkspaceRecord {
   const value = store.get('agentWorkspaces', id);
   if (!value || value.repoId !== repo.id || value.repoPath !== repo.path) throw new HttpError(404, 'Agent workspace not found for this repository');
+  // Older records used "Untitled workspace" as the unnamed placeholder.
+  if (value.title === 'Untitled workspace' && value.titleSource !== 'manual') value.title = 'New chat';
   value.proposalSets ??= []; value.researchReferences ??= []; value.researchResults ??= []; value.extraction ??= null; value.rejectedTurns ??= [];
   value.acceptedTurns.forEach((turn, index) => {
     if (turn.status) return;
@@ -34,7 +36,7 @@ function record(store: Store, repo: Repo, id: string): AgentWorkspaceRecord {
   return value;
 }
 function nameConversation(value: AgentWorkspaceRecord): void {
-  if (value.title !== 'Untitled workspace' || value.titleSource === 'manual') return;
+  if (value.title !== 'New chat' || value.titleSource === 'manual') return;
   const turn = value.acceptedTurns.find(turn => turn.intent !== 'task_extraction');
   const message = turn && value.messages[turn.userMessageIndex];
   if (message?.role !== 'user') return;
@@ -135,6 +137,7 @@ function settleTurns(value: AgentWorkspaceRecord, disconnectedError?: string): v
 }
 function saveNative(store: Store, repo: Repo, id: string, draft: DraftSnapshot): void {
   const value = record(store, repo, id);
+  const before = JSON.stringify(value);
   value.messages = structuredClone(draft.messages);
   nameConversation(value);
   if (draft.model) {
@@ -142,7 +145,9 @@ function saveNative(store: Store, repo: Repo, id: string, draft: DraftSnapshot):
     value.model = { ...draft.model }; value.thinking = draft.thinking;
   }
   settleTurns(value);
-  value.updatedAt = Date.now(); store.save('agentWorkspaces', value);
+  // Only real changes reorder the conversation list; connecting or polling must not.
+  if (JSON.stringify(value) !== before) value.updatedAt = Date.now();
+  store.save('agentWorkspaces', value);
 }
 
 export async function assertWorkspaceOwners(store: Store): Promise<void> {
@@ -265,7 +270,7 @@ export async function handleAgentWorkspaceRequest(store: Store, repo: Repo, requ
       const all = store.list('agentWorkspaces');
       if (all.length >= WORKSPACE_LIMITS.global || all.filter(value => value.repoId === repo.id).length >= WORKSPACE_LIMITS.perRepo) throw new HttpError(429, 'Workspace count limit reached (16 per repository, 64 global, including archived); existing workspaces were retained');
       const now = Date.now();
-      const value: AgentWorkspaceRecord = { id: crypto.randomUUID(), repoId: repo.id, repoPath: repo.path, title: typeof input.title === 'string' ? input.title.trim() : 'Untitled workspace', createdAt: now, updatedAt: now, archived: false, version: 1, prompt: '', ticketMarkdown: '', currentPlanRevisionId: null, planRevisions: [], messages: [], model: null, thinking: '', acceptedTurns: [], rejectedTurns: [], researchReferences: [], researchResults: [], proposalSets: [], extraction: null };
+      const value: AgentWorkspaceRecord = { id: crypto.randomUUID(), repoId: repo.id, repoPath: repo.path, title: typeof input.title === 'string' ? input.title.trim() : 'New chat', createdAt: now, updatedAt: now, archived: false, version: 1, prompt: '', ticketMarkdown: '', currentPlanRevisionId: null, planRevisions: [], messages: [], model: null, thinking: '', acceptedTurns: [], rejectedTurns: [], researchReferences: [], researchResults: [], proposalSets: [], extraction: null };
       if (typeof input.title === 'string') value.titleSource = 'manual';
       store.save('agentWorkspaces', value); return value;
     });

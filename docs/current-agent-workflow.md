@@ -4,7 +4,7 @@ This guide describes the implemented workflow, not full pstack parity. See [PLAN
 
 ## Current CLI compatibility
 
-OMP admission permits minor/patch upgrades within **major 18**, rather than an exact release allowlist. Different majors and unreadable version output fail before author, drafting, model-discovery or reviewer RPC startup; a new major requires compatibility review. RPC v2 negotiation, required command responses and restricted tool/goal state must also pass before inference. The reviewer starts without tools or a goal and must expose exactly the three host acceptance tools after registration. Private startup namespaces, disabled executable discovery and existing ownership, accounting, recovery and publication gates remain in place.
+OMP admission does not gate on a major version or an exact release allowlist. Unreadable version output fails before author, drafting, model-discovery or reviewer RPC startup; a new major requires compatibility review. RPC v2 negotiation, required command responses and restricted tool/goal state must also pass before inference. The reviewer starts without tools or a goal and must expose exactly the three host acceptance tools after registration. Private startup namespaces, disabled executable discovery and existing ownership, accounting, recovery and publication gates remain in place.
 
 Runtime capability reports cannot certify pre-startup plugin isolation for arbitrary future releases. Run native discovery/import-sentinel checks after upgrading OMP; these checks are not an OS sandbox or a live-provider recovery proof.
 
