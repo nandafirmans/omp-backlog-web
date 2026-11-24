@@ -23,3 +23,6 @@ id_ed25519*
 account.conf
 .acme.sh/
 omp-backlog-acme/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
