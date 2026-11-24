@@ -17,6 +17,7 @@ import { assertEngineeringWorkflow, ENGINEERING_AUTHORITY, observeEngineeringInv
 import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
 import { workspaceOperation } from './workspace-commit';
 import { checkOmpMajor } from './drafting';
+import { formAnswer, parseDialogForm } from './form-dialog';
 import { groupMembers, identity, processInfo } from './process-identity';
 
 const CLAIMED: Status[] = ['running', 'stopping', 'paused'];
@@ -634,12 +635,19 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     if (frame.type === 'tool_execution_end' && frame.isError === true) transcript(execution, `Tool reported an error: ${transcriptValue(frame.result ?? '')}\n`);
     if (frame.type === 'extension_ui_request') {
       const method = String(frame.method);
+      const form = method === 'form' ? parseDialogForm(String(frame.html ?? '')) : null;
       if (method === 'cancel') {
         if (execution.run.dialog?.id === frame.targetId) { execution.run.dialog = null; if (execution.run.progress) execution.run.progress.phase = 'Dialog canceled; no approval granted'; persist(execution); }
       } else if (['select', 'confirm', 'input', 'editor'].includes(method)) {
         if (typeof frame.id !== 'string' || execution.run.dialog) { fail(execution, 'Unsupported concurrent or malformed OMP dialog; no approval granted'); return; }
         // ask's timeout defaults can choose recommended answers; do not enable compound ask.
         execution.run.dialog = { ...frame, id: frame.id, method } as Dialog;
+        if (execution.run.progress) execution.run.progress.phase = 'Waiting for explicit answer';
+        persist(execution);
+      } else if (form) {
+        if (typeof frame.id !== 'string' || execution.run.dialog) { fail(execution, 'Unsupported concurrent or malformed OMP dialog; no approval granted'); return; }
+        // Agent HTML is never stored or rendered; only the parsed fields reach the dashboard.
+        execution.run.dialog = { id: frame.id, method, title: 'Agent question', form };
         if (execution.run.progress) execution.run.progress.phase = 'Waiting for explicit answer';
         persist(execution);
       } else if (['notify', 'setStatus', 'setWidget', 'setTitle', 'set_editor_text'].includes(method)) {
@@ -1308,7 +1316,8 @@ export async function createRuntime(store: Store): Promise<Runtime> {
       if (response.value.length > 64_000) throw new Error('Dialog answer too large');
       if (dialog.method === 'select' && (!Array.isArray(dialog.options) || !dialog.options.includes(response.value))) throw new Error('Select an offered option');
       frame.value = response.value;
-    } else throw new Error('Answer shape does not match this dialog');
+    } else if (dialog.method === 'form' && dialog.form) frame.data = formAnswer(dialog.form, response.data);
+    else throw new Error('Answer shape does not match this dialog');
     execution.rpc.send(frame);
     execution.run.dialog = null;
     if (execution.run.progress) execution.run.progress.phase = 'Answer sent; continuation not yet verified';

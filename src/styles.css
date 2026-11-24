@@ -509,6 +509,15 @@ main:has(> .run-panel) { display: flex; flex-direction: column; }
 .agent-dialog-footer p { margin: 0; }
 .agent-dialog form { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 14px 0; max-width: 720px; }
 .agent-dialog form > label { flex: 1 1 280px; display: grid; gap: 6px; }
+.agent-dialog form.agent-dialog-form { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 14px; }
+.agent-dialog-form > p { margin: 0; overflow-wrap: anywhere; }
+.agent-dialog-form > label { flex: none; }
+.agent-dialog-form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
+.agent-dialog-form legend { margin-bottom: 6px; padding: 0; font-weight: 600; }
+.agent-dialog-form .ant-radio-group, .agent-dialog-form .ant-checkbox-group { display: flex; flex-direction: column; gap: 4px; }
+.agent-dialog-form .ant-radio-wrapper, .agent-dialog-form .ant-checkbox-wrapper { min-height: 32px; align-items: center; overflow-wrap: anywhere; }
+.agent-dialog-form > .ant-btn { align-self: flex-start; }
+@media (max-width: 767px) { .agent-dialog-form .ant-radio-wrapper, .agent-dialog-form .ant-checkbox-wrapper { min-height: 44px; } }
 .dialog-message { white-space: pre-wrap; overflow-wrap: anywhere; }
 .plan-view { min-width: 0; }
 .plan-document { max-width: 82ch; margin: 24px auto 0; padding: 28px; border: 1px solid var(--line); background: var(--surface-elevated); font-size: 15px; line-height: 1.75; overflow-wrap: anywhere; }

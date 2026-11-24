@@ -1,9 +1,10 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Button, Checkbox, Input, InputNumber, message as toastApi, Modal, Segmented, Select, Tabs, Tag, Tooltip } from 'antd';
+import { Button, Checkbox, Input, InputNumber, message as toastApi, Modal, Radio, Segmented, Select, Tabs, Tag, Tooltip } from 'antd';
 import { ArrowClockwiseIcon, ArrowCounterClockwiseIcon, ArrowsInIcon, ArrowDownIcon, ArrowSquareOutIcon, ArrowUpIcon, BrainIcon, CaretRightIcon, ChatCircleDotsIcon, CheckCircleIcon, ClockCounterClockwiseIcon, CodeIcon, CoinsIcon, CopyIcon, CpuIcon, DownloadSimpleIcon, EyeIcon, FileTextIcon, FloppyDiskIcon, FolderIcon, FolderOpenIcon, FolderPlusIcon, FolderSimpleIcon, GaugeIcon, GearSixIcon, GitBranchIcon, GitCommitIcon, HouseLineIcon, InfoIcon, LightningIcon, ListChecksIcon, PaperclipIcon, PaperPlaneRightIcon, PauseIcon, PencilSimpleIcon, PlayIcon, PlusIcon, RobotIcon, SealCheckIcon, ShieldCheckIcon, SlidersIcon, StackIcon, TerminalWindowIcon, TicketIcon, TimerIcon, TreeStructureIcon, WarningCircleIcon, XIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLinkClickHandler, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
+import type { DialogForm as ParsedForm, FormField } from '../server/form-dialog';
 import { attachmentReference } from './attachments';
 import type { AttachmentReference, StagedAttachment } from './attachments';
 import MarkdownEditor from './MarkdownEditor';
@@ -712,5 +713,31 @@ function DialogForm({ dialog, runId, repoId, api, execute, busy }: { dialog: Dia
   const method = dialog.method.replace(/^.*\./, '');
   const options = (dialog.options ?? []).filter((option): option is string => typeof option === 'string');
   async function answer(response: Record<string, unknown>) { await execute('Answer sent to this dialog.', async () => { await api(`/api/runs/${encode(runId)}/answer`, json('POST', { id: dialog.id, ...response })); }); }
-  return <section className="agent-dialog" aria-labelledby={headingId}><h3 id={headingId}><ChatCircleDotsIcon size={16} aria-hidden="true" />{dialog.title || 'Agent needs an answer'}</h3>{dialog.message && <pre className="dialog-message">{dialog.message}</pre>}{method === 'confirm' ? <div className="toolbar"><Button type="primary" className="primary" icon={<CheckCircleIcon size={16} aria-hidden="true" />} disabled={busy} onClick={() => void answer({ confirmed: true })}>Allow</Button><Button icon={<XIcon size={16} aria-hidden="true" />} disabled={busy} onClick={() => void answer({ confirmed: false })}>Decline</Button></div> : ['select', 'input', 'editor'].includes(method) ? <form onSubmit={event => { event.preventDefault(); if (value) void answer({ value }); }}>{method === 'editor' ? <MarkdownEditor label="Your answer" value={value} onChange={setValue} repoId={repoId} api={api} disabled={busy} /> : <label>{method === 'select' ? 'Choose a response' : 'Your answer'}{method === 'select' ? <Select aria-label="Choose a response" placeholder="Select an option" value={value || undefined} onChange={setValue} disabled={busy} options={options.map(option => ({ value: option, label: option }))} /> : <Input.TextArea required value={value} onChange={event => setValue(event.target.value)} rows={3} disabled={busy} />}</label>}<Button type="primary" htmlType="submit" className="primary" icon={<PaperPlaneRightIcon size={16} aria-hidden="true" />} disabled={busy || !value}>Send answer</Button></form> : <p className="warning-text">Unsupported interactive request ({dialog.method}). It cannot be silently approved. Cancel this request and review the run.</p>}<div className="agent-dialog-footer"><Button className="quiet" icon={<XIcon size={16} aria-hidden="true" />} disabled={busy} onClick={() => void answer({ cancelled: true })}>Cancel request</Button><p className="muted">Nothing is approved unless you answer.</p></div></section>;
+  return <section className="agent-dialog" aria-labelledby={headingId}><h3 id={headingId}><ChatCircleDotsIcon size={16} aria-hidden="true" />{dialog.title || 'Agent needs an answer'}</h3>{dialog.message && <pre className="dialog-message">{dialog.message}</pre>}{method === 'confirm' ? <div className="toolbar"><Button type="primary" className="primary" icon={<CheckCircleIcon size={16} aria-hidden="true" />} disabled={busy} onClick={() => void answer({ confirmed: true })}>Allow</Button><Button icon={<XIcon size={16} aria-hidden="true" />} disabled={busy} onClick={() => void answer({ confirmed: false })}>Decline</Button></div> : ['select', 'input', 'editor'].includes(method) ? <form onSubmit={event => { event.preventDefault(); if (value) void answer({ value }); }}>{method === 'editor' ? <MarkdownEditor label="Your answer" value={value} onChange={setValue} repoId={repoId} api={api} disabled={busy} /> : <label>{method === 'select' ? 'Choose a response' : 'Your answer'}{method === 'select' ? <Select aria-label="Choose a response" placeholder="Select an option" value={value || undefined} onChange={setValue} disabled={busy} options={options.map(option => ({ value: option, label: option }))} /> : <Input.TextArea required value={value} onChange={event => setValue(event.target.value)} rows={3} disabled={busy} />}</label>}<Button type="primary" htmlType="submit" className="primary" icon={<PaperPlaneRightIcon size={16} aria-hidden="true" />} disabled={busy || !value}>Send answer</Button></form> : method === 'form' && dialog.form ? <FormAnswer form={dialog.form} busy={busy} onSubmit={data => void answer({ data })} /> : <p className="warning-text">Unsupported interactive request ({dialog.method}). It cannot be silently approved. Cancel this request and review the run.</p>}<div className="agent-dialog-footer"><Button className="quiet" icon={<XIcon size={16} aria-hidden="true" />} disabled={busy} onClick={() => void answer({ cancelled: true })}>Cancel request</Button><p className="muted">Nothing is approved unless you answer.</p></div></section>;
+}
+
+type FormValues = Record<string, string | string[]>;
+
+/** Plain controls for an OMP `ask` form; the agent's HTML was reduced to fields on the server and is never rendered. */
+function FormAnswer({ form, busy, onSubmit }: { form: ParsedForm; busy: boolean; onSubmit: (data: FormValues) => void }) {
+  const [values, setValues] = useState<FormValues>(() => Object.fromEntries(form.fields.map(field => [field.name, field.kind === 'text' ? field.initial : field.multiple ? field.initial : field.initial[0] ?? ''])));
+  const set = (name: string, value: string | string[]) => setValues(current => ({ ...current, [name]: value }));
+  // Single choices must be picked; checkboxes and text may stay empty, as in a browser form.
+  const missing = form.fields.some(field => field.kind === 'choice' && !field.multiple && !values[field.name]);
+  const field = (item: FormField) => {
+    const id = `dialog-field-${item.name}`;
+    if (item.kind === 'text') {
+      const value = String(values[item.name] ?? '');
+      return <label key={item.name} htmlFor={id}>{item.label}{item.multiline ? <Input.TextArea id={id} value={value} onChange={event => set(item.name, event.target.value)} rows={3} disabled={busy} /> : <Input id={id} value={value} onChange={event => set(item.name, event.target.value)} disabled={busy} />}</label>;
+    }
+    const options = item.options.map(option => ({ value: option.value, label: option.label }));
+    const legend = item.label || 'Choose a response';
+    if (item.multiple) return <fieldset key={item.name}><legend>{legend}</legend><Checkbox.Group options={options} value={values[item.name] as string[]} onChange={value => set(item.name, value as string[])} disabled={busy} /></fieldset>;
+    return <fieldset key={item.name}><legend>{legend}</legend><Radio.Group options={options} value={values[item.name] || undefined} onChange={event => set(item.name, String(event.target.value))} disabled={busy} /></fieldset>;
+  };
+  return <form className="agent-dialog-form" onSubmit={event => { event.preventDefault(); if (!missing) onSubmit(values); }}>
+    {form.intro.map((line, index) => <p key={index}>{line}</p>)}
+    {form.fields.map(field)}
+    <Button type="primary" htmlType="submit" className="primary" icon={<PaperPlaneRightIcon size={16} aria-hidden="true" />} disabled={busy || missing}>Send answer</Button>
+  </form>;
 }

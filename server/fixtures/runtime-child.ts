@@ -19,7 +19,7 @@ const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
 }
-const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript' | 'compaction' | 'manual-compaction' | 'missing-router' | 'missing-adapter' | 'missing-task' | 'disabled-plugin' | 'missing-invocation'; tokens?: number; expectedFeedback?: string };
+const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'form-dialog' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript' | 'compaction' | 'manual-compaction' | 'missing-router' | 'missing-adapter' | 'missing-task' | 'disabled-plugin' | 'missing-invocation'; tokens?: number; expectedFeedback?: string };
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
@@ -133,6 +133,9 @@ for await (const line of createInterface({ input: process.stdin })) {
         send({ type: 'message_update', messageId: 'failed-partial', assistantMessageEvent: { type: 'text_delta', delta: 'Partial investigation before provider failure.' } });
         send({ type: 'tool_execution_start', toolCallId: 'failed-tool', toolName: 'read', args: { path: 'proof.txt' } });
         send({ type: 'prompt_result', status: 'error', error: { message: 'Deterministic provider failure after admission' } });
+      } else if (configuration.scenario === 'form-dialog') {
+        // OMP 19.1 `ask` sends HTML forms; the host must parse them, never render them.
+        send({ type: 'extension_ui_request', id: 'finish', method: 'form', html: '<form><p>Fixture completion barrier</p><fieldset><legend>Next step</legend><label><input type="radio" name="go" value="wait" checked> Keep waiting</label><label><input type="radio" name="go" value="finish"> Finish the ticket</label></fieldset><label>Note <input name="note"></label></form>' });
       } else if (configuration.scenario !== 'manual-compaction') {
         send({ type: 'extension_ui_request', id: 'finish', method: 'input', title: 'Fixture completion barrier' });
       }
@@ -140,7 +143,8 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'get_session_stats') {
     respond({ tokens: { total: configuration.scenario === 'tokens' ? configuration.tokens : 0 } });
   } else if (frame.type === 'extension_ui_response' && frame.id === 'finish') {
-    if (frame.value !== 'finish' || frame.cancelled === true) continue;
+    const answer = configuration.scenario === 'form-dialog' ? (frame.data as { go?: unknown } | undefined)?.go : frame.value;
+    if (answer !== 'finish' || frame.cancelled === true) continue;
     if (configuration.scenario === 'transcript') send({ type: 'tool_execution_end', toolCallId: 'fixture-tool', toolName: 'bash', result: { content: [{ type: 'text', text: 'Proof checked; exit 0' }] }, isError: false });
     if (configuration.scenario === 'blocked') {
       resultId = crypto.randomUUID();

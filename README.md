@@ -218,6 +218,8 @@ Source diffs and agent code fences use the existing CodeMirror language grammars
 
 The transcript toolbar shows a spinner and **Agent executing…** while the recorded run is running, even between tool calls. Questions switch it to **Waiting for your response**; stopping retains a spinner, while paused and finished runs show explicit non-spinning states. This reflects run status, not percentage completion or proof of current tool execution. Reduced-motion preferences disable animation while keeping the label visible.
 
+Agent questions arrive as OMP select, confirm, text or (OMP 19.1+ `ask`) HTML form requests. Forms are reduced on the server to plain radio, checkbox, select and text fields; the agent's HTML is never rendered, and answers must use the offered fields and options. A form containing anything else (file inputs, images, scripts, disabled fields) still fails the run closed. Nothing is approved unless you answer.
+
 The conversation follows new output only while at the bottom. Scroll up to inspect earlier work; **Jump to latest** resumes following. Entries persist across reload and same-session resume. Unfinished entries are marked stopped when execution pauses or ends. Older runs retain their plain transcript; missing tool details are not reconstructed. Structured runs show only the conversation, without a separate legacy/raw log panel.
 
 Display retention is bounded: 10,000 characters per field, 256 entries and 192,000 serialized characters, with omission/truncation notices. Recognized credential values are redacted and image/evidence bytes omitted before new transcript persistence. This is not a complete secret scanner; never instruct agents to read or print credentials. Private reasoning is not displayed.

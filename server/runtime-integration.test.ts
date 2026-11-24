@@ -844,6 +844,29 @@ test('ticket model/budget are snapshotted and native compaction does not change 
   });
 }, 15_000);
 
+test('OMP form questions reach the operator as parsed fields and only offered answers are sent back', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'form-dialog', 0, 'form-dialog');
+    await ticket(harness, repo);
+    await start(harness);
+    const asking = await waitFor('a parsed form dialog', () => harness.store.list('runs').find(run => run.repoId === repo.id && run.status === 'running' && run.dialog?.method === 'form'));
+    expect(asking.dialog).not.toHaveProperty('html');
+    expect(asking.dialog?.form).toEqual({
+      intro: ['Fixture completion barrier'],
+      fields: [
+        { kind: 'choice', name: 'go', label: 'Next step', multiple: false, options: [{ value: 'wait', label: 'Keep waiting' }, { value: 'finish', label: 'Finish the ticket' }], initial: ['wait'] },
+        { kind: 'text', name: 'note', label: 'Note', multiline: false, initial: '' },
+      ],
+    });
+    await expect(harness.runtime!.answer(asking.id, { id: 'finish', data: { go: 'approve-everything' } })).rejects.toThrow('choose an offered option');
+    await expect(harness.runtime!.answer(asking.id, { id: 'finish', data: { extra: 'x' } })).rejects.toThrow('Unknown form field extra');
+    await expect(harness.runtime!.answer(asking.id, { id: 'finish', value: 'finish' })).rejects.toThrow('Answer shape does not match');
+    await harness.runtime!.answer(asking.id, { id: 'finish', data: { go: 'finish', note: 'done' } });
+    const ended = await waitFor('settled after the form answer', () => { const run = harness.store.get('runs', asking.id); return run?.status === 'needs_review' && run.pid === null ? run : undefined; });
+    expect(ended.dialog).toBeNull();
+  });
+}, 15_000);
+
 test('operator compaction asks OMP to compact a running ticket without ending the run', async () => {
   await withHarness(async harness => {
     const repo = await repository(harness, 'manual-compaction', 0, 'manual-compaction');

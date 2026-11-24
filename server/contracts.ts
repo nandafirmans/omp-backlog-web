@@ -1,5 +1,6 @@
 import type { AgentWorkspaceRecord } from './agent-workspace-contracts';
 import type { BatchOperation } from './agent-workspace-contracts';
+import type { DialogForm } from './form-dialog';
 
 export type Mode = 'paused' | 'approved' | 'automatic';
 export type EngineeringMode = 'standard' | 'pstack';
@@ -33,7 +34,7 @@ export interface WorkspaceReview { id: string; head: string | null; files: { pat
 export interface ExecutionOverrides { engineeringMode?: EngineeringMode; model?: string; thinking?: string; tokenBudget?: number | null }
 export interface RunConfiguration { engineeringMode?: EngineeringMode; model: string; thinking: string; tokenBudget: number | null; timeLimitMinutes: number }
 export interface Ticket { id: string; repoId: string; title: string; markdown: string; revision: string; approvedRevision: string | null; status: Status; dependencies: string[]; criteria: string[]; attachments: Attachment[]; error: string | null; order: number; removed: boolean; runId: string | null; execution?: ExecutionOverrides; executionVersion?: string; creationHold?: boolean }
-export interface Dialog { id: string; method: string; title?: string; message?: string; options?: unknown[]; [key: string]: unknown }
+export interface Dialog { id: string; method: string; title?: string; message?: string; options?: unknown[]; form?: DialogForm; [key: string]: unknown }
 export interface ProofArtifact { id: string; name: string; size: number; sha256: string }
 export interface VerificationReceipt { id: string; runId: string; revision: string; criterion: string; feature: string; entryPoint: string; method: string; outcome: 'passed' | 'failed' | 'blocked' | 'not_run'; details: string; recipe: string; source: 'agent_report'; recorded: number; artifact?: ProofArtifact }
 export interface TranscriptEntry { id: string; kind: 'agent' | 'tool' | 'system' | 'user'; text: string; toolName?: string; input?: string; output?: string; diff?: string; state?: 'running' | 'complete' | 'error' }
