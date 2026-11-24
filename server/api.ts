@@ -328,7 +328,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             if (!ticket || ticket.removed || inactive(ticket.repoId, ticket.id)) throw new HttpError(404, 'Ticket not found');
             return json(saveRecoveryNote(store, ticket, run.id, input));
           }
-          if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume' && input.action !== 'cancel') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }
+          if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume' && input.action !== 'cancel' && input.action !== 'compact') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }
           if (segments[3] === 'answer') { await runtime.answer(run.id, input); return json({ ok: true }); }
         }
       }

@@ -54,7 +54,7 @@ export interface Entities { repos: Repo; tickets: Ticket; runs: Run; agentWorksp
 export interface Runtime {
   wake(): void;
   reconcile(): Promise<void>;
-  control(runId: string, action: 'pause' | 'resume' | 'cancel'): Promise<void>;
+  control(runId: string, action: 'pause' | 'resume' | 'cancel' | 'compact'): Promise<void>;
   answer(runId: string, response: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 }
