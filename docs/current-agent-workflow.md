@@ -44,7 +44,7 @@ Private proof: `/tmp/omp-recovery-live-QZJEoL/proof.json`, `/tmp/omp-recovery-li
 | Correct blocked shutdown | Host pauses goal continuation and stops owned child work without asking the model to complete an unmet goal. |
 | Blocker recovery handoff | Blocked ticket panel retains structured agent suggestions and editable private recovery notes. Explicit retry binds the current revision, source run and saved note for a fresh attempt. Separately opted-in autonomous projects may authorize bounded same-attempt engineering recovery under the gates below. Neither path grants installation or new permissions. |
 | Progress visibility | Run panel shows host-observed activity, deadline/budget and last reported session-token sample with its accounting basis. It does not infer percentage completion. |
-| Operator reconciliation | Git changes or unavailable Git inspection create a persistent project gate. Operator reviews/reconciles through an explicitly confirmed local commit or in a terminal, then separately requests a clean recheck before new work can start. |
+| Operator reconciliation | Git changes or unavailable Git inspection create a persistent project gate. Operator reviews/reconciles through a local commit from Review & commit (which rechecks the workspace automatically afterwards) or in a terminal followed by Recheck workspace; new work starts only after a clean recheck. |
 | Optional ticket drafting | Manual New ticket remains a drawer. Create with agent is one persistent chat with automatic connection, optional conversational planning and response-level ticket generation/publication. A durable creation hold separates saving from execution, including Automatic mode. Legacy records/recovery remain accessible. |
 
 ### Chat-first response-ticket creation

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Button, Checkbox, Input, InputNumber, message as toastApi, Modal, Segmented, Select, Tabs, Tag, Tooltip } from 'antd';
-import { ArrowClockwiseIcon, ArrowCounterClockwiseIcon, ArrowsInIcon, ArrowDownIcon, ArrowSquareOutIcon, ArrowUpIcon, BrainIcon, CaretRightIcon, ChatCircleDotsIcon, CheckCircleIcon, ClockCounterClockwiseIcon, CodeIcon, CoinsIcon, CopyIcon, CpuIcon, DownloadSimpleIcon, EyeIcon, FileTextIcon, FloppyDiskIcon, FolderIcon, FolderOpenIcon, FolderPlusIcon, FolderSimpleIcon, GaugeIcon, GearSixIcon, GitBranchIcon, HouseLineIcon, InfoIcon, LightningIcon, ListChecksIcon, PaperclipIcon, PaperPlaneRightIcon, PauseIcon, PencilSimpleIcon, PlayIcon, PlusIcon, RobotIcon, SealCheckIcon, ShieldCheckIcon, SlidersIcon, StackIcon, TerminalWindowIcon, TicketIcon, TimerIcon, TreeStructureIcon, WarningCircleIcon, XIcon } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon, ArrowCounterClockwiseIcon, ArrowsInIcon, ArrowDownIcon, ArrowSquareOutIcon, ArrowUpIcon, BrainIcon, CaretRightIcon, ChatCircleDotsIcon, CheckCircleIcon, ClockCounterClockwiseIcon, CodeIcon, CoinsIcon, CopyIcon, CpuIcon, DownloadSimpleIcon, EyeIcon, FileTextIcon, FloppyDiskIcon, FolderIcon, FolderOpenIcon, FolderPlusIcon, FolderSimpleIcon, GaugeIcon, GearSixIcon, GitBranchIcon, GitCommitIcon, HouseLineIcon, InfoIcon, LightningIcon, ListChecksIcon, PaperclipIcon, PaperPlaneRightIcon, PauseIcon, PencilSimpleIcon, PlayIcon, PlusIcon, RobotIcon, SealCheckIcon, ShieldCheckIcon, SlidersIcon, StackIcon, TerminalWindowIcon, TicketIcon, TimerIcon, TreeStructureIcon, WarningCircleIcon, XIcon } from '@phosphor-icons/react';
 import { Link, useBlocker, useLinkClickHandler, useLocation, useNavigate, useParams } from 'react-router';
 import type { Dialog, Mode, Repo, Run, Settings, Snapshot, Ticket } from '../server/contracts';
 import { attachmentReference } from './attachments';
@@ -55,6 +55,8 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
   const picking = pathname === '/projects/new';
   const creating = !!repoId && pathname.endsWith('/tickets/new');
   const assisting = !!repoId && pathname.endsWith('/tickets/new/agent');
+  const reviewing = !!repoId && pathname.endsWith('/review');
+  const openReview = useLinkClickHandler<HTMLElement>(`/projects/${encode(repoId ?? '')}/review`);
   const [pending, setPending] = useState('');
   const [toast, toastContext] = toastApi.useMessage({ duration: 4, maxCount: 3 });
   const [modal, modalContext] = Modal.useModal();
@@ -128,7 +130,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
         })}
       </ul> : <div className="panel empty-state"><FolderIcon className="project-folder-icon" size={40} weight="duotone" aria-hidden="true" /><h2>No projects yet</h2><p>Add a local folder to get started. New projects start paused.</p></div>}
     </section> : settingsView ? <SettingsPanel key="settings" settings={snapshot.settings} api={api} execute={execute} busy={busy} /> : repo ? <>
-      {assisting ? <TicketEditor key={`agent-${repo.id}`} assisted repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : <>
+      {assisting ? <TicketEditor key={`agent-${repo.id}`} assisted repo={repo} api={api} execute={execute} busy={busy} onCreated={id => { void navigate(`/projects/${encode(repo.id)}/tickets/${encode(id)}`); }} onRun={setRunId} runs={[]} /> : reviewing ? <WorkspaceCommit key={repo.handoff?.id ?? 'none'} repo={repo} api={api} disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onCommitted={refresh} /> : <>
       <header className="project-header">
         <div className="project-title"><h1 title={repo.path}>{repo.name}</h1><p className="execution-context">{repo.mode === 'paused' ? 'New starts paused. Current runs continue.' : repo.mode === 'approved' ? 'Only approved revisions may start. Dependencies and global capacity still apply.' : 'Automatic execution enabled. Eligible revisions may run without individual approval.'}{snapshot.settings.paused && ' Global scheduler also paused.'} {claimedRuns.length}/{snapshot.settings.maxConcurrentTickets} global slots occupied. One run per project.</p></div>
         <div className="project-controls">
@@ -143,7 +145,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
       {repo.handoff && <section className="workspace-handoff" aria-label="Workspace handoff">
         <div className="workspace-handoff-summary">
           <div className="workspace-handoff-message"><h2>New starts blocked</h2><p>{repo.handoff.files.length ? `Review workspace changes before the next ticket · ${repo.handoff.files.length} recorded ${repo.handoff.files.length === 1 ? 'path' : 'paths'}.` : 'Workspace inspection needs operator review before the next ticket.'}</p><p className="workspace-handoff-next">{handoffNextSteps(repo.handoff, tickets)}</p></div>
-          <div className="toolbar workspace-handoff-actions"><WorkspaceCommit key={repo.handoff.id} repo={repo} api={api} disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onCommitted={refresh} /><Button disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClick={async () => {
+          <div className="toolbar workspace-handoff-actions"><Button href={`/projects/${encode(repo.id)}/review`} icon={<GitCommitIcon size={16} aria-hidden="true" />} onClick={openReview}>Review &amp; commit</Button><Button disabled={busy || snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClick={async () => {
             if (!await modal.confirm({ title: 'Recheck reconciled workspace?', content: 'This only inspects Git status. A clean result releases this project gate; eligible tickets may start under existing permissions. Dirty or unavailable Git remains blocked. No files will be changed.', okText: 'Recheck workspace', cancelText: 'Keep blocked' })) return;
             await execute('Workspace reconciled. Existing execution permissions still apply.', async () => { await api(`/api/repos/${encode(repo.id)}/reconcile-workspace`, json('POST', { handoffId: repo.handoff!.id })); });
           }}>Recheck workspace</Button></div>

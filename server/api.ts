@@ -13,7 +13,7 @@ import { inspectWorkspaceHandoff } from './runtime';
 import { discoverExecutionModels } from './drafting';
 import { handleAgentWorkspaceRequest } from './agent-workspaces';
 import { ticketPublications } from './batch-publication';
-import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
+import { commitWorkspace, draftCommitMessage, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
 import { saveCompletionPolicy } from './autonomy-policy';
@@ -213,6 +213,12 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           const updated = await saveCompletionPolicy(store, repo, input);
           runtime.wake();
           return json(updated);
+        }
+        if (segments.length === 4 && segments[3] === 'workspace-commit-message' && request.method === 'POST') {
+          const input = await body(request);
+          await permittedPath(store, repo.path);
+          // No workspace lock: generation only reads the saved review and may take a while.
+          return json(await draftCommitMessage(store, repo, input));
         }
         if (segments.length === 4 && ['workspace-review', 'workspace-commit'].includes(segments[3]) && request.method === 'POST') {
           const input = await body(request);
