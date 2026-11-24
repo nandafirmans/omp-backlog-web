@@ -62,6 +62,18 @@ describe('requirements and filesystem boundaries', () => {
     expect(await Bun.file(join(snapshot, 'attachments', 'example.json')).text()).toBe(original);
     await expect(uploadAttachment(store, repo, 'T004', '../unsafe.json', new Uint8Array(), changed.revision)).rejects.toThrow();
   });
+  test('a workspace gate blocks every ticket except the one whose change request continues on it', async () => {
+    const own = await writeTicket(store, repo, markdown('T020'));
+    const other = await writeTicket(store, repo, markdown('T021'));
+    const handoff = { id: 'gate', runId: 'run', detected: 0, files: ['a.ts'], reason: 'Run left Git changes.' };
+    expect(eligible(store, { ...repo, mode: 'automatic', handoff }, own)).toBe(false);
+    const continuing: Repo = { ...repo, mode: 'automatic', handoff: { ...handoff, continueTicketId: 'T020' } };
+    expect(eligible(store, continuing, own)).toBe(true);
+    expect(eligible(store, continuing, other)).toBe(false);
+    expect(eligible(store, { ...continuing, mode: 'paused' }, own)).toBe(false);
+    expect(eligible(store, { ...continuing, completion: { mode: 'autonomous' } as Repo['completion'] }, own)).toBe(false);
+    expect(eligible(store, continuing, { ...own, creationHold: true })).toBe(false);
+  });
   test('unreferenced uploads and empty purpose labels can be saved but cannot run or retain approval', async () => {
     const automatic = { ...repo, mode: 'automatic' as const };
     const approved = { ...repo, mode: 'approved' as const };

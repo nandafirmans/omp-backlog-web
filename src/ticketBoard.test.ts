@@ -20,8 +20,9 @@ test('only explicit supported lifecycle actions can cross columns', () => {
   for (const status of ['failed', 'blocked', 'interrupted'] as const) expect(transitionFor(ticket('A', status), 'ready')).toBe('retry');
   expect(transitionFor(ticket('A', 'needs_review'), 'ready')).toBe('changes');
   expect(transitionFor(ticket('A', 'needs_review'), 'done')).toBe('done');
+  expect(transitionFor(ticket('A', 'ready'), 'draft')).toBe('unapprove');
   for (const status of boardGroups.flatMap(group => group.statuses)) {
-    for (const destination of ['active', 'attention', 'review', 'draft']) expect(transitionFor(ticket('A', status), destination)).toBeNull();
+    for (const destination of ['active', 'attention', 'review', ...(status === 'ready' ? [] : ['draft'])]) expect(transitionFor(ticket('A', status), destination)).toBeNull();
     if (status !== 'needs_review') expect(transitionFor(ticket('A', status), 'done')).toBeNull();
   }
 });

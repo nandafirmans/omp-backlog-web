@@ -106,7 +106,9 @@ export async function inspectWorkspaceHandoff(repo: Repo, runId: string | null =
 
 export function eligible(store: Store, repo: Repo, ticket: Ticket) {
   if (ticket.creationHold || batchInactive(store, repo.path, ticket.id)) return false;
-  if (repo.mode === 'paused' || repo.handoff || ticket.removed || ticket.error || ticket.criteria.length === 0) return false;
+  // Request changes lets only the ticket whose run left the changes continue on them; everything else stays gated.
+  const continuing = !!repo.handoff && repo.handoff.continueTicketId === ticket.id && repo.completion?.mode !== 'autonomous';
+  if (repo.mode === 'paused' || (repo.handoff && !continuing) || ticket.removed || ticket.error || ticket.criteria.length === 0) return false;
   if (ticket.status !== 'ready' && ticket.status !== 'draft') return false;
   if (repo.mode === 'approved' && ticket.approvedRevision !== ticket.revision) return false;
   // Completed/failed/blocked work is never blindly replayed because a file changed.
@@ -897,6 +899,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         'Inspect applicable project verification skills under .omp/skills, .agent/skills or .agents/skills and their feature maps. Read relevant mapped journeys; drive each affected entry point independently. Do not require a whole-map maintenance pass for every ticket. Missing required setup or tools stay blocked/unverified; do not install dependencies or weaken repository check policy.',
         'Before completion, call backlog_evidence for each criterion and affected journey: exact criterion, feature, entryPoint, method/command, outcome, details including observed exit status/side effects, and recipe path+hash (or explicit missing-recipe reason). Submit failures/not-run honestly. Recheck the same journey/method after fixes. Optional sanitized png/jpg/txt/json artifacts are base64 bytes, not filesystem paths; never include credentials, cookies, sessions or secrets. All current reported checks must pass for completion; host storage does not attest their truth.',
         ...store.list('runs').filter(previous => previous.id !== run.id && previous.repoId === repo.id && previous.ticketId === ticket.id && previous.reviewFeedback).sort((a, b) => b.started - a.started).slice(0, 5).map(previous => `Human change request on run ${previous.id}, revision ${previous.revision}${previous.revision !== run.revision ? ' (older requirements; reconcile against current ticket)' : ''}:\n${previous.reviewFeedback!.message}`),
+        ...(repo.handoff?.continueTicketId === ticket.id ? ['The working tree still holds the uncommitted changes from your previous attempt at this ticket. Inspect them, then build on them; do not discard or reset them.'] : []),
         ...recoveryObjective(run),
         run.lifecycle ? 'On completion submit backlog_result with exact revision, status:"complete", exact authored files array (including deletions; [] for no-op) and concrete evidence for every criterion. This is an author report ONLY, not acceptance. Then settle. The host independently executes the authorized recipe, launches a fresh restricted reviewer and may publish. Never commit or claim Done. Insufficient subjective evidence stays inconclusive.' : 'On completion call backlog_result with the exact revision, status:"complete", and one {criterion,evidence} per exact criterion below. Evidence must state observed verification, commands/results and relevant files; never claim unperformed checks passed. Visual/subjective criteria remain for human review.',
         'If blocked call backlog_result with status:"blocked", partial observed evidence, prerequisite and unblock (each at most 2000 characters). Include attempted fixes/outcomes, permission needed, verification to recheck (attempted/permission/verification: each at most 2000 characters) and a suggested recoveryPrompt (at most 8000 characters). Never include secrets. Suggestions are not authorization. Host pauses goal continuation and stops owned child work. Do NOT complete an unmet goal. A successful command, agent yield or exit alone is NOT completion.',
@@ -1098,7 +1101,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             const currentRepo = store.get('repos', repo.id);
             if (!currentRepo || currentRepo.path !== repo.path || currentRepo.git !== repo.git) return null;
             if (closed || store.settings().paused || !hasCapacity() || claimedWorkspaceConflict(store, repo, workspace)) return null;
-            if (repo.git) {
+            if (repo.git && currentRepo.handoff?.continueTicketId !== candidate.id) {
               const handoff = await inspectWorkspaceHandoff(repo);
               if (handoff) {
                 const current = store.get('repos', repo.id);

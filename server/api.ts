@@ -234,7 +234,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           const current = store.get('repos', repo.id);
           if (!current?.handoff || current.handoff.id !== input.handoffId || claimed()) throw new HttpError(409, 'Workspace state changed during inspection; review again');
           if (handoff) {
-            store.save('repos', { ...current, handoff: { ...handoff, id: current.handoff.id } });
+            store.save('repos', { ...current, handoff: { ...handoff, id: current.handoff.id, continueTicketId: current.handoff.continueTicketId } });
             throw new HttpError(409, 'Workspace still needs operator reconciliation. No files changed by this check.');
           }
           const updated: Repo = { ...current, handoff: undefined };
@@ -298,7 +298,11 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           store.transaction(() => { store.save('runs', run); store.save('tickets', ticket); });
           runtime.wake(); return json(ticket);
         }
-        else if (action === 'retry') { if (ticket.status === 'blocked') throw new HttpError(409, 'Review recovery instructions on the blocked ticket before retrying'); if (!['failed', 'interrupted', 'draft'].includes(ticket.status)) throw new HttpError(409, 'This ticket cannot be retried'); if (ticket.error) throw new HttpError(400, ticket.error); ticket.approvedRevision = ticket.revision; ticket.status = 'ready'; }
+        else if (action === 'retry') { if (ticket.status === 'blocked') throw new HttpError(409, 'Review recovery instructions on the blocked ticket before retrying'); if (!['failed', 'interrupted', 'draft'].includes(ticket.status)) throw new HttpError(409, 'This ticket cannot be retried'); if (ticket.error) throw new HttpError(400, ticket.error); ticket.approvedRevision = ticket.revision; ticket.status = 'ready';
+          // The gate holds this ticket's own partial work; let only its retry build on it.
+          const repo = store.get('repos', ticket.repoId);
+          if (repo?.handoff?.files.length && ticket.runId && repo.handoff.runId === ticket.runId && repo.completion?.mode !== 'autonomous') store.save('repos', { ...repo, handoff: { ...repo.handoff, continueTicketId: ticket.id } });
+        }
         else if (action === 'done' || action === 'changes') {
           const run = ticket.runId ? store.get('runs', ticket.runId) : undefined;
           if (ticket.status !== 'needs_review' || !run || run.revision !== ticket.revision) throw new HttpError(409, 'Only evidence for this revision may be reviewed');
@@ -309,8 +313,16 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             if (!feedback) throw new HttpError(400, 'Describe the required changes before queuing another attempt');
             run.reviewFeedback = { message: feedback, recorded: Date.now() };
             ticket.status = 'ready'; ticket.approvedRevision = ticket.revision;
+            const repo = store.get('repos', ticket.repoId);
+            if (repo?.handoff?.files.length && repo.handoff.runId === run.id && repo.completion?.mode !== 'autonomous') store.save('repos', { ...repo, handoff: { ...repo.handoff, continueTicketId: ticket.id } });
           }
           store.save('runs', run);
+        } else if (action === 'unapprove') {
+          if (ticket.status !== 'ready') throw new HttpError(409, 'Only Ready tickets can move back to Draft');
+          // Hold too: Automatic mode would otherwise start a Draft without approval.
+          ticket.status = 'draft'; ticket.approvedRevision = null; ticket.creationHold = true;
+          const repo = store.get('repos', ticket.repoId);
+          if (repo?.handoff?.continueTicketId === ticket.id) store.save('repos', { ...repo, handoff: { ...repo.handoff, continueTicketId: undefined } });
         } else if (action !== 'reorder') throw new HttpError(400, 'Unknown ticket action');
         if (action === 'approve' || action === 'retry') delete ticket.creationHold;
         if (typeof input.order === 'number') ticket.order = input.order;

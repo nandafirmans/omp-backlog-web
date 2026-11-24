@@ -1,5 +1,4 @@
 .board-help-content { max-width: min(480px, calc(100vw - 64px)); margin: 0; font-size: 13px; line-height: 1.6; }
-.board-drag-hint { flex: none; margin: 0; padding: 0 0 8px; color: var(--text); background: var(--surface-elevated); font-size: 12px; }
 .board-announcement { flex: none; margin: 0; padding: 0 0 8px; color: var(--accent); font-size: 13px; }
 .board-announcement:empty { padding: 0; }
 .board-group-note { margin: 0 4px 12px; color: var(--muted); font-size: 12px; line-height: 1.6; }

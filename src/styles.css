@@ -169,6 +169,7 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .workspace-handoff-message { min-width: 0; flex: 1 1 280px; }
 .workspace-handoff-message h2 { font-size: 15px; line-height: 1.6; letter-spacing: 0; }
 .workspace-handoff-message p { margin: 2px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.workspace-handoff-message .workspace-handoff-next { color: var(--text); }
 .workspace-handoff-actions { margin: 0; }
 .workspace-handoff-details > summary { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--accent); font: 13px/1.7 var(--font-mono); cursor: pointer; }
 .workspace-handoff-details > summary:focus-visible { outline-offset: -3px; }
