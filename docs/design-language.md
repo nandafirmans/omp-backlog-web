@@ -203,7 +203,7 @@ Changed Workspace code passed ESLint. Actual React/browser fixtures exercised ta
 
 ### Opt-in autonomous completion
 
-Project Completion is a separate compact control beside execution permission. Its Ant Design modal commissions exact argv/recipe files, reviewer inheritance and bounded limits with explicit local-commit/Done confirmation. Default Human review, revocation, stale-save feedback and unsaved protection remain visible. No page-specific font/control sizing or second component system was added.
+Project Completion is a separate compact control beside execution permission. Its Ant Design modal auto-fills a detected check command and recipe file, offers other detected commands as buttons, and folds reviewer model and bounded limits into an Advanced settings disclosure, with explicit local-commit/Done confirmation. Copy stays plain-language. Default Human review, revocation, stale-save feedback and unsaved protection remain visible. No page-specific font/control sizing or second component system was added.
 
 Run Evidence distinguishes author claims, host command receipts, independent review findings, candidate identity and local publication/no-op. Board/list keep their existing columns and add phase labels plus an assistance count/filter; active autonomous phases do not expose routine human Done. Exceptions retain existing reviewed recovery and reconciliation entry points.
 

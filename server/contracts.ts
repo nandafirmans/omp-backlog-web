@@ -5,6 +5,10 @@ export type Mode = 'paused' | 'approved' | 'automatic';
 export type EngineeringMode = 'standard' | 'pstack';
 export type Status = 'draft' | 'ready' | 'running' | 'stopping' | 'paused' | 'blocked' | 'failed' | 'interrupted' | 'needs_review' | 'done';
 export interface VerificationRecipe { argv: string[]; files: string[]; timeoutSeconds: number }
+/** A package script the owner may pick as the check command; never applied without explicit selection. */
+export interface CheckSuggestion { name: string; script: string; argv: string[]; files: string[] }
+/** Result of an owner-requested trial of a check command; it grants nothing and is not acceptance evidence. */
+export interface CheckTrial { exitCode: number | null; timedOut: boolean; error?: string; output: string; truncated: boolean; durationMs: number }
 export type CompletionPolicy = { mode: 'human'; revision: string; updated: number } | { mode: 'autonomous'; revision: string; updated: number; verification: VerificationRecipe; recipeHash: string; reviewerModel: string; maxCorrections: number; maxRecoveries: number };
 export interface Candidate { head: string; ref: string; tree: string; indexHash: string; fingerprint: string; files: string[]; captured: number }
 export interface HostVerification { id: string; source: 'host_execution'; candidateTree: string; recipeHash: string; argv: string[]; started: number; finished: number; exitCode: number | null; outcome: 'passed' | 'failed' | 'blocked'; output: string; outputHash?: string; outputTruncated?: boolean; environment?: { platform: string; arch: string; runtime: string } }

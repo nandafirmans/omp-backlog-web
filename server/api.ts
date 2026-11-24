@@ -16,7 +16,7 @@ import { ticketPublications } from './batch-publication';
 import { commitWorkspace, draftCommitMessage, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
-import { saveCompletionPolicy } from './autonomy-policy';
+import { checkSuggestions, saveCompletionPolicy, trialCheck } from './autonomy-policy';
 import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
@@ -207,6 +207,8 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           return json(await completions(path, repo.git, store.dataDir, url.searchParams.get('kind'), url.searchParams.get('q') || ''));
         }
         if (segments.length === 3 && request.method === 'PATCH') { const input = await body(request); if (!['paused', 'approved', 'automatic'].includes(String(input.mode))) throw new HttpError(400, 'Invalid execution mode'); const mode = input.mode as Repo['mode']; const updated = { ...(store.get('repos', repo.id) ?? repo), mode }; store.save('repos', updated); runtime.wake(); return json(updated); }
+        if (segments.length === 4 && segments[3] === 'check-trial' && request.method === 'POST') { const input = await body(request); await permittedPath(store, repo.path); return json(await trialCheck(store, repo, input)); }
+        if (segments.length === 4 && segments[3] === 'check-suggestions' && request.method === 'GET') return json(await checkSuggestions(await permittedPath(store, repo.path)));
         if (segments.length === 4 && segments[3] === 'completion' && request.method === 'PATCH') {
           const input = await body(request);
           await permittedPath(store, repo.path);

@@ -549,6 +549,12 @@ pre, .attachment-preview, .active-run, .folder-path, .agent-dialog, .plan-docume
 .completion-policy-form > p { margin: 0; }
 .completion-policy-form > label { margin-top: 8px; }
 .completion-policy-form .ant-select, .completion-policy-form .ant-input-number { width: 100%; }
+.completion-policy-advanced > summary { cursor: pointer; }
+.completion-policy-advanced > * + * { margin-top: 12px; }
+.completion-policy-advanced > label { display: block; margin-top: 16px; }
+.completion-policy-advanced p { margin-bottom: 0; }
+.completion-policy-trial pre { max-height: 240px; margin: 8px 0 0; padding: 8px 10px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.completion-policy-trial p { margin: 0; }
 .completion-policy-limits { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .completion-policy-limits label { display: grid; align-content: start; gap: 8px; }
 .completion-policy-actions { margin-top: 12px; padding-top: 16px; border-top: 1px solid var(--line); }

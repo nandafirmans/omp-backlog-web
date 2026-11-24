@@ -140,7 +140,7 @@ export default function Workspace({ snapshot, api, refresh, onError }: Props) {
           <Tooltip title="Create with agent"><Button href={`${newTicketPath}/agent`} aria-label="Create with agent" icon={<ChatCircleDotsIcon size={16} aria-hidden="true" />} onClick={openAgentTicket} /></Tooltip>
         </div>
       </header>
-      {completionOpen && !ticketId && !creating && <CompletionPolicy key={`completion-${repo.id}`} repo={repo} api={api} execute={execute} busy={busy} owned={snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClose={() => setCompletionOpen(false)} />}
+      {completionOpen && !ticketId && !creating && <CompletionPolicy key={`completion-${repo.id}`} repo={repo} settings={snapshot.settings} api={api} execute={execute} busy={busy} owned={snapshot.runs.some(run => run.repoId === repo.id && activeStatuses.includes(run.status))} onClose={() => setCompletionOpen(false)} />}
       {!repo.git && <p className="warning-text">Non-Git workspace. Git changed-file tracking is unavailable.</p>}
       {repo.handoff && <section className="workspace-handoff" aria-label="Workspace handoff">
         <div className="workspace-handoff-summary">
