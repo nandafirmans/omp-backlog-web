@@ -84,7 +84,13 @@ export async function captureBaseline(store: Store, repo: Repo): Promise<Candida
 export async function captureCandidate(store: Store, repo: Repo, baseline: Candidate, ownedFiles?: string[]): Promise<Candidate> {
   const value = await candidate(store, repo);
   if (value.head !== baseline.head || value.ref !== baseline.ref || value.indexHash !== baseline.indexHash) reject('Baseline branch or index changed');
-  if (!ownedFiles || new Set(ownedFiles).size !== ownedFiles.length || ownedFiles.some(path => !w.safeName(path)) || JSON.stringify([...ownedFiles].sort()) !== JSON.stringify(value.files)) reject('Changed paths do not exactly match the author manifest');
+  if (!ownedFiles || new Set(ownedFiles).size !== ownedFiles.length || ownedFiles.some(path => !w.safeName(path)) || JSON.stringify([...ownedFiles].sort()) !== JSON.stringify(value.files)) {
+    // Name the mismatch so the operator (and a later attempt) can see which side is wrong.
+    const unreported = value.files.filter(path => !ownedFiles?.includes(path));
+    const unchanged = (ownedFiles ?? []).filter(path => !value.files.includes(path));
+    const detail = [unreported.length && `changed but not reported: ${unreported.join(', ')}`, unchanged.length && `reported but unchanged: ${unchanged.join(', ')}`].filter(Boolean).join('; ');
+    reject(`Changed paths do not exactly match the author manifest${detail ? ` (${detail})` : ''}`);
+  }
   return value;
 }
 export async function assertCandidate(store: Store, repo: Repo, expected: Candidate): Promise<void> {

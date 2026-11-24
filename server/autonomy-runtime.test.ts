@@ -22,12 +22,12 @@ async function until<T>(observe: () => T | undefined | false | Promise<T | undef
   throw new Error('Autonomous protocol fixture timed out');
 }
 interface Harness { root: string; store: Store; repo: Repo; config: string; runtime: Runtime | null; start(): Promise<void> }
-async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { engineeringMode?: 'standard' | 'pstack'; mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; probeBarrier?: boolean; inheritReviewer?: boolean; dependent?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean; repairTokens?: number; tokenBudget?: number; timeLimitMinutes?: number } = {}) {
+async function fixture(scenario: string, run: (h: Harness) => Promise<void>, options: { goalCompletes?: boolean; forgetFirstAttemptFile?: boolean; engineeringMode?: 'standard' | 'pstack'; mode?: Repo['mode']; human?: boolean; holdAuthor?: boolean; holdReview?: boolean; slowVerification?: boolean; probeBarrier?: boolean; inheritReviewer?: boolean; dependent?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean; repairTokens?: number; tokenBudget?: number; timeLimitMinutes?: number } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'omp-autonomous-protocol-'));
   const store = createStore(join(root, 'private'));
   const path = join(root, 'project'); await mkdir(path);
   const config = join(root, 'fixture.json');
-  await writeFile(config, JSON.stringify({ scenario, holdAuthor: options.holdAuthor, holdReview: options.holdReview, authorBarrier: options.authorBarrier, recoveryBarrier: options.recoveryBarrier, repairTokens: options.repairTokens }));
+  await writeFile(config, JSON.stringify({ scenario, goalCompletes: options.goalCompletes, forgetFirstAttemptFile: options.forgetFirstAttemptFile, holdAuthor: options.holdAuthor, holdReview: options.holdReview, authorBarrier: options.authorBarrier, recoveryBarrier: options.recoveryBarrier, repairTokens: options.repairTokens }));
   const executable = join(root, 'protocol-child');
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   await writeFile(executable, `#!/bin/sh\nBUN_BE_BUN=1 exec ${quote(process.execPath)} ${quote(join(import.meta.dir, 'fixtures/autonomy-child.ts'))} --fixture-config ${quote(config)} "$@"\n`, { mode: 0o700 });
@@ -688,6 +688,29 @@ test('review findings resume exactly original author session, invalidate reports
     expect(recovery?.reviewSessionId).toBe(run.lifecycle?.reviews[1]?.sessionId);
     expectNativeAuthorLifecycle(await protocolEvents(h), 2);
   });
+}, 30000);
+
+test('a correction after the author completed its OMP 19.1 goal starts a fresh goal in the same session', async () => {
+  await fixture('findings', async h => {
+    await h.start(); const run = await terminal(h);
+    expect(run.status).toBe('done'); expect(run.lifecycle?.corrections).toBe(1);
+    const events = await protocolEvents(h);
+    const authors = events.filter(event => !event.reviewer);
+    const spawns = authors.filter(event => event.event === 'spawn');
+    expect(spawns).toHaveLength(2); expect(spawns[1].resumed).toBe(true);
+    const resumedGoal = authors.filter(event => event.pid === spawns[1].pid && event.command === 'goal').map(event => event.op);
+    expect(resumedGoal.slice(0, 2)).toEqual(['pause', 'create']);
+  }, { goalCompletes: true });
+}, 30000);
+
+test('a correction report that omits a file from the first attempt stops before publication and names the file', async () => {
+  await fixture('findings', async h => {
+    const head = await git(h.repo.path, 'rev-parse', 'HEAD');
+    await h.start(); const run = await terminal(h);
+    expect(run.status).toBe('failed');
+    expect(run.lifecycle?.exception).toBe('Changed paths do not exactly match the author manifest (changed but not reported: extra.txt)');
+    expect(await git(h.repo.path, 'rev-parse', 'HEAD')).toBe(head);
+  }, { forgetFirstAttemptFile: true });
 }, 30000);
 
 test('corrections are bounded and unresolved findings require assistance without publication', async () => {

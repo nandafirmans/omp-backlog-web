@@ -23,7 +23,7 @@ const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.jso
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
-const session: { id: string; thinking?: string; model?: string; messages?: Record<string, unknown>[] } = args.includes('--resume')
+const session: { id: string; thinking?: string; model?: string; messages?: Record<string, unknown>[]; goal?: 'active' | 'paused' } = args.includes('--resume')
   ? JSON.parse(await readFile(sessionFile, 'utf8'))
   : { id: crypto.randomUUID(), thinking: 'medium', model: args.includes('--model') ? argument('--model') : '' };
 await writeFile(sessionFile, JSON.stringify(session));
@@ -54,7 +54,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'get_state') {
     const selected = session.model ?? '';
     const slash = selected.indexOf('/');
-    respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, dumpTools: ['disabled-plugin', 'missing-task'].includes(configuration.scenario) ? [] : [{ name: 'task' }], thinkingLevel: session.thinking ?? 'medium', ...(slash > 0 ? { model: { provider: selected.slice(0, slash), id: selected.slice(slash + 1) } } : {}), autoCompactionEnabled, isCompacting: false, contextUsage: { tokens: 400, contextWindow: 1000, percent: 40 } });
+    respond({ goal: session.goal ? { enabled: session.goal === 'active', goal: { status: session.goal } } : null, sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, dumpTools: ['disabled-plugin', 'missing-task'].includes(configuration.scenario) ? [] : [{ name: 'task' }], thinkingLevel: session.thinking ?? 'medium', ...(slash > 0 ? { model: { provider: selected.slice(0, slash), id: selected.slice(slash + 1) } } : {}), autoCompactionEnabled, isCompacting: false, contextUsage: { tokens: 400, contextWindow: 1000, percent: 40 } });
   } else if (frame.type === 'get_available_commands') {
     engineeringDiscovered = true;
     respond({ commands: configuration.scenario === 'disabled-plugin' ? [] : ['poteto-mode', 'pstack-pi'].filter(name => !(configuration.scenario === 'missing-router' && name === 'poteto-mode') && !(configuration.scenario === 'missing-adapter' && name === 'pstack-pi')).map(name => ({ name: `skill:${name}`, source: 'skill' })) });
@@ -100,6 +100,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'goal') {
     if (frame.token_budget !== undefined && (typeof frame.token_budget !== 'number' || !Number.isInteger(frame.token_budget) || frame.token_budget <= 0)) throw new Error('Native goal token_budget must be omitted or a positive integer');
     if (frame.op === 'create' && String(frame.objective).startsWith('/skill:')) throw new Error('Goal continuation must not reinvoke a skill command');
+    if (frame.op === 'resume' && session.goal !== 'paused') { send({ type: 'response', id: frame.id, success: false, error: 'No paused goal to resume.' }); continue; }
+    if (frame.op === 'pause' && session.goal === 'active') session.goal = 'paused';
+    if (frame.op === 'create' || frame.op === 'resume') session.goal = 'active';
+    await writeFile(sessionFile, JSON.stringify(session));
     respond();
     if (frame.op === 'create' || frame.op === 'resume') {
       await log({ event: 'executing' });

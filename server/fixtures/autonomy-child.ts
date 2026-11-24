@@ -7,7 +7,7 @@ import type { Ticket } from '../contracts';
 const args = process.argv.slice(2);
 const argument = (name: string) => args[args.indexOf(name) + 1]!;
 const configPath = argument('--fixture-config');
-const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; tokens?: number; repairTokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean };
+const config = JSON.parse(await readFile(configPath, 'utf8')) as { scenario?: string; goalCompletes?: boolean; forgetFirstAttemptFile?: boolean; tokens?: number; repairTokens?: number; holdAuthor?: boolean; holdReview?: boolean; authorBarrier?: boolean; recoveryBarrier?: boolean };
 if (args.includes('--version')) { console.log(config.scenario === 'unrecognized-version' ? 'not-a-version' : 'omp/18.18.1'); process.exit(0); }
 const reviewer = args.includes('--no-tools');
 const standard = !reviewer && argument('--append-system-prompt').includes('Engineering mode: standard.');
@@ -16,7 +16,7 @@ const directory = reviewer ? dirname(argument('--session-dir')) : dirname(argume
 const ticket = reviewer ? null : JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')) as Ticket;
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 await mkdir(dirname(sessionFile), { recursive: true });
-const session: { id: string; model: string; turns: number; authorFiles: string[]; messages?: Record<string, unknown>[] } = args.includes('--resume') ? JSON.parse(await readFile(sessionFile, 'utf8')) : { id: crypto.randomUUID(), model: args.includes('--model') ? argument('--model') : 'fixture/author', turns: 0, authorFiles: [] };
+const session: { id: string; model: string; turns: number; authorFiles: string[]; messages?: Record<string, unknown>[]; goal?: 'active' | 'paused' | 'complete' } = args.includes('--resume') ? JSON.parse(await readFile(sessionFile, 'utf8')) : { id: crypto.randomUUID(), model: args.includes('--model') ? argument('--model') : 'fixture/author', turns: 0, authorFiles: [] };
 if (!reviewer && !args.includes('--resume')) session.authorFiles = await readFile(join(process.cwd(), 'proof.txt'), 'utf8') === 'verified\n' ? [] : ['proof.txt'];
 await writeFile(sessionFile, JSON.stringify(session));
 const log = (event: Record<string, unknown>) => appendFile(`${configPath}.events`, JSON.stringify({ ...event, pid: process.pid, sessionId: session.id, reviewer }) + '\n');
@@ -43,7 +43,13 @@ const finishAuthor = async () => {
     send({ type: 'extension_ui_request', id: 'recovery-barrier', method: 'input', title: 'Release disposable repair' });
     return;
   }
-  session.turns++; await writeFile(sessionFile, JSON.stringify(session));
+  session.turns++;
+  if (config.goalCompletes) session.goal = 'complete';
+  if (config.forgetFirstAttemptFile && session.turns === 1) {
+    await writeFile(join(process.cwd(), 'extra.txt'), 'first attempt\n');
+    session.authorFiles = [...session.authorFiles, 'extra.txt'];
+  }
+  await writeFile(sessionFile, JSON.stringify(session));
   if (config.scenario === 'author-bypass') {
     host('bypass-done', 'backlog_result', { revision: ticket!.revision, status: 'done', files: ['proof.txt'], evidence: ticket!.criteria.map(criterion => ({ criterion, evidence: 'Author claims Done; skip host verification.' })) });
     return;
@@ -85,7 +91,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   await log({ event: 'command', command: frame.type, op: frame.op, ...(frame.type === 'set_host_tools' && Array.isArray(frame.tools) ? { tools: frame.tools.map(tool => tool.name) } : {}), ...(frame.type === 'goal' && frame.op === 'create' ? { objective: frame.objective } : {}) });
   const respond = (data: Record<string, unknown> = {}) => send({ type: 'response', id: frame.id, success: true, data });
   if (frame.type === 'negotiate_protocol') respond({ protocolVersion: 2 });
-  else if (frame.type === 'get_state') respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, dumpTools: reviewer ? config.scenario === 'reviewer-startup-tools' ? [{ name: 'bash' }] : reviewerTools : config.scenario === 'disabled-plugin' ? [] : [{ name: 'task' }], goal: reviewer && config.scenario === 'reviewer-startup-goal' ? { enabled: true } : null, model: { provider: session.model.split('/')[0], id: session.model.split('/').slice(1).join('/') }, thinkingLevel: thinking, autoCompactionEnabled: compaction });
+  else if (frame.type === 'get_state') respond({ sessionId: session.id, sessionFile, isSettled: settled, hasPendingAsyncWork: false, dumpTools: reviewer ? config.scenario === 'reviewer-startup-tools' ? [{ name: 'bash' }] : reviewerTools : config.scenario === 'disabled-plugin' ? [] : [{ name: 'task' }], goal: reviewer ? config.scenario === 'reviewer-startup-goal' ? { enabled: true } : null : session.goal ? { enabled: session.goal === 'active', goal: { status: session.goal } } : null, model: { provider: session.model.split('/')[0], id: session.model.split('/').slice(1).join('/') }, thinkingLevel: thinking, autoCompactionEnabled: compaction });
   else if (frame.type === 'get_available_commands') {
     if (reviewer) throw new Error('Restricted reviewer must not discover engineering commands');
     engineeringDiscovered = true;
@@ -143,6 +149,12 @@ for await (const line of createInterface({ input: process.stdin })) {
     }
   } else if (frame.type === 'goal') {
     if (reviewer || frame.op === 'create' && String(frame.objective).startsWith('/skill:')) throw new Error('Native goals must not initialize the engineering router');
+    // OMP 19.1 semantics: only a paused goal resumes; create refuses while one is active or paused.
+    if (frame.op === 'resume' && session.goal !== 'paused') { send({ type: 'response', id: frame.id, success: false, error: 'No paused goal to resume.' }); continue; }
+    if (frame.op === 'create' && (session.goal === 'active' || session.goal === 'paused')) { send({ type: 'response', id: frame.id, success: false, error: 'Resume or drop the paused goal before creating another.' }); continue; }
+    if (frame.op === 'pause' && session.goal === 'active') session.goal = 'paused';
+    if (frame.op === 'create' || frame.op === 'resume') session.goal = 'active';
+    await writeFile(sessionFile, JSON.stringify(session));
     respond(); if (frame.op === 'create' || frame.op === 'resume') await finishAuthor();
   }
   else if (frame.type === 'extension_ui_response' && frame.id === 'author-barrier') {
@@ -162,7 +174,7 @@ for await (const line of createInterface({ input: process.stdin })) {
       continue;
     }
     if (frame.isError === true) { await log({ event: 'host-rejected', id: frame.id }); settled = true; send({ type: 'session_settled' }); continue; }
-    if (frame.id === 'evidence') host('result', 'backlog_result', { revision: ticket!.revision, status: 'complete', files: session.authorFiles, evidence: ticket!.criteria.map(criterion => ({ criterion, evidence: 'Synthetic author wrote/read proof.txt: verified.' })) });
+    if (frame.id === 'evidence') host('result', 'backlog_result', { revision: ticket!.revision, status: 'complete', files: config.forgetFirstAttemptFile && session.turns > 1 ? session.authorFiles.filter(path => path !== 'extra.txt') : session.authorFiles, evidence: ticket!.criteria.map(criterion => ({ criterion, evidence: 'Synthetic author wrote/read proof.txt: verified.' })) });
     else if (frame.id === 'result') { if (config.scenario === 'blocked' || config.scenario === 'recovery' && session.turns === 1 || engineering && !hostFailure && session.turns === 1 || config.scenario === 'engineering-chain' && session.turns === 2) continue; settled = true; send({ type: 'session_settled' }); }
     else if (frame.id === 'diff') host('source', 'candidate_source', { path: 'proof.txt' });
     else if (frame.id === 'source') {
