@@ -236,7 +236,9 @@ Authenticated/CSRF-protected operations require the current handoff and no runni
 
 Hooks, signing, external diff drivers and clean filters are not executed. Git identity must already be configured. Detached HEAD, in-progress merges/rebases/sequencers and split indexes require terminal reconciliation. Sensitive paths, suspected credential content, links/submodules, conflicts, binary/non-UTF-8 files, custom filters/encodings and files over 128 KiB are not selectable; reviews are bounded to 100 changed paths and 512 KiB combined before/after text. These conservative guards are not a complete secret scanner. Files requiring unsupported handling stay for operator review in a terminal; blocked file contents are never sent to the browser.
 
-**Commit does not mark Done, approve tickets, wake execution or clear the handoff.** The page then offers Recheck workspace, which you choose explicitly. No push, reset, stash or deletion of working files is offered. This explicit operator action grants no commit authority to ticket agents.
+**Commit does not mark Done, approve tickets, wake execution or clear the handoff.** The page then rechecks the workspace. No push, reset or stash is offered. This explicit operator action grants no commit authority to ticket agents.
+
+To throw away a failed attempt instead, select files and choose **Discard selected…**. After a confirmation listing every file, the app copies the selected working-tree versions into its private data folder (`discarded/<time>/` with a `manifest.json`), then returns tracked files to HEAD and deletes selected new files. Unselected files, `.omp-backlog/` and history are untouched, the same review guards apply, and the workspace is then rechecked so a clean tree releases the gate. Copy files back from the backup if you need them.
 
 Each run has a private requirements/attachment snapshot and a fresh OMP session. The scheduler advances between tickets; OMP goal mode continues within a ticket. No additional `/loop` is needed. Time and token limits prevent indefinite unattended continuation.
 

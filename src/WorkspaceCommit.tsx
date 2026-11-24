@@ -1,7 +1,7 @@
 import { createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Checkbox, Grid, Input, Modal, Segmented, Tooltip, Tree } from 'antd';
 import type { TreeDataNode } from 'antd';
-import { ArrowClockwiseIcon, ArrowLeftIcon, CheckCircleIcon, ColumnsIcon, FileCodeIcon, FileCssIcon, FileHtmlIcon, FileIcon, FileImageIcon, FileJsIcon, FileJsxIcon, FileLockIcon, FileMdIcon, FilePyIcon, FileRsIcon, FileSqlIcon, FileSvgIcon, FileTsIcon, FileTsxIcon, FileTxtIcon, FolderSimpleIcon, GitCommitIcon, ListBulletsIcon, RobotIcon, RowsIcon, TreeStructureIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon, ArrowLeftIcon, CheckCircleIcon, ColumnsIcon, FileCodeIcon, FileCssIcon, FileHtmlIcon, FileIcon, FileImageIcon, FileJsIcon, FileJsxIcon, FileLockIcon, FileMdIcon, FilePyIcon, FileRsIcon, FileSqlIcon, FileSvgIcon, FileTsIcon, FileTsxIcon, FileTxtIcon, FolderSimpleIcon, GitCommitIcon, ListBulletsIcon, RobotIcon, RowsIcon, TrashIcon, TreeStructureIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import type { Icon } from '@phosphor-icons/react';
 import { useBlocker, useLinkClickHandler, useNavigate } from 'react-router';
 import type { Repo, WorkspaceReview } from '../server/contracts';
@@ -59,7 +59,7 @@ export default function WorkspaceCommit({ repo, api, disabled, onCommitted }: Pr
   const [selected, setSelected] = useState<string[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [receipt, setReceipt] = useState<{ commit: string; subject: string; files: number }>();
+  const [receipt, setReceipt] = useState<{ kind: 'commit'; commit: string; subject: string; files: number } | { kind: 'discard'; backup: string; files: number }>();
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -122,11 +122,35 @@ export default function WorkspaceCommit({ repo, api, disabled, onCommitted }: Pr
     setBusy(true); setError('');
     try {
       const result = await api<{ commit: string }>(`/api/repos/${encodeURIComponent(repo.id)}/workspace-commit`, json({ handoffId, reviewId: review.id, files: selected, message: commitMessage, confirm: true }));
-      setReceipt({ commit: result.commit, subject: commitMessage.trim().split('\n')[0], files: selected.length }); setReview(undefined); setSelected([]); setMessage(''); setConfirming(false);
+      setReceipt({ kind: 'commit', commit: result.commit, subject: commitMessage.trim().split('\n')[0], files: selected.length }); setReview(undefined); setSelected([]); setMessage(''); setConfirming(false);
       await onCommitted();
     } catch (cause) { setError(errorText(cause)); setReview(undefined); setSelected([]); setConfirming(false); return; }
     finally { setBusy(false); }
     // Recheck right away: if Git is now clean the gate releases and we return to the board; otherwise the receipt shows why.
+    await recheck();
+  }
+
+  /** Explicitly confirmed: back up, then drop the selected files' uncommitted changes. */
+  async function discard() {
+    if (!review || busy || !selected.length) return;
+    const count = `${selected.length} ${selected.length === 1 ? 'file' : 'files'}`;
+    const confirmed = await modal.confirm({
+      title: `Discard changes in ${count}?`,
+      content: <>
+        <p>These files lose their uncommitted changes:</p>
+        <ul className="workspace-discard-list">{selected.map(path => <li key={path}><code>{path}</code></li>)}</ul>
+        <p>Tracked files go back to the last commit and new files are deleted. A backup copy is saved in the app's private data folder first. Other files are not touched.</p>
+      </>,
+      okText: `Discard ${count}`, okButtonProps: { danger: true }, cancelText: 'Keep changes', focusable: { autoFocusButton: 'cancel' },
+    });
+    if (!confirmed) return;
+    setBusy(true); setError('');
+    try {
+      const result = await api<{ files: number; backup: string }>(`/api/repos/${encodeURIComponent(repo.id)}/workspace-discard`, json({ handoffId, reviewId: review.id, files: selected, confirm: true }));
+      setReceipt({ kind: 'discard', backup: result.backup, files: result.files }); setReview(undefined); setSelected([]); setMessage(''); setConfirming(false);
+      await onCommitted();
+    } catch (cause) { setError(errorText(cause)); setReview(undefined); setSelected([]); setConfirming(false); return; }
+    finally { setBusy(false); }
     await recheck();
   }
 
@@ -191,7 +215,7 @@ export default function WorkspaceCommit({ repo, api, disabled, onCommitted }: Pr
 
     {!receipt && <details className="workspace-review-rules">
       <summary><WarningCircleIcon size={16} aria-hidden="true" /><span className="warning-text">Committing does not mark tickets Done. The workspace is rechecked automatically after committing; the queue resumes only if Git is clean.</span><span className="workspace-review-rules-toggle">Commit rules</span></summary>
-      <p>Operator action only. Select files deliberately. Commit records the reviewed working-tree versions, including deletions and executable modes; any staged versions of selected files are replaced. Unselected staged changes are preserved.</p>
+      <p>Operator action only. Select files deliberately. Commit records the reviewed working-tree versions, including deletions and executable modes; any staged versions of selected files are replaced. Unselected staged changes are preserved. Discard selected drops the selected files' uncommitted changes after a confirmation, saving a private backup first.</p>
       <p>No push, reset, stash, hooks, signing or clean filters. Sensitive filenames, suspected credentials, binary/large files, links, conflicts and custom conversions require terminal review. Filename/content screening is not a secret scanner guarantee. Keep external editors and Git operations idle while committing.</p>
     </details>}
 
@@ -199,9 +223,15 @@ export default function WorkspaceCommit({ repo, api, disabled, onCommitted }: Pr
     {receipt && <section className="panel workspace-review-done" role="status" aria-labelledby="workspace-review-done-title">
       <CheckCircleIcon size={28} weight="fill" aria-hidden="true" />
       <div>
-        <h2 id="workspace-review-done-title">Commit created</h2>
-        <p className="workspace-review-done-commit"><code title={receipt.commit}>{receipt.commit.slice(0, 12)}</code> {receipt.subject}</p>
-        <p className="muted">{receipt.files} {receipt.files === 1 ? 'file' : 'files'} committed locally. Nothing was pushed.</p>
+        {receipt.kind === 'commit' ? <>
+          <h2 id="workspace-review-done-title">Commit created</h2>
+          <p className="workspace-review-done-commit"><code title={receipt.commit}>{receipt.commit.slice(0, 12)}</code> {receipt.subject}</p>
+          <p className="muted">{receipt.files} {receipt.files === 1 ? 'file' : 'files'} committed locally. Nothing was pushed.</p>
+        </> : <>
+          <h2 id="workspace-review-done-title">Changes discarded</h2>
+          <p>{receipt.files} {receipt.files === 1 ? 'file' : 'files'} returned to the last commit. Backup: <code>{receipt.backup}</code></p>
+          <p className="muted">Copy files back from the backup folder if you need them.</p>
+        </>}
         {rechecking || busy
           ? <p className="muted">Rechecking workspace…</p>
           : <><p>Automatic recheck did not release the gate. New starts stay blocked until a recheck finds Git clean; eligible tickets then start under existing permissions.</p>{recheckActions}</>}
@@ -235,6 +265,7 @@ export default function WorkspaceCommit({ repo, api, disabled, onCommitted }: Pr
             {generateError && <p className="workspace-review-generate-error" role="alert">{generateError}</p>}
             <Button type="primary" block icon={<GitCommitIcon size={16} aria-hidden="true" />} disabled={busy || disabled || generating || !selected.length || !message.trim()} onClick={() => setConfirming(true)}>Review commit</Button>
             <p className="muted">{!selected.length ? 'Select files to include.' : !message.trim() ? 'Write a commit message.' : 'You confirm the exact file list next.'}</p>
+            <Button danger block icon={<TrashIcon size={16} aria-hidden="true" />} disabled={busy || disabled || generating || !selected.length} onClick={() => void discard()}>Discard selected…</Button>
           </>}
         </section>
 

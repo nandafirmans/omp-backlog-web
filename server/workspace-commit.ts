@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
-import { chmod, lstat, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { Repo, Store, WorkspaceIdentity, WorkspaceReview } from './contracts';
 import { digest } from './store';
@@ -244,6 +244,58 @@ export async function commitWorkspace(store: Store, repo: Repo, input: Record<st
     if (!synchronized) await rm(`${saved.index}.lock`, { force: true });
     if (scratch) await rm(scratch, { recursive: true, force: true }); // Only this operation's private temporary indexes.
   }
+}
+
+/**
+ * Operator-confirmed discard of reviewed files. Every selected working-tree version is backed up
+ * privately first; tracked files then return to HEAD and new files are deleted. Nothing else is touched:
+ * no reset, stash or clean, and the gate is cleared only by the usual recheck.
+ */
+export async function discardWorkspace(store: Store, repo: Repo, input: Record<string, unknown>): Promise<{ files: number; backup: string }> {
+  const identity = await inspectWorkspaceIdentity(repo);
+  guard(store, repo, input.handoffId, identity);
+  const saved = reviews.get(store)?.get(repo.id);
+  if (!saved || input.reviewId !== saved.result.id || saved.handoffId !== input.handoffId || saved.expires < Date.now()) throw new HttpError(409, 'Review expired or changed; reload changes before discarding');
+  await assertWorkspaceIdentity(repo, saved.workspace);
+  if (input.confirm !== true) throw new HttpError(400, 'Confirm the discard');
+  if (!Array.isArray(input.files) || !input.files.length || input.files.length > 100 || input.files.some(path => typeof path !== 'string') || new Set(input.files).size !== input.files.length) throw new HttpError(400, 'Select unique reviewed files');
+  const selected = input.files.map(path => saved.entries.find(entry => entry.path === path));
+  if (selected.some(entry => !entry)) throw new HttpError(400, 'Only selectable reviewed files may be discarded');
+  reviews.get(store)!.delete(repo.id); // No automatic replay after an uncertain outcome.
+  if ((await capture(repo, store.dataDir)).fingerprint !== saved.fingerprint) throw new HttpError(409, 'Workspace changed since review; reload changes before discarding');
+  guard(store, repo, input.handoffId, identity);
+
+  const backup = join(store.dataDir, 'discarded', `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`);
+  await mkdir(join(backup, 'files'), { recursive: true, mode: 0o700 });
+  const entries = selected as Entry[];
+  for (const entry of entries) {
+    if (entry.bytes === null) continue; // A deletion is undone by restoring HEAD; there is nothing to lose.
+    const target = join(backup, 'files', entry.path);
+    await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    await writeFile(target, entry.bytes, { mode: 0o600, flag: 'wx' });
+  }
+  await writeFile(join(backup, 'manifest.json'), JSON.stringify({ repository: repo.path, head: saved.head || null, discardedAt: new Date().toISOString(), files: entries.map(entry => ({ path: entry.path, backedUp: entry.bytes !== null, mode: entry.mode })) }, null, 2), { mode: 0o600, flag: 'wx' });
+
+  const done: string[] = [];
+  try {
+    for (const entry of entries) {
+      const tracked = !!saved.head && !!(await checked(repo, ['ls-tree', saved.head, '--', entry.path])).trim();
+      if (tracked) await checked(repo, ['restore', `--source=${saved.head}`, '--staged', '--worktree', '--', entry.path]);
+      else {
+        await checked(repo, ['update-index', '--force-remove', '--', entry.path]);
+        if (entry.bytes !== null) {
+          await safePath(repo.path, join(repo.path, entry.path), true);
+          const info = await lstat(join(repo.path, entry.path));
+          if (!info.isFile() || info.isSymbolicLink()) throw new Error('Not a regular file');
+          await unlink(join(repo.path, entry.path));
+        }
+      }
+      done.push(entry.path);
+    }
+  } catch {
+    throw new HttpError(409, `Discard stopped after ${done.length} of ${entries.length} files${done.length ? ` (${done.join(', ')})` : ''}. Backup: ${backup}. Inspect Git in your terminal before retrying.`);
+  }
+  return { files: entries.length, backup };
 }
 
 const COMMIT_PROMPT_DIFF_BYTES = 40_000;

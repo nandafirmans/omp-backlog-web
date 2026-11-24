@@ -13,7 +13,7 @@ import { inspectWorkspaceHandoff } from './runtime';
 import { discoverExecutionModels } from './drafting';
 import { handleAgentWorkspaceRequest } from './agent-workspaces';
 import { ticketPublications } from './batch-publication';
-import { commitWorkspace, draftCommitMessage, reviewWorkspace, workspaceOperation } from './workspace-commit';
+import { commitWorkspace, discardWorkspace, draftCommitMessage, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
 import { checkSuggestions, saveCompletionPolicy, trialCheck } from './autonomy-policy';
@@ -222,11 +222,12 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           // No workspace lock: generation only reads the saved review and may take a while.
           return json(await draftCommitMessage(store, repo, input));
         }
-        if (segments.length === 4 && ['workspace-review', 'workspace-commit'].includes(segments[3]) && request.method === 'POST') {
+        if (segments.length === 4 && ['workspace-review', 'workspace-commit', 'workspace-discard'].includes(segments[3]) && request.method === 'POST') {
           const input = await body(request);
           await permittedPath(store, repo.path);
           return await workspaceOperation(store, repo.id, async () => json(segments[3] === 'workspace-review'
             ? await reviewWorkspace(store, repo, input.handoffId)
+            : segments[3] === 'workspace-discard' ? await discardWorkspace(store, repo, input)
             : await commitWorkspace(store, repo, input)));
         }
         if (segments.length === 4 && segments[3] === 'reconcile-workspace' && request.method === 'POST') {

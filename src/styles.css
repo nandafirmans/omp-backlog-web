@@ -92,6 +92,8 @@ pre { background: var(--surface-inset); border: 1px solid var(--line); padding: 
 .workspace-review-commit label { font-size: 13px; font-weight: 600; }
 .workspace-review-commit-label { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -4px -8px -4px 0; }
 .workspace-review-generate-error { color: var(--danger); }
+.workspace-discard-list { max-height: 200px; overflow-y: auto; margin: 0 0 12px; padding-left: 20px; }
+.workspace-discard-list code { overflow-wrap: anywhere; }
 .workspace-review-commit h2 { font-size: 14px; letter-spacing: 0; }
 .workspace-review-commit pre { margin: 0; padding: 8px 10px; max-height: 120px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
 .workspace-review-commit p { margin: 0; font-size: 13px; line-height: 1.6; }

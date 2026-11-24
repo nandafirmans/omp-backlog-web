@@ -166,3 +166,44 @@ test('review binds HEAD and handoff identity; existing Git locks and custom filt
     expect((await git('log', '--format=%s')).trim().split('\n')).toEqual(['external fixture commit', 'fixture baseline']);
   });
 });
+
+test('confirmed discard backs up selected files, restores tracked ones to HEAD, deletes new ones and leaves the rest', async () => {
+  await fixture(async ({ repo, store, git, request }) => {
+    await writeFile(join(repo.path, 'app.txt'), 'base\n'); await writeFile(join(repo.path, 'gone.txt'), 'keep me\n'); await writeFile(join(repo.path, 'kept.txt'), 'base\n');
+    await git('add', '.'); await git('commit', '--quiet', '-m', 'base');
+    await writeFile(join(repo.path, 'app.txt'), 'agent edit\n');
+    await unlink(join(repo.path, 'gone.txt'));
+    await mkdir(join(repo.path, 'src'));
+    await writeFile(join(repo.path, 'src', 'new.txt'), 'new file\n');
+    await git('add', 'src/new.txt'); // A staged new file must leave the index too.
+    await writeFile(join(repo.path, 'kept.txt'), 'operator edit\n');
+    const review = await (await request('workspace-review', { handoffId: 'gate' })).json() as WorkspaceReview;
+    const input = { handoffId: 'gate', reviewId: review.id, files: ['app.txt', 'gone.txt', 'src/new.txt'], confirm: true };
+    expect((await request('workspace-discard', { ...input, confirm: false })).status).toBe(400);
+    expect((await request('workspace-discard', { ...input, files: ['missing.txt'] })).status).toBe(400);
+    const response = await request('workspace-discard', input); expect(response.status).toBe(200);
+    const { files, backup } = await response.json() as { files: number; backup: string };
+    expect(files).toBe(3);
+    expect(backup.startsWith(join(store.dataDir, 'discarded'))).toBe(true);
+    expect(await readFile(join(backup, 'files', 'app.txt'), 'utf8')).toBe('agent edit\n');
+    expect(await readFile(join(backup, 'files', 'src', 'new.txt'), 'utf8')).toBe('new file\n');
+    expect(JSON.parse(await readFile(join(backup, 'manifest.json'), 'utf8')).files.map((file: { path: string }) => file.path)).toEqual(['app.txt', 'gone.txt', 'src/new.txt']);
+    expect(await readFile(join(repo.path, 'app.txt'), 'utf8')).toBe('base\n');
+    expect(await readFile(join(repo.path, 'gone.txt'), 'utf8')).toBe('keep me\n');
+    expect(await git('status', '--porcelain')).toBe(' M kept.txt\n');
+    expect(await readFile(join(repo.path, 'kept.txt'), 'utf8')).toBe('operator edit\n');
+    expect(store.get('repos', repo.id)!.handoff!.id).toBe('gate'); // Only a recheck clears the gate.
+    expect((await request('workspace-discard', input)).status).toBe(409); // No replay.
+  });
+});
+
+test('discard refuses a workspace that changed after review and touches nothing', async () => {
+  await fixture(async ({ repo, git, request }) => {
+    await writeFile(join(repo.path, 'app.txt'), 'base\n'); await git('add', '.'); await git('commit', '--quiet', '-m', 'base');
+    await writeFile(join(repo.path, 'app.txt'), 'agent edit\n');
+    const review = await (await request('workspace-review', { handoffId: 'gate' })).json() as WorkspaceReview;
+    await writeFile(join(repo.path, 'app.txt'), 'edited again\n');
+    expect((await request('workspace-discard', { handoffId: 'gate', reviewId: review.id, files: ['app.txt'], confirm: true })).status).toBe(409);
+    expect(await readFile(join(repo.path, 'app.txt'), 'utf8')).toBe('edited again\n');
+  });
+});
