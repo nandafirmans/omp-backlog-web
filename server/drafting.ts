@@ -102,6 +102,8 @@ const profile = {
   advisor: { enabled: false }, memory: { backend: 'off' }, autolearn: { enabled: false },
   startup: { checkUpdate: false, setupWizard: false, showSplash: false, quiet: true },
   marketplace: { autoUpdate: 'off' }, power: { sleepPrevention: 'off' }, magicKeywords: { enabled: false },
+  // OMP 19.1+ enables auto-QA by default, which registers a report_issue tool even under --no-tools.
+  dev: { autoqa: false },
 };
 
 function launchEnv(directory: string): NodeJS.ProcessEnv {
