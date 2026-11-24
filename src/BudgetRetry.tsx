@@ -40,5 +40,6 @@ export default function BudgetRetry({ run, ticket, api, execute, busy }: Props) 
     });
   }
 
+  if (ticket.runId === run.id && ticket.status === 'ready') return <p className="muted" role="status">Retry queued at {(ticket.execution?.tokenBudget ?? previous).toLocaleString('en-US')} tokens. Waiting for the scheduler; check the project if it doesn't start.</p>;
   return <>{context}<Button icon={<ArrowCounterClockwiseIcon size={16} aria-hidden="true" />} type="primary" disabled={busy || !current} title={current ? undefined : 'Only the latest failed run of the current revision can be retried'} onClick={() => void retry()}>Retry with higher budget</Button></>;
 }

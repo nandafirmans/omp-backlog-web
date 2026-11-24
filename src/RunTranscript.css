@@ -1,10 +1,11 @@
-.run-transcript { min-width: 0; }
+.run-transcript { min-width: 0; height: 100%; display: flex; flex-direction: column; }
+.run-transcript > h3, .run-transcript > p { flex: none; }
 .run-transcript > .muted { margin-bottom: 12px; }
-.run-transcript-surface { border: 1px solid var(--line); background: var(--surface-elevated); min-width: 0; }
+.run-transcript-surface { flex: 1; min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--line); background: var(--surface-elevated); min-width: 0; }
 .run-transcript-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; min-height: 49px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface-inset); font: 13px/1.7 var(--font-mono); }
 .run-transcript-activity { display: inline-flex; align-items: center; gap: 10px; color: var(--accent); }
 .run-transcript-activity > span { display: inline-flex; align-items: center; }
-.run-transcript-viewport { min-height: 160px; max-height: min(65dvh, 640px); overflow: auto; overflow-anchor: none; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; scroll-behavior: auto; }
+.run-transcript-viewport { flex: 1; min-height: 160px; overflow: auto; overflow-anchor: none; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--line) transparent; scroll-behavior: auto; }
 .run-transcript-viewport:focus-visible { outline-offset: -3px; }
 .run-transcript-entries { min-width: 0; }
 .run-transcript-message { padding: 18px 20px; min-width: 0; overflow-wrap: anywhere; }
@@ -45,16 +46,10 @@
 .run-transcript-tool-body { padding: 0 16px 16px; display: grid; gap: 16px; min-width: 0; }
 .run-transcript-tool-body h4 { font: 13px/1.7 var(--font-mono); color: var(--muted); margin: 0 0 6px; }
 .run-transcript-tool-body pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; margin: 0; padding: 12px; font-size: 13px; background: var(--surface-elevated); scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
-.run-transcript pre.run-transcript-code { margin: 0; padding: 8px 0; border: 1px solid var(--line); background: var(--surface-elevated); font: 13px/1.75 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 480px; }
-.run-transcript-preview pre.run-transcript-code { overflow: hidden; pointer-events: none; }
-.run-transcript-code code, .run-transcript-code-rows { display: block; min-width: 0; }
-.run-transcript-code-line { display: flex; min-height: 23px; padding-right: 12px; }
-.run-transcript-line-number { flex: 0 0 6ch; margin-right: 12px; padding-left: 8px; text-align: right; color: var(--muted); user-select: none; }
-.run-transcript-source { flex: 1; min-width: 0; }
-.run-transcript-diff .diff-add { color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); }
-.run-transcript-diff .diff-remove { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, transparent); }
-.run-transcript-diff .diff-meta { color: var(--muted); }
-.run-transcript-preview pre.run-transcript-code { max-height: 198px; }
+.run-transcript-code { min-width: 0; }
+.run-transcript-code .cm-scroller { max-height: 480px; overflow: auto; }
+.run-transcript-code-preview { pointer-events: none; }
+.run-transcript-code-preview .cm-scroller { overflow: hidden; }
 .run-transcript-retention { display: block; margin-top: 8px; color: var(--warning); font: 13px/1.7 var(--font-sans); }
 .run-transcript-record { min-width: 0; }
 .run-transcript-record > summary { color: var(--muted); font: 12px/1.8 var(--font-mono); cursor: pointer; }
@@ -71,8 +66,6 @@
 .transcript-syntax-number { color: color-mix(in srgb, var(--warning) 65%, var(--accent)); }
 .transcript-syntax-comment { color: var(--muted); font-style: italic; }
 .transcript-syntax-heading, .transcript-syntax-link { color: var(--accent); }
-.run-transcript-diff .diff-add .run-transcript-line-number, .run-transcript-diff .diff-add .run-transcript-diff-sign { color: var(--accent); }
-.run-transcript-diff .diff-remove .run-transcript-line-number, .run-transcript-diff .diff-remove .run-transcript-diff-sign { color: var(--danger); }
 @media (max-width: 600px) {
   .run-transcript-message { padding: 16px 12px; }
   .run-transcript-tool > summary { padding: 12px; }

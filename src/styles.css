@@ -320,6 +320,7 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .run-list li + li { border-top: 1px solid var(--line); }
 .run-list .ant-btn { display: block; height: auto; white-space: normal; width: 100%; padding: 14px 10px; text-align: left; }
 .run-list .ant-btn > span { display: grid; gap: 9px; }
+.run-list .ant-btn .ant-tag { justify-self: start; width: fit-content; margin-inline-end: 0; }
 .run-list time, .run-list small { font-size: 13px; color: var(--muted); }
 .settings-view > h2 { margin-bottom: 16px; }
 .icon-heading { display: flex; align-items: center; gap: 8px; }
@@ -367,6 +368,13 @@ input[type='file']::file-selector-button { font: inherit; border: 1px solid var(
 .run-views > .ant-tabs-nav { margin-bottom: 20px; font-family: var(--font-mono); }
 .run-views .ant-tabs-content > .detail-section:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
 .run-views .ant-tabs-content, .run-views .ant-tabs-tabpane { min-width: 0; }
+/* Run details fill the viewport: the active tab takes the remaining height and scrolls internally. */
+main:has(> .run-panel) { display: flex; flex-direction: column; }
+.run-panel { display: flex; flex-direction: column; flex: 1 0 auto; }
+.run-panel > .run-views { flex: 1 1 0; min-height: 360px; }
+.run-views > .ant-tabs-body-holder { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.run-views .ant-tabs-body { flex: 1; min-height: 0; }
+.run-views .ant-tabs-content-active { height: 100%; overflow: auto; }
 .run-records { display: grid; gap: 8px; }
 .run-record { border: 1px solid var(--line); background: var(--surface-inset); margin-block: 8px; min-width: 0; }
 .run-record > summary { padding: 12px 16px; font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
