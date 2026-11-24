@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DragEvent } from 'react';
 import { Button, Checkbox, Dropdown, Input, Modal, Popover, Segmented, Tag, Tooltip } from 'antd';
-import { CircleIcon, ColumnsIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, QuestionIcon, SealCheckIcon, SlidersHorizontalIcon, TrashIcon, TreeStructureIcon, WarningCircleIcon } from '@phosphor-icons/react';
+import { CircleIcon, ColumnsIcon, HandPalmIcon, DotsSixVerticalIcon, DotsThreeIcon, FolderIcon, ListBulletsIcon, MagnifyingGlassIcon, QuestionIcon, SealCheckIcon, SlidersHorizontalIcon, TrashIcon, TreeStructureIcon, WarningCircleIcon } from '@phosphor-icons/react';
 import { Link, useNavigate } from 'react-router';
 import type { Repo, Snapshot, Ticket } from '../server/contracts';
 import type { RequestApi } from './Workspace';
@@ -135,11 +135,12 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
       return;
     }
     locked.current = true;
-    setConfirming(action !== 'reorder');
+    setConfirming(action !== 'reorder' && action !== 'unapprove');
     setAnnouncement('');
     try {
       let feedback: string | null = null;
-      if (action !== 'reorder') {
+      // Moving back to Draft only removes approval and holds the ticket, so it needs no confirmation.
+      if (action !== 'reorder' && action !== 'unapprove') {
         const run = latest.current.snapshot.runs.find(run => run.id === current.runId && run.revision === current.revision);
         if (((action === 'done' || action === 'changes') && !run) || (action === 'done' && !run?.evidence.length)) {
           setAnnouncement('Current-revision run evidence is unavailable. Open the ticket to review it.');
@@ -173,7 +174,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
           return;
         }
       }
-      const success = await execute(action === 'reorder' ? `${current.id} queue position saved.` : `${current.id}: ${action === 'done' ? 'reviewed revision marked Done' : 'Ready requested; execution permissions still apply'}.`, async () => {
+      const success = await execute(action === 'reorder' ? `${current.id} queue position saved.` : action === 'unapprove' ? `${current.id} moved back to Draft and held. Approve it to queue it again.` : `${current.id}: ${action === 'done' ? 'reviewed revision marked Done' : 'Ready requested; execution permissions still apply'}.`, async () => {
         const latestTicket = latest.current.tickets.find(ticket => ticket.id === source.id);
         if (!sameBoardRevision(latestTicket, source) || !latestTicket || !canMoveTicket(latestTicket) || lifecycleOwnsCompletion(latest.current.snapshot.runs.find(run => run.id === latestTicket.runId))) throw new Error('Ticket or autonomous completion changed during confirmation. Review the current run and try again.');
         await api(`/api/tickets/${encode(repo.id)}/${encode(current.id)}/action`, { method: 'POST', body: JSON.stringify({ action, revision: current.revision, executionVersion: current.executionVersion ?? null, ...(order !== null ? { order } : {}), ...(feedback ? { feedback } : {}) }) });
@@ -266,7 +267,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
         <Button type="link" onClick={() => { setShowEmpty(false); setHidden([]); setAttentionFilter(null); setAssistanceOnly(false); }}>Reset display</Button>
       </div>}><Tooltip title="Display"><Button className="display-button" aria-label={`Display${hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}`} icon={<SlidersHorizontalIcon size={16} aria-hidden="true" />}>{hiddenCount > 0 ? hiddenCount : null}</Button></Tooltip></Popover>
     </div>
-    {dragging && <p className="board-drag-hint" role="status">Drop between cards in a highlighted column. Hold near an edge to scroll. Ready and Done require confirmation.</p>}
+    {dragging && <p className="visually-hidden" role="status">Drop between cards in a highlighted column. Hold near an edge to scroll. Ready and Done require confirmation.</p>}
     <p className="board-announcement" role="status" aria-live="polite" aria-atomic="true">{announcement}</p>
     <div ref={surface} id="ticket-board-region" className={`ticket-surface ${layout === 'list' ? 'ticket-list-view' : 'kanban-board'}`} role="region" aria-label="Tickets grouped by workflow stage" aria-busy={busy} tabIndex={0} onDragOver={event => { if (dragSource.current) pointer.current = { x: event.clientX, y: event.clientY }; }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) pointer.current = null; }}>
       {visibleColumns.map(column => {
@@ -275,6 +276,7 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
         return <section key={column.id} data-board-group={column.id} className={`kanban-column board-group-${column.id}${dragging ? validDrop ? ' can-drop' : ' cannot-drop' : ''}${over?.group === column.id && !over.before ? ' drop-at-end' : ''}`} aria-labelledby={`column-${column.id}`} onDragOver={event => dragOver(event, column.id)} onDrop={event => drop(event, column.id)} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOver(null); }}>
           <div className="kanban-heading"><h2 id={`column-${column.id}`}>{column.label}</h2><span className="kanban-count">{column.tickets.length}</span></div>
           {column.id === 'active' && <p className="board-group-note">Agent-managed · paused work still holds the slot</p>}
+          {column.id === 'draft' && repo.mode === 'automatic' && <p className="board-group-note">Automatic mode runs drafts without approval, except held ones</p>}
           {column.id === 'attention' && <div className="board-status-filters" aria-label="Filter attention statuses">{column.statuses.map(status => <button type="button" key={status} aria-pressed={attentionFilter === status} onClick={() => setAttentionFilter(previous => previous === status ? null : status)}>{label(status)} <span>{column.tickets.filter(ticket => ticket.status === status).length}</span></button>)}</div>}
                     <ol className="ticket-list">{shownTickets.map((value, index) => {
             const run = snapshot.runs.find(run => run.id === value.runId);
@@ -285,9 +287,10 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
             const reason = value.error || run?.lifecycle?.exception || run?.blocker || run?.error;
             const details = `/projects/${encode(repo.id)}/tickets/${encode(value.id)}`;
             return <li key={value.id} data-ticket-id={value.id} className={`${dragging?.id === value.id ? 'is-dragging ' : ''}${over?.group === column.id && over.before === value.id ? 'drop-before' : ''}`}>
-              <article className={`ticket-card board-ticket ${selectedId === value.id ? 'selected' : ''}`} aria-label={`${value.id}: ${value.title}, ${label(value.status)}`} draggable={movable && layout === 'board'} onDragStart={event => { if (!movable || (event.target as HTMLElement).closest('a, .board-card-actions')) { event.preventDefault(); return; } dragSource.current = value; setDragging(value); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', value.id); event.dataTransfer.setDragImage(event.currentTarget, 24, 24); }} onDragEnd={clearDrag}>
+              <article className={`ticket-card board-ticket ${selectedId === value.id ? 'selected' : ''}`} aria-label={`${value.id}: ${value.title}, ${label(value.status)}`} draggable={movable && layout === 'board'} onDragStart={event => { if (!movable || (event.target as HTMLElement).closest('a, .board-card-actions')) { event.preventDefault(); return; } dragSource.current = value; setDragging(value); setAnnouncement(''); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', value.id); event.dataTransfer.setDragImage(event.currentTarget, 24, 24); }} onDragEnd={clearDrag}>
                 <div className="board-card-top"><button type="button" className="board-drag-handle" disabled={!movable} aria-label={`Drag ${value.id}; use Actions for keyboard or touch moves`} aria-describedby="board-move-help" title={movable ? 'Drag to move; use Actions without dragging' : 'Unavailable while active, invalid, or saving'}><DotsSixVerticalIcon size={18} aria-hidden="true" /></button><span className="ticket-meta">{value.id}</span><Tag className={`badge status-${value.status}`}><CircleIcon size={8} weight="fill" aria-hidden="true" />{label(value.status)}</Tag><Dropdown trigger={['click']} menu={{ items: [
                     { key: 'ready', label: value.status === 'needs_review' ? 'Request changes → Ready' : 'Move to Ready…', disabled: disabled || lifecycleOwnsCompletion(run) || !transitionFor(value, 'ready'), onClick: () => void move(value, 'ready') },
+                    { key: 'draft', label: 'Move back to Draft', disabled: disabled || !transitionFor(value, 'draft'), onClick: () => void move(value, 'draft') },
                     { key: 'done', label: 'Accept evidence → Done…', disabled: disabled || lifecycleOwnsCompletion(run) || !transitionFor(value, 'done'), onClick: () => void move(value, 'done') },
                     { type: 'divider' },
                     { key: 'up', label: 'Move up in column', disabled: !movable || !previous, onClick: () => void move(value, column.id, previous?.id) },
@@ -302,7 +305,8 @@ export default function TicketBoard({ repo, tickets, snapshot, selectedId, busy,
                   {value.dependencies.length > 0 && <small className="meta-item"><TreeStructureIcon size={14} aria-hidden="true" />{value.dependencies.join(', ')}</small>}
                   {reason && <span className="ticket-error" title={reason}>{reason}</span>}
                   {value.status === 'interrupted' && <small className="warning-text">Partial changes may remain. Review before retrying.</small>}
-                  {value.approvedRevision === value.revision && <span className="permission-note meta-item"><SealCheckIcon size={14} aria-hidden="true" />Approved</span>}
+                  {value.creationHold && value.status === 'draft' && <span className="permission-note meta-item"><HandPalmIcon size={14} aria-hidden="true" />Held</span>}
+                  {['draft', 'ready'].includes(value.status) && value.approvedRevision === value.revision && <span className="permission-note meta-item"><SealCheckIcon size={14} aria-hidden="true" />Approved</span>}
                   {run?.lifecycle && <Link draggable={false} to={`/runs/${encode(run.id)}`} onClick={event => onOpen(event.currentTarget)}>Review lifecycle evidence</Link>}
                   {(run?.dialog || ['interrupted', 'blocked', 'failed', 'needs_review'].includes(value.status)) && <Link to={run?.dialog ? `/runs/${encode(run.id)}` : details} onClick={event => onOpen(event.currentTarget)}>{run?.dialog ? 'Answer needed' : value.status === 'interrupted' ? 'Review recovery' : value.status === 'blocked' ? 'View blocker' : value.status === 'failed' ? 'View error' : value.status === 'needs_review' ? 'Review evidence' : 'Open ticket'}</Link>}
                 </div>

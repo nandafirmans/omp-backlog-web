@@ -57,6 +57,7 @@ export default function RunTranscript({ run }: { run: Pick<Run, 'id' | 'conversa
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
+  const lastScrollTop = useRef(0);
   const [following, setFollowing] = useState(true);
   const structured = run.conversation !== undefined;
   const waiting = run.status === 'running' && !!run.dialog;
@@ -102,8 +103,19 @@ export default function RunTranscript({ run }: { run: Pick<Run, 'id' | 'conversa
       <div className="run-transcript-viewport" ref={viewport} role="log" aria-label="Run conversation" aria-live={following ? 'polite' : 'off'} aria-relevant="additions text" tabIndex={0} onScroll={event => {
         const target = event.currentTarget;
         const atBottom = target.scrollHeight - target.clientHeight - target.scrollTop <= 4;
-        follow.current = atBottom;
-        setFollowing(atBottom);
+        // Content streaming in between an auto-scroll and its async scroll event looks "not at bottom";
+        // only an upward move means the reader scrolled away.
+        const scrolledUp = target.scrollTop < lastScrollTop.current;
+        lastScrollTop.current = target.scrollTop;
+        if (atBottom) {
+          follow.current = true;
+          setFollowing(true);
+        } else if (scrolledUp) {
+          follow.current = false;
+          setFollowing(false);
+        } else if (follow.current) {
+          target.scrollTop = target.scrollHeight;
+        }
       }}>
         <div className="run-transcript-entries" ref={content}>
         {structured ? run.conversation!.length ? run.conversation!.map(entry => entry.kind === 'tool' ? <ToolEntry key={entry.id} entry={entry} onInspect={inspectTool} /> : <article key={entry.id} className={`run-transcript-message run-transcript-message-${entry.kind}${entry.state === 'error' ? ' run-transcript-error' : ''}`} data-entry-id={entry.id} data-state={entry.state}>

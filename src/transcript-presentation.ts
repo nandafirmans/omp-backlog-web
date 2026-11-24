@@ -47,6 +47,17 @@ export function diffRows(text: string): DiffRow[] {
   });
 }
 
+/** Plain output rows. OMP read output (`[path#hash]` then `N:source`) moves its line numbers into the gutter. */
+export function sourceRows(text: string): DiffRow[] {
+  const lines = text.split('\n');
+  const numbered = /^\[[^\]\r\n#]+#[\da-fA-F]{4}\]$/.test(lines[0]) && lines.slice(1).some(line => /^\d+:/.test(line));
+  return lines.map((line, index): DiffRow => {
+    if (!numbered) return { text: line, kind: 'context', lineNumber: index + 1, sign: '' };
+    const match = /^(\d+):(.*)$/.exec(line);
+    return match ? { text: match[2], kind: 'context', lineNumber: Number(match[1]), sign: '' } : { text: line, kind: 'meta', sign: '' };
+  });
+}
+
 // Keep line breaks and tabs, but never terminal cursor commands or OSC links.
 /* eslint-disable no-control-regex -- Removing terminal control bytes intentionally. */
 function plain(text: string): string {

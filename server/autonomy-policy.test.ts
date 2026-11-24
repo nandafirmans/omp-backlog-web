@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Repo, Run, Runtime } from './contracts';
 import { createApi } from './api';
+import { checkSuggestions, trialCheck } from './autonomy-policy';
 import { closeStore, createStore, database, digest, token } from './store';
 
 async function fixture() {
@@ -80,5 +81,53 @@ test('owned work prevents new grants but does not prevent revocation', async () 
     expect((await f.call({ mode: 'human', revision: policy.revision })).status).toBe(200);
     expect(f.store.get('repos', f.repo.id)?.completion?.mode).toBe('human');
     expect(f.store.get('runs', run.id)).toEqual(run);
+  } finally { await f.close(); }
+});
+
+test('check suggestions list runnable package scripts with the lockfile runner, never long-running ones', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'omp-check-suggestions-'));
+  try {
+    expect(await checkSuggestions(root)).toEqual([]);
+    await writeFile(join(root, 'package.json'), JSON.stringify({ scripts: { dev: 'vite', 'test:watch': 'vitest', build: 'vite build', lint: 'eslint .', test: 'vitest run', 'bad name': 'x', odd: 3 } }));
+    await writeFile(join(root, 'bun.lock'), '');
+    expect(await checkSuggestions(root)).toEqual([
+      { name: 'test', script: 'vitest run', argv: ['bun', 'run', 'test'], files: ['package.json'] },
+      { name: 'lint', script: 'eslint .', argv: ['bun', 'run', 'lint'], files: ['package.json'] },
+      { name: 'build', script: 'vite build', argv: ['bun', 'run', 'build'], files: ['package.json'] },
+    ]);
+    await writeFile(join(root, 'package.json'), '{ broken');
+    await expect(checkSuggestions(root)).rejects.toThrow('not valid JSON');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('check suggestions cover Makefile, Cargo, Go and pytest projects', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'omp-check-suggestions-'));
+  try {
+    await writeFile(join(root, 'Makefile'), 'VAR := 1\nbuild:\n\tgo build\ntest: build\n\tgo test ./...\nlint:\n\tgolangci-lint run\n');
+    await writeFile(join(root, 'go.mod'), 'module example\n');
+    await writeFile(join(root, 'Cargo.toml'), '[package]\n');
+    await writeFile(join(root, 'pyproject.toml'), '[tool.pytest.ini_options]\n');
+    await writeFile(join(root, 'uv.lock'), '');
+    expect((await checkSuggestions(root)).map(item => [item.argv.join(' '), item.files[0]])).toEqual([
+      ['make test', 'Makefile'],
+      ['cargo test', 'Cargo.toml'],
+      ['go test ./...', 'go.mod'],
+      ['uv run pytest', 'pyproject.toml'],
+      ['make lint', 'Makefile'],
+    ]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('check trial reports exit code, output tail, missing commands and timeouts without changing policy', async () => {
+  const f = await fixture();
+  try {
+    const passed = await trialCheck(f.store, f.repo, { argv: ['bun', 'verify.mjs'], timeoutSeconds: 15 });
+    expect(passed).toMatchObject({ exitCode: 0, timedOut: false, truncated: false });
+    expect(passed.output).toContain('synthetic verification');
+    expect(await trialCheck(f.store, f.repo, { argv: ['sh', '-c', 'echo broken >&2; exit 3'], timeoutSeconds: 15 })).toMatchObject({ exitCode: 3, output: 'broken\n' });
+    expect((await trialCheck(f.store, f.repo, { argv: ['omp-definitely-missing-tool'], timeoutSeconds: 15 })).error).toContain('Command not found');
+    expect(await trialCheck(f.store, f.repo, { argv: ['sleep', '5'], timeoutSeconds: 1 })).toMatchObject({ timedOut: true, exitCode: null });
+    await expect(trialCheck(f.store, f.repo, { argv: ['sh'], timeoutSeconds: 15, files: ['x'] })).rejects.toThrow('Unknown check trial field');
+    expect(f.store.get('repos', f.repo.id)?.completion).toBeUndefined();
   } finally { await f.close(); }
 });

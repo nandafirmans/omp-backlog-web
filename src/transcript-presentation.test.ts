@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import type { TranscriptEntry } from '../server/contracts';
-import { diffRows, toolPresentation } from './transcript-presentation';
+import { diffRows, sourceRows, toolPresentation } from './transcript-presentation';
 
 function entry(fields: Partial<TranscriptEntry>): TranscriptEntry {
   return { id: 'tool-1', kind: 'tool', text: '', toolName: 'functions.read', ...fields };
@@ -221,4 +221,16 @@ test('a complete independently retained diff is not marked truncated just becaus
   const result = toolPresentation(entry({ diff: retained, output: '[Truncated: transcript display limit reached.]' }));
   expect(result.content).toBe(retained);
   expect(result.format).toBe('diff');
+});
+
+test('read output line prefixes move into the gutter; other text keeps sequential numbers', () => {
+  expect(sourceRows('[src/styles.css#A4FA]\n34:\n35:.kicker {')).toEqual([
+    { text: '[src/styles.css#A4FA]', kind: 'meta', sign: '' },
+    { text: '', kind: 'context', lineNumber: 34, sign: '' },
+    { text: '.kicker {', kind: 'context', lineNumber: 35, sign: '' },
+  ]);
+  expect(sourceRows('12:00 build\nok')).toEqual([
+    { text: '12:00 build', kind: 'context', lineNumber: 1, sign: '' },
+    { text: 'ok', kind: 'context', lineNumber: 2, sign: '' },
+  ]);
 });

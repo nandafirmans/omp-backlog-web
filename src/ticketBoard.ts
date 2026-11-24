@@ -25,6 +25,7 @@ export function transitionFor(ticket: Ticket, destination: string) {
     if (ticket.status === 'needs_review') return 'changes';
   }
   if (destination === 'done' && ticket.status === 'needs_review') return 'done';
+  if (destination === 'draft' && ticket.status === 'ready') return 'unapprove';
   return null;
 }
 

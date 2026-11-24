@@ -19,7 +19,7 @@ const ticket = JSON.parse(await readFile(join(directory, 'ticket.json'), 'utf8')
 if (ticket.criteria.length !== 1 || ticket.criteria[0] !== 'proof.txt contains verified.') {
   throw new Error('This protocol fixture can verify only the disposable proof.txt criterion');
 }
-const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript' | 'compaction' | 'missing-router' | 'missing-adapter' | 'missing-task' | 'disabled-plugin' | 'missing-invocation'; tokens?: number; expectedFeedback?: string };
+const configuration = JSON.parse(await readFile(join(process.cwd(), 'fixture.json'), 'utf8')) as { scenario: 'hold' | 'provider-failure' | 'tokens' | 'blocked' | 'clamp-thinking' | 'transcript' | 'compaction' | 'manual-compaction' | 'missing-router' | 'missing-adapter' | 'missing-task' | 'disabled-plugin' | 'missing-invocation'; tokens?: number; expectedFeedback?: string };
 const sessionFile = args.includes('--resume') ? argument('--resume') : join(argument('--session-dir'), 'fixture-session.json');
 if (args.includes('--resume') && args.includes('--model')) throw new Error('Resume must preserve persisted session model and thinking');
 await mkdir(dirname(sessionFile), { recursive: true });
@@ -77,6 +77,12 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (frame.type === 'set_auto_compaction') {
     autoCompactionEnabled = frame.enabled === true;
     respond();
+  } else if (frame.type === 'compact') {
+    // Installed OMP pauses the live turn, compacts and continues on its own; the fixture stays mid-turn (not settled).
+    send({ type: 'manual_compaction_start' });
+    send({ type: 'manual_compaction_end', aborted: false, willRetry: false, result: { summary: 'Synthetic manual summary', tokensBefore: 800, firstKeptEntryId: 'fixture-entry' } });
+    respond({ tokensBefore: 800 });
+    if (configuration.scenario === 'manual-compaction') send({ type: 'extension_ui_request', id: 'finish', method: 'input', title: 'Fixture completion barrier' });
   } else if (frame.type === 'set_auto_retry' || frame.type === 'set_cache_warming' || frame.type === 'abort') {
     respond();
   } else if (frame.type === 'prompt') {
@@ -127,7 +133,7 @@ for await (const line of createInterface({ input: process.stdin })) {
         send({ type: 'message_update', messageId: 'failed-partial', assistantMessageEvent: { type: 'text_delta', delta: 'Partial investigation before provider failure.' } });
         send({ type: 'tool_execution_start', toolCallId: 'failed-tool', toolName: 'read', args: { path: 'proof.txt' } });
         send({ type: 'prompt_result', status: 'error', error: { message: 'Deterministic provider failure after admission' } });
-      } else {
+      } else if (configuration.scenario !== 'manual-compaction') {
         send({ type: 'extension_ui_request', id: 'finish', method: 'input', title: 'Fixture completion barrier' });
       }
     }

@@ -149,6 +149,7 @@ export default function App() {
   else if (pathname === '/plan') trail.push({ title: 'Implementation plan' });
   else if (pathname === '/projects/new') trail.push({ title: 'Add project' });
   else if (pathname.endsWith('/tickets/new/agent')) trail.push({ title: 'Create with agent' });
+  else if (repoId && pathname.endsWith('/review')) trail.push({ title: 'Review & commit' });
   else if (pathname.endsWith('/tickets/new')) trail.push({ title: 'New ticket' });
   else if (ticketId) trail.push({ title: ticketId });
   else if (runId) {

@@ -63,9 +63,31 @@ test('run proof is revision-bound, bounded, immutable, authenticated and separat
     const action = (feedback: string) => api(new Request(`${origin}/api/tickets/repo/T001/action`, { method: 'POST', headers, body: JSON.stringify({ action: 'changes', revision: ticket.revision, feedback }) }));
     expect((await action('  ')).status).toBe(400);
     expect(store.get('tickets', 'repo/T001')!.status).toBe('needs_review');
+    store.save('repos', { ...repo, handoff: { id: 'gate', runId: run.id, detected: Date.now(), files: ['a.ts'], reason: 'Run left Git changes.' } });
     expect((await action('Show the alternate path.')).status).toBe(200);
+    expect(store.get('repos', repo.id)!.handoff!.continueTicketId).toBe('T001');
     expect(store.get('runs', run.id)!.reviewFeedback!.message).toBe('Show the alternate path.');
     expect(store.get('tickets', 'repo/T001')!.status).toBe('ready');
+    const unapprove = () => api(new Request(`${origin}/api/tickets/repo/T001/action`, { method: 'POST', headers, body: JSON.stringify({ action: 'unapprove', revision: ticket.revision }) }));
+    expect((await unapprove()).status).toBe(200);
+    expect(store.get('tickets', 'repo/T001')).toMatchObject({ status: 'draft', approvedRevision: null, creationHold: true });
+    expect(store.get('repos', repo.id)!.handoff!.continueTicketId).toBeUndefined();
+    expect((await unapprove()).status).toBe(409);
+    // Retrying the ticket whose failed run left the gate continues on its own changes.
+    const retry = () => api(new Request(`${origin}/api/tickets/repo/T001/action`, { method: 'POST', headers, body: JSON.stringify({ action: 'retry', revision: ticket.revision }) }));
+    store.save('tickets', { ...store.get('tickets', 'repo/T001')!, status: 'failed', runId: 'other-run' });
+    expect((await retry()).status).toBe(200);
+    expect(store.get('repos', repo.id)!.handoff!.continueTicketId).toBeUndefined();
+    // A failed-inspection gate lists no files; it must never be bypassed.
+    const gate = store.get('repos', repo.id)!.handoff!;
+    store.save('repos', { ...repo, handoff: { ...gate, files: [] } });
+    store.save('tickets', { ...store.get('tickets', 'repo/T001')!, status: 'failed', runId: run.id });
+    expect((await retry()).status).toBe(200);
+    expect(store.get('repos', repo.id)!.handoff!.continueTicketId).toBeUndefined();
+    store.save('repos', { ...repo, handoff: gate });
+    store.save('tickets', { ...store.get('tickets', 'repo/T001')!, status: 'failed', runId: run.id });
+    expect((await retry()).status).toBe(200);
+    expect(store.get('repos', repo.id)!.handoff!.continueTicketId).toBe('T001');
   } finally { closeStore(store); }
   // Private disposable state/proof retained; no recursive cleanup of operator data.
 });

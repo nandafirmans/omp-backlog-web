@@ -7,7 +7,7 @@ import './styles.css';
 const router = createBrowserRouter([
   '/', '/settings', '/plan', '/projects/new', '/projects/:repoId',
   '/projects/:repoId/tickets/new', '/projects/:repoId/tickets/:ticketId',
-  '/projects/:repoId/tickets/new/agent',
+  '/projects/:repoId/tickets/new/agent', '/projects/:repoId/review',
   '/runs/:runId', '*',
 ].map(path => ({ path, Component: App })));
 

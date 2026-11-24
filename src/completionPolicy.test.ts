@@ -14,7 +14,7 @@ test('missing completion authority defaults to human without discovering or inve
   expect(draft.argv).toBe('');
   expect(draft.files).toBe('');
   expect(draft.reviewerModel).toBe('');
-  expect(() => commissionedRecipe({ ...draft, mode: 'autonomous' })).toThrow('JSON array');
+  expect(() => commissionedRecipe({ ...draft, mode: 'autonomous' })).toThrow('Enter a check command');
 });
 
 test('commissioned argv stays an exact argument array and listed files round-trip', () => {
@@ -22,8 +22,8 @@ test('commissioned argv stays an exact argument array and listed files round-tri
   expect(commissionedRecipe({ ...completionDraft(policy), argv: '["tool", "", "two words", "literal;argument"]' }).argv).toEqual(['tool', '', 'two words', 'literal;argument']);
 });
 
-test('rejects shell strings, malformed argv and bounded control-character arguments', () => {
-  for (const argv of ['bun run verify', '"bun run verify"', '[]', '["", "verify"]', '["bun", 1]', '["bun", "a\\nb"]', JSON.stringify(['bun', 'x'.repeat(4097)]), JSON.stringify(Array(65).fill('arg'))]) {
+test('rejects shell syntax, malformed argv and bounded control-character arguments', () => {
+  for (const argv of ['', '"bun run verify"', 'bun run verify && rm -rf x', '[]', '["", "verify"]', '["bun", 1]', '["bun", "a\\nb"]', JSON.stringify(['bun', 'x'.repeat(4097)]), JSON.stringify(Array(65).fill('arg'))]) {
     expect(() => commissionedRecipe({ ...completionDraft(policy), argv })).toThrow();
   }
 });
@@ -44,4 +44,10 @@ test('timeouts, explicit reviewer IDs and correction/recovery limits respect API
 
 test('blank reviewer selection inherits the attempt model without requiring an explicit alternative', () => {
   for (const reviewerModel of ['', '   ']) expect(commissionedRecipe({ ...completionDraft(policy), reviewerModel })).toEqual(policy.verification);
+});
+
+test('typed commands split on spaces and reject shell syntax', () => {
+  expect(commissionedRecipe({ ...completionDraft(policy), argv: '  npm   run test ' }).argv).toEqual(['npm', 'run', 'test']);
+  expect(completionDraft({ ...policy, verification: { ...policy.verification, argv: ['npm', 'run', 'test'] } }).argv).toBe('npm run test');
+  for (const argv of ['npm test && npm run lint', 'npm test | tee out', 'echo "two words"', 'npm test; rm x', 'echo $HOME']) expect(() => commissionedRecipe({ ...completionDraft(policy), argv })).toThrow('shell syntax');
 });

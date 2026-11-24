@@ -43,6 +43,8 @@ interface Execution {
   abort: AbortController;
   phaseWork: Promise<boolean> | null;
   continuation?: string;
+  /** Operator-requested compaction in flight; settlement waits so the brief idle gap is not read as completion. */
+  compacting?: boolean;
 }
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -104,7 +106,9 @@ export async function inspectWorkspaceHandoff(repo: Repo, runId: string | null =
 
 export function eligible(store: Store, repo: Repo, ticket: Ticket) {
   if (ticket.creationHold || batchInactive(store, repo.path, ticket.id)) return false;
-  if (repo.mode === 'paused' || repo.handoff || ticket.removed || ticket.error || ticket.criteria.length === 0) return false;
+  // Request changes lets only the ticket whose run left the changes continue on them; everything else stays gated.
+  const continuing = !!repo.handoff && repo.handoff.continueTicketId === ticket.id && repo.completion?.mode !== 'autonomous';
+  if (repo.mode === 'paused' || (repo.handoff && !continuing) || ticket.removed || ticket.error || ticket.criteria.length === 0) return false;
   if (ticket.status !== 'ready' && ticket.status !== 'draft') return false;
   if (repo.mode === 'approved' && ticket.approvedRevision !== ticket.revision) return false;
   // Completed/failed/blocked work is never blindly replayed because a file changed.
@@ -576,7 +580,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     return dispatchRepair(execution, record, findings.join('\n'));
   }
   async function settled(execution: Execution) {
-    if (!owns(execution) || execution.setup || execution.stopping || execution.settling || execution.phaseWork || !execution.rpc) return;
+    if (!owns(execution) || execution.setup || execution.stopping || execution.settling || execution.phaseWork || execution.compacting || !execution.rpc) return;
     execution.settling = true;
     try {
       const state = await execution.rpc.command('get_state');
@@ -601,9 +605,10 @@ export async function createRuntime(store: Store): Promise<Runtime> {
   function onFrame(execution: Execution, frame: Frame) {
     if (!owns(execution)) return;
     if (execution.conversation.frame(frame)) persist(execution);
-    if ((frame.type === 'auto_compaction_start' || frame.type === 'auto_compaction_end') && execution.run.progress) {
-      const starting = frame.type === 'auto_compaction_start';
-      const lastEvent = starting ? 'Native OMP compaction started' : frame.aborted === true ? 'Native OMP compaction aborted' : frame.errorMessage ? `Native OMP compaction failed: ${redact(String(frame.errorMessage)).slice(0, 1000)}` : frame.skipped === true ? 'Native OMP compaction skipped' : 'Native OMP compaction ended';
+    if (['auto_compaction_start', 'auto_compaction_end', 'manual_compaction_start', 'manual_compaction_end'].includes(String(frame.type)) && execution.run.progress) {
+      const starting = String(frame.type).endsWith('_start');
+      const kind = String(frame.type).startsWith('manual') ? 'Requested' : 'Native';
+      const lastEvent = starting ? `${kind} OMP compaction started` : frame.aborted === true ? `${kind} OMP compaction aborted` : frame.errorMessage ? `${kind} OMP compaction failed: ${redact(String(frame.errorMessage)).slice(0, 1000)}` : frame.skipped === true ? `${kind} OMP compaction skipped` : `${kind} OMP compaction ended`;
       const sampled = Date.now();
       const completed = !starting && frame.aborted === false && frame.skipped !== true && !frame.errorMessage && frame.willRetry !== true && frame.result !== null && typeof frame.result === 'object' && !Array.isArray(frame.result);
       execution.run.progress.compaction = { ...execution.run.progress.compaction, active: starting, sampled, lastEvent, ...(completed ? { lastCompletedAt: sampled } : {}) };
@@ -894,6 +899,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
         'Inspect applicable project verification skills under .omp/skills, .agent/skills or .agents/skills and their feature maps. Read relevant mapped journeys; drive each affected entry point independently. Do not require a whole-map maintenance pass for every ticket. Missing required setup or tools stay blocked/unverified; do not install dependencies or weaken repository check policy.',
         'Before completion, call backlog_evidence for each criterion and affected journey: exact criterion, feature, entryPoint, method/command, outcome, details including observed exit status/side effects, and recipe path+hash (or explicit missing-recipe reason). Submit failures/not-run honestly. Recheck the same journey/method after fixes. Optional sanitized png/jpg/txt/json artifacts are base64 bytes, not filesystem paths; never include credentials, cookies, sessions or secrets. All current reported checks must pass for completion; host storage does not attest their truth.',
         ...store.list('runs').filter(previous => previous.id !== run.id && previous.repoId === repo.id && previous.ticketId === ticket.id && previous.reviewFeedback).sort((a, b) => b.started - a.started).slice(0, 5).map(previous => `Human change request on run ${previous.id}, revision ${previous.revision}${previous.revision !== run.revision ? ' (older requirements; reconcile against current ticket)' : ''}:\n${previous.reviewFeedback!.message}`),
+        ...(repo.handoff?.continueTicketId === ticket.id ? ['The working tree still holds the uncommitted changes from your previous attempt at this ticket. Inspect them, then build on them; do not discard or reset them.'] : []),
         ...recoveryObjective(run),
         run.lifecycle ? 'On completion submit backlog_result with exact revision, status:"complete", exact authored files array (including deletions; [] for no-op) and concrete evidence for every criterion. This is an author report ONLY, not acceptance. Then settle. The host independently executes the authorized recipe, launches a fresh restricted reviewer and may publish. Never commit or claim Done. Insufficient subjective evidence stays inconclusive.' : 'On completion call backlog_result with the exact revision, status:"complete", and one {criterion,evidence} per exact criterion below. Evidence must state observed verification, commands/results and relevant files; never claim unperformed checks passed. Visual/subjective criteria remain for human review.',
         'If blocked call backlog_result with status:"blocked", partial observed evidence, prerequisite and unblock (each at most 2000 characters). Include attempted fixes/outcomes, permission needed, verification to recheck (attempted/permission/verification: each at most 2000 characters) and a suggested recoveryPrompt (at most 8000 characters). Never include secrets. Suggestions are not authorization. Host pauses goal continuation and stops owned child work. Do NOT complete an unmet goal. A successful command, agent yield or exit alone is NOT completion.',
@@ -1095,7 +1101,7 @@ export async function createRuntime(store: Store): Promise<Runtime> {
             const currentRepo = store.get('repos', repo.id);
             if (!currentRepo || currentRepo.path !== repo.path || currentRepo.git !== repo.git) return null;
             if (closed || store.settings().paused || !hasCapacity() || claimedWorkspaceConflict(store, repo, workspace)) return null;
-            if (repo.git) {
+            if (repo.git && currentRepo.handoff?.continueTicketId !== candidate.id) {
               const handoff = await inspectWorkspaceHandoff(repo);
               if (handoff) {
                 const current = store.get('repos', repo.id);
@@ -1167,8 +1173,40 @@ export async function createRuntime(store: Store): Promise<Runtime> {
     finally { pumping = null; }
   }
 
-  async function control(runId: string, action: 'pause' | 'resume' | 'cancel') {
+  /** Ask OMP to compact now. OMP pauses the live turn, compacts, then continues; the host nudges only if it did not. */
+  function compactNow(runId: string) {
+    const execution = executions.get(runId);
+    if (!execution || !owns(execution) || execution.run.status !== 'running' || !execution.rpc) throw new Error('Only an owned running ticket can be compacted');
+    if (execution.setup || execution.stopping || execution.settling || execution.phaseWork) throw new Error('The run is starting, settling or stopping; try again shortly');
+    if (execution.run.lifecycle && execution.run.lifecycle.phase !== 'implementing') throw new Error('Autonomous verification, review or publication is in progress; compaction is available while implementing');
+    if (execution.run.dialog) throw new Error('Answer the pending question before compacting');
+    if (execution.compacting || execution.run.progress?.compaction?.active) throw new Error('Compaction is already in progress');
+    const rpc = execution.rpc;
+    execution.compacting = true;
+    void (async () => {
+      try {
+        await rpc.command('compact', {}, 10 * 60_000);
+      } catch (error) {
+        if (owns(execution) && !execution.stopping && execution.run.progress) {
+          execution.run.progress.compaction = { ...execution.run.progress.compaction, active: false, sampled: Date.now(), lastEvent: `Requested OMP compaction failed: ${redact(message(error)).slice(0, 1000)}` };
+          persist(execution);
+        }
+      } finally {
+        execution.compacting = false;
+      }
+      if (!owns(execution) || execution.stopping || execution.failed || execution.rpc !== rpc) return;
+      try {
+        const state = await rpc.command('get_state');
+        if (state.isSettled !== true || state.hasPendingAsyncWork === true) return;
+        if (execution.result) { void settled(execution); return; }
+        await rpc.command('prompt', { message: `Context was compacted at the operator's request. Continue ticket ${execution.ticket.id} at revision ${execution.run.revision} from where you left off, within the same rules. Submit backlog_result when the ticket is complete or blocked.` });
+      } catch (error) { fail(execution, message(error)); }
+    })();
+  }
+
+  async function control(runId: string, action: 'pause' | 'resume' | 'cancel' | 'compact') {
     if (closed) throw new Error('Runtime is closed');
+    if (action === 'compact') { compactNow(runId); return; }
     if (controls.has(runId)) throw new Error('Another control already owns this run');
     const completed = Promise.withResolvers<void>();
     controls.set(runId, completed.promise);

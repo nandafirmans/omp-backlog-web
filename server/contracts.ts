@@ -5,6 +5,10 @@ export type Mode = 'paused' | 'approved' | 'automatic';
 export type EngineeringMode = 'standard' | 'pstack';
 export type Status = 'draft' | 'ready' | 'running' | 'stopping' | 'paused' | 'blocked' | 'failed' | 'interrupted' | 'needs_review' | 'done';
 export interface VerificationRecipe { argv: string[]; files: string[]; timeoutSeconds: number }
+/** A package script the owner may pick as the check command; never applied without explicit selection. */
+export interface CheckSuggestion { name: string; script: string; argv: string[]; files: string[] }
+/** Result of an owner-requested trial of a check command; it grants nothing and is not acceptance evidence. */
+export interface CheckTrial { exitCode: number | null; timedOut: boolean; error?: string; output: string; truncated: boolean; durationMs: number }
 export type CompletionPolicy = { mode: 'human'; revision: string; updated: number } | { mode: 'autonomous'; revision: string; updated: number; verification: VerificationRecipe; recipeHash: string; reviewerModel: string; maxCorrections: number; maxRecoveries: number };
 export interface Candidate { head: string; ref: string; tree: string; indexHash: string; fingerprint: string; files: string[]; captured: number }
 export interface HostVerification { id: string; source: 'host_execution'; candidateTree: string; recipeHash: string; argv: string[]; started: number; finished: number; exitCode: number | null; outcome: 'passed' | 'failed' | 'blocked'; output: string; outputHash?: string; outputTruncated?: boolean; environment?: { platform: string; arch: string; runtime: string } }
@@ -22,7 +26,7 @@ export interface RecoveryHistory {
   hostVerificationId?: string; reviewSessionId?: string; continuation?: string; workPerformed?: string; verificationIds?: string[]; reviewSessionIds?: string[];
 }
 export interface Lifecycle { policy: Extract<CompletionPolicy, { mode: 'autonomous' }>; phase: 'implementing' | 'verifying' | 'reviewing' | 'correcting' | 'recovering' | 'publishing' | 'complete' | 'assistance'; baseline: Candidate; candidate?: Candidate; recipeHash: string; corrections: number; recoveries: number; authorSessionId?: string; authorSessionFile?: string; authorFiles?: string[]; authorTokens: number; reviewerTokens?: number; reviewerModel?: string; verification: HostVerification[]; reviews: IndependentReview[]; recoveryHistory?: RecoveryHistory[]; continuation?: string; verificationFloor?: number; reviewFloor?: number; publication?: Publication; exception?: string }
-export interface Repo { id: string; name: string; path: string; git: boolean; mode: Mode; lastStarted: number; completion?: CompletionPolicy; handoff?: { id: string; runId: string | null; detected: number; files: string[]; reason: string } }
+export interface Repo { id: string; name: string; path: string; git: boolean; mode: Mode; lastStarted: number; completion?: CompletionPolicy; handoff?: { id: string; runId: string | null; detected: number; files: string[]; reason: string; continueTicketId?: string } }
 export interface WorkspaceIdentity { root: string; rootDev: string; rootIno: string; commonDir?: string; commonDev?: string; commonIno?: string }
 export interface Attachment { name: string; size: number; hash: string }
 export interface WorkspaceReview { id: string; head: string | null; files: { path: string; status: string; before?: string; after?: string; mode?: string; diff?: string; blocked?: string }[] }
@@ -54,7 +58,7 @@ export interface Entities { repos: Repo; tickets: Ticket; runs: Run; agentWorksp
 export interface Runtime {
   wake(): void;
   reconcile(): Promise<void>;
-  control(runId: string, action: 'pause' | 'resume' | 'cancel'): Promise<void>;
+  control(runId: string, action: 'pause' | 'resume' | 'cancel' | 'compact'): Promise<void>;
   answer(runId: string, response: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 }

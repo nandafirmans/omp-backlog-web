@@ -844,6 +844,33 @@ test('ticket model/budget are snapshotted and native compaction does not change 
   });
 }, 15_000);
 
+test('operator compaction asks OMP to compact a running ticket without ending the run', async () => {
+  await withHarness(async harness => {
+    const repo = await repository(harness, 'manual-compaction', 0, 'manual-compaction');
+    await ticket(harness, repo);
+    await start(harness);
+    const before = await waitFor('a running child', () => harness.store.list('runs').find(run => run.repoId === repo.id && run.status === 'running'));
+    // Setup must finish before compaction is accepted.
+    await waitFor('compaction accepted', async () => { try { await harness.runtime!.control(before.id, 'compact'); return true; } catch { return false; } });
+    const compacted = await waitFor('requested compaction recorded', () => {
+      const run = harness.store.get('runs', before.id);
+      return run?.progress?.compaction?.lastEvent === 'Requested OMP compaction ended' && run;
+    });
+    expect(compacted.status).toBe('running');
+    expect(compacted.progress?.compaction?.lastCompletedAt).toBeNumber();
+    expect(JSON.stringify(compacted.progress)).not.toContain('Synthetic manual summary');
+    const commands = (await events(repo)).filter(event => event.event === 'command').map(event => event.command);
+    expect(commands).toContain('compact');
+    // OMP continued by itself (fixture never settled), so the host sent no extra prompt.
+    expect(commands.slice(commands.indexOf('compact')).filter(command => command === 'prompt')).toHaveLength(0);
+    const asking = await waitFor('question after compaction', () => { const run = harness.store.get('runs', before.id); return run?.dialog ? run : undefined; });
+    await expect(harness.runtime!.control(before.id, 'compact')).rejects.toThrow('Answer the pending question');
+    const ended = await finish(harness, asking);
+    expect(ended.status).toBe('needs_review');
+    await expect(harness.runtime!.control(before.id, 'compact')).rejects.toThrow('Only an owned running ticket');
+  });
+}, 15_000);
+
 test('native compaction completion time survives polling and resume; unsuccessful events cannot overwrite it', async () => {
   await withHarness(async harness => {
     const repo = await repository(harness, 'compaction', 0, 'compaction');

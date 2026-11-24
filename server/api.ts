@@ -13,10 +13,10 @@ import { inspectWorkspaceHandoff } from './runtime';
 import { discoverExecutionModels } from './drafting';
 import { handleAgentWorkspaceRequest } from './agent-workspaces';
 import { ticketPublications } from './batch-publication';
-import { commitWorkspace, reviewWorkspace, workspaceOperation } from './workspace-commit';
+import { commitWorkspace, draftCommitMessage, reviewWorkspace, workspaceOperation } from './workspace-commit';
 import { reviewRecovery, saveRecoveryNote } from './recovery';
 import { parseExecutionOverrides } from './execution';
-import { saveCompletionPolicy } from './autonomy-policy';
+import { checkSuggestions, saveCompletionPolicy, trialCheck } from './autonomy-policy';
 import { assertWorkspaceIdentity, claimedWorkspaceConflict } from './workspace-identity';
 
 interface Session { id: string; csrf: string; authenticated: number; expires: number }
@@ -207,12 +207,20 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           return json(await completions(path, repo.git, store.dataDir, url.searchParams.get('kind'), url.searchParams.get('q') || ''));
         }
         if (segments.length === 3 && request.method === 'PATCH') { const input = await body(request); if (!['paused', 'approved', 'automatic'].includes(String(input.mode))) throw new HttpError(400, 'Invalid execution mode'); const mode = input.mode as Repo['mode']; const updated = { ...(store.get('repos', repo.id) ?? repo), mode }; store.save('repos', updated); runtime.wake(); return json(updated); }
+        if (segments.length === 4 && segments[3] === 'check-trial' && request.method === 'POST') { const input = await body(request); await permittedPath(store, repo.path); return json(await trialCheck(store, repo, input)); }
+        if (segments.length === 4 && segments[3] === 'check-suggestions' && request.method === 'GET') return json(await checkSuggestions(await permittedPath(store, repo.path)));
         if (segments.length === 4 && segments[3] === 'completion' && request.method === 'PATCH') {
           const input = await body(request);
           await permittedPath(store, repo.path);
           const updated = await saveCompletionPolicy(store, repo, input);
           runtime.wake();
           return json(updated);
+        }
+        if (segments.length === 4 && segments[3] === 'workspace-commit-message' && request.method === 'POST') {
+          const input = await body(request);
+          await permittedPath(store, repo.path);
+          // No workspace lock: generation only reads the saved review and may take a while.
+          return json(await draftCommitMessage(store, repo, input));
         }
         if (segments.length === 4 && ['workspace-review', 'workspace-commit'].includes(segments[3]) && request.method === 'POST') {
           const input = await body(request);
@@ -234,7 +242,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           const current = store.get('repos', repo.id);
           if (!current?.handoff || current.handoff.id !== input.handoffId || claimed()) throw new HttpError(409, 'Workspace state changed during inspection; review again');
           if (handoff) {
-            store.save('repos', { ...current, handoff: { ...handoff, id: current.handoff.id } });
+            store.save('repos', { ...current, handoff: { ...handoff, id: current.handoff.id, continueTicketId: current.handoff.continueTicketId } });
             throw new HttpError(409, 'Workspace still needs operator reconciliation. No files changed by this check.');
           }
           const updated: Repo = { ...current, handoff: undefined };
@@ -298,7 +306,11 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
           store.transaction(() => { store.save('runs', run); store.save('tickets', ticket); });
           runtime.wake(); return json(ticket);
         }
-        else if (action === 'retry') { if (ticket.status === 'blocked') throw new HttpError(409, 'Review recovery instructions on the blocked ticket before retrying'); if (!['failed', 'interrupted', 'draft'].includes(ticket.status)) throw new HttpError(409, 'This ticket cannot be retried'); if (ticket.error) throw new HttpError(400, ticket.error); ticket.approvedRevision = ticket.revision; ticket.status = 'ready'; }
+        else if (action === 'retry') { if (ticket.status === 'blocked') throw new HttpError(409, 'Review recovery instructions on the blocked ticket before retrying'); if (!['failed', 'interrupted', 'draft'].includes(ticket.status)) throw new HttpError(409, 'This ticket cannot be retried'); if (ticket.error) throw new HttpError(400, ticket.error); ticket.approvedRevision = ticket.revision; ticket.status = 'ready';
+          // The gate holds this ticket's own partial work; let only its retry build on it.
+          const repo = store.get('repos', ticket.repoId);
+          if (repo?.handoff?.files.length && ticket.runId && repo.handoff.runId === ticket.runId && repo.completion?.mode !== 'autonomous') store.save('repos', { ...repo, handoff: { ...repo.handoff, continueTicketId: ticket.id } });
+        }
         else if (action === 'done' || action === 'changes') {
           const run = ticket.runId ? store.get('runs', ticket.runId) : undefined;
           if (ticket.status !== 'needs_review' || !run || run.revision !== ticket.revision) throw new HttpError(409, 'Only evidence for this revision may be reviewed');
@@ -309,8 +321,16 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             if (!feedback) throw new HttpError(400, 'Describe the required changes before queuing another attempt');
             run.reviewFeedback = { message: feedback, recorded: Date.now() };
             ticket.status = 'ready'; ticket.approvedRevision = ticket.revision;
+            const repo = store.get('repos', ticket.repoId);
+            if (repo?.handoff?.files.length && repo.handoff.runId === run.id && repo.completion?.mode !== 'autonomous') store.save('repos', { ...repo, handoff: { ...repo.handoff, continueTicketId: ticket.id } });
           }
           store.save('runs', run);
+        } else if (action === 'unapprove') {
+          if (ticket.status !== 'ready') throw new HttpError(409, 'Only Ready tickets can move back to Draft');
+          // Hold too: Automatic mode would otherwise start a Draft without approval.
+          ticket.status = 'draft'; ticket.approvedRevision = null; ticket.creationHold = true;
+          const repo = store.get('repos', ticket.repoId);
+          if (repo?.handoff?.continueTicketId === ticket.id) store.save('repos', { ...repo, handoff: { ...repo.handoff, continueTicketId: undefined } });
         } else if (action !== 'reorder') throw new HttpError(400, 'Unknown ticket action');
         if (action === 'approve' || action === 'retry') delete ticket.creationHold;
         if (typeof input.order === 'number') ticket.order = input.order;
@@ -328,7 +348,7 @@ export function createApi(store: Store, runtime: Runtime, remoteOrigin?: string)
             if (!ticket || ticket.removed || inactive(ticket.repoId, ticket.id)) throw new HttpError(404, 'Ticket not found');
             return json(saveRecoveryNote(store, ticket, run.id, input));
           }
-          if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume' && input.action !== 'cancel') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }
+          if (segments[3] === 'control') { if (input.action !== 'pause' && input.action !== 'resume' && input.action !== 'cancel' && input.action !== 'compact') throw new HttpError(400, 'Invalid run control'); await runtime.control(run.id, input.action); return json(store.get('runs', run.id)); }
           if (segments[3] === 'answer') { await runtime.answer(run.id, input); return json({ ok: true }); }
         }
       }
